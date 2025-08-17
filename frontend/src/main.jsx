@@ -626,7 +626,7 @@ function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = React.useMemo(() => {
     const map = { exterior: 40, full: 60, standard_membership: 70, premium_membership: 100 };
-    const addonsMap = { wax: 15, polish: 15 };
+    const addonsMap = { wax: 10, polish: 22.50 };
     let t = map[state.service_key] || 0; // base price
     t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0); // add-ons always included
     return t;
