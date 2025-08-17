@@ -24,9 +24,12 @@ const BookingSchema = z.object({
 router.get('/config', (req,res)=> res.json({ services: SERVICES, addons: ADDONS }));
 
 router.post('/availability', (req,res)=>{
-  const { service_key, addons=[], fromDateISO } = req.body || {};
+  const { service_key, addons=[], fromDateISO, area } = req.body || {};
+  // Right side => Mon, Wed, Fri, Sun ; Left side => Tue, Thu, Sat
+  // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+  const allowedDows = new Set(area === 'left' ? [2,4,6] : [1,3,5,0]);
   try {
-    const slots = getAvailability({ service_key, addons, fromDateISO });
+    const slots = getAvailability({ service_key, addons, fromDateISO, allowedDows });
     res.json({ slots });
   } catch (e) {
     res.status(400).json({ error: 'Invalid request' });
@@ -66,15 +69,3 @@ router.post('/book', (req,res)=>{
 
   res.json({ ok:true });
 });
-
-/* minimal admin list (we can secure later) */
-router.get('/admin/bookings', (req,res)=>{
-  const rows = db.prepare(`
-    SELECT b.*, c.name, c.phone
-    FROM bookings b
-    JOIN customers c ON c.id=b.customer_id
-    ORDER BY b.start_iso ASC
-  `).all();
-  res.json({ bookings: rows });
-});
-
