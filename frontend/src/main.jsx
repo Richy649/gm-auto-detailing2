@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "./calendar.css"; // scoped styles only
+import "./calendar.css";
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
-/* ---- No geolocating for now: we let users book any available day. ---- */
+/* No geolocating for now (we show all available days) */
 
 /* Safe defaults (used only if backend/config is empty) */
 const DEFAULT_SERVICES = {
@@ -39,7 +39,7 @@ function groupByDayLocal(slots) {
 }
 function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
 
-/* Header (single centered logo for all non-Details pages) */
+/* Header (single centered logo for non-Details steps) */
 function Header() {
   return (
     <header className="gm header">
@@ -48,7 +48,7 @@ function Header() {
   );
 }
 
-/* ---------------- Steps ---------------- */
+/* ---------------- Details (logo left big, content right) ---------------- */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", phone: "", address: "", email: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
@@ -58,18 +58,17 @@ function Details({ onNext, state, setState }) {
   return (
     <div className="gm page-section">
       <div className="gm details-grid">
-        {/* Left: big logo */}
+        {/* Left: huge logo */}
         <div className="gm details-left">
           <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
 
-        {/* Right: intro + form */}
+        {/* Right: refined intro + form */}
         <div className="gm details-right">
-          <div className="gm hero-note">
-            Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right place and can reach you if
-            anything changes. I treat every booking like it’s my own car—if anything isn’t clear, tell me and I’ll
-            make it right. You’ll always speak to me directly.
-          </div>
+          <p className="gm hero-note">
+            Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right address and can reach you if plans change.
+            I treat every booking like it’s my own car—if anything isn’t clear, message me and I’ll make it right.
+          </p>
 
           <h2 className="gm h2">Your details</h2>
           <div className="gm row">
@@ -91,6 +90,7 @@ function Details({ onNext, state, setState }) {
   );
 }
 
+/* ---------------- Services (See times at bottom + addon blurbs) ---------------- */
 function Services({ onNext, onBack, state, setState, config }) {
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
@@ -143,6 +143,18 @@ function Services({ onNext, onBack, state, setState, config }) {
               );
             })}
           </div>
+
+          {/* Mini advertising blurbs under each addon */}
+          <div className="gm addon-benefits">
+            <div className="gm benefit">
+              <div className="benefit-title">Full Body Wax</div>
+              <div className="benefit-copy">Deep gloss and slick feel. Adds a protective layer to help repel grime and water.</div>
+            </div>
+            <div className="gm benefit">
+              <div className="benefit-title">Hand Polish</div>
+              <div className="benefit-copy">Refreshes tired paintwork by reducing haze and light oxidation for a richer shine.</div>
+            </div>
+          </div>
         </div>
 
         <div className="gm actions bottom-stick">
@@ -171,7 +183,7 @@ async function fetchAllSlots(service_key, addons) {
   return Array.from(map.values()).sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
 }
 
-/* Strict Month Grid: starts at FIRST bookable day, ends at LAST bookable day */
+/* Month Grid: starts at FIRST bookable day, ends at LAST bookable day */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -214,9 +226,9 @@ function MonthGrid({
   for (let day = startDay; day <= endDay; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
-    const has = !!slotsByDay[k];                   // clickable only if backend returned slots for that exact day
+    const has = !!slotsByDay[k];
     const selected = selectedDay === k;
-    const chosen = bookedDays.includes(k);         // already booked membership day (keep highlighted)
+    const chosen = bookedDays.includes(k);
     const label = `${day}${daySuffix(day)}`;
 
     cells.push(
@@ -264,7 +276,6 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Keep previously selected day if returning from Times (so highlight stays)
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
@@ -275,6 +286,7 @@ function Calendar({ onNext, onBack, state, setState }) {
         setSlots(s);
         const g = groupByDayLocal(s);
         const keys = Object.keys(g).sort();
+
         if (!selectedDay) {
           const firstKey = keys[0] || null;
           if (firstKey) {
@@ -299,6 +311,8 @@ function Calendar({ onNext, onBack, state, setState }) {
 
   const bookedDays = (state.membershipSlots || []).map(s => keyLocal(new Date(s.start_iso)));
   const selectedIsBooked = bookedDays.includes(selectedDay || "");
+
+  const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
 
   return (
     <div className={cx("gm page-section", loading && "loading")}>
@@ -332,7 +346,11 @@ function Calendar({ onNext, onBack, state, setState }) {
           <button
             className="gm btn primary"
             disabled={!selectedDay || selectedIsBooked}
-            onClick={() => { setState((s)=>({ ...s, selectedDay })); onNext(); }}
+            onClick={() => {
+              // Preload the day’s times to avoid flicker on the next page
+              setState((s)=>({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
+              onNext();
+            }}
           >
             See times
           </button>
@@ -342,19 +360,21 @@ function Calendar({ onNext, onBack, state, setState }) {
   );
 }
 
-/* -------- Times page (big boxes, date centered) ---------- */
+/* -------- Times (no flicker; big boxes; date centered) ---------- */
 function Times({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
-  const [daySlots, setDaySlots] = useState([]);
+  const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
+  const [isLoading, setIsLoading] = useState(daySlots.length === 0);
 
   useEffect(() => {
-    if (!selectedDay) return;
+    // Fetch fresh (but we already show prefetched, so no "no times" flash)
     fetchAllSlots(state.service_key, state.addons)
       .then((s)=>{
         const filtered = s.filter((sl)=> keyLocal(new Date(sl.start_iso)) === selectedDay);
         setDaySlots(filtered);
-      });
+      })
+      .finally(()=> setIsLoading(false));
   }, [selectedDay, state.service_key, state.addons]);
 
   // current selection on this day
@@ -373,7 +393,6 @@ function Times({ onNext, onBack, state, setState }) {
   function choose(slot) {
     if (isMembership) {
       const current = state.membershipSlots || [];
-      // Do not allow both visits on the same calendar day
       if (current.length === 1 && sameLocalDay(current[0].start_iso, slot.start_iso)) {
         alert("Membership visits must be on two different days.");
         return;
@@ -396,7 +415,10 @@ function Times({ onNext, onBack, state, setState }) {
           {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
         </h2>
 
-        {daySlots.length === 0 && <div className="gm note">No times on this day. Go back and pick another date.</div>}
+        {/* No flicker: only show "no times" if not loading */}
+        {!isLoading && daySlots.length === 0 && (
+          <div className="gm note">No times on this day. Go back and pick another date.</div>
+        )}
 
         <div className="gm timegrid">
           {daySlots.map((s)=> {
@@ -417,8 +439,7 @@ function Times({ onNext, onBack, state, setState }) {
             disabled={!canNext}
             onClick={() => {
               if (isMembership && (state.membershipSlots||[]).length === 1) {
-                // Go back to calendar for visit #2 — keep the first day highlighted
-                onBack();
+                onBack(); // choose second date; first day remains highlighted
               } else {
                 onNext();
               }
@@ -511,9 +532,7 @@ function App() {
   return (
     <div className="gm-site">
       <div className="gm-booking wrap">
-        {/* No global header on Details — it has its own left-logo layout */}
         {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
-
         {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
         {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
         {step === 3 && <Times    onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
