@@ -38,12 +38,19 @@ const dstr = (iso) =>
     hour: "2-digit",
     minute: "2-digit",
   });
-const dkeyUTC = (d) => new Date(d).toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 const cx = (...a) => a.filter(Boolean).join(" ");
-function groupByDay(slots) {
+
+/* local YYYY-MM-DD key (no UTC surprises) */
+function keyLocal(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function groupByDayLocal(slots) {
   const g = {};
   for (const s of slots || []) {
-    const k = dkeyUTC(s.start_iso);
+    const k = keyLocal(new Date(s.start_iso)); // local day key
     (g[k] ||= []).push(s);
   }
   return g;
@@ -59,11 +66,6 @@ async function geocodeAddress(address) {
   const arr = await r.json();
   if (!arr?.length) throw new Error("address not found");
   return { lon: parseFloat(arr[0].lon), lat: parseFloat(arr[0].lat) };
-}
-
-function allowedDowsForArea(area) {
-  // 0=Sun..6=Sat
-  return new Set(area === "left" ? [2, 4, 6] : [1, 3, 5, 0]);
 }
 
 /* ---------------- PAGES ---------------- */
@@ -175,44 +177,38 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Live month calendar (clickable, 24h cutoff, 30-day window) -------- */
+/* ---------- Live month calendar (clickable days with slots, 30-day window) -------- */
 function MonthGrid({
   slotsByDay,
   selectedDay,
   setSelectedDay,
   monthCursor,
   setMonthCursor,
-  allowedDows
+  minDate,
+  maxDate
 }) {
-  const now = new Date();
-  const cutoffKey = new Date(now.getTime() + 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10); // earliest bookable day (24h)
-  const maxKey = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .slice(0, 10); // last bookable day (30 days)
-
   const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
-  const prevDisabled = monthStart <= new Date(now.getFullYear(), now.getMonth(), 1);
-  const nextMonthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1);
-  const nextDisabled = dkeyUTC(nextMonthStart) > maxKey;
+  const minMonthStart = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+  const maxMonthStart = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
 
-  const firstOfMonth = monthStart;
-  const start = new Date(firstOfMonth);
-  const offset = (start.getDay() + 6) % 7; // Monday start
-  start.setDate(start.getDate() - offset);
+  const prevDisabled = monthStart <= minMonthStart;
+  const nextDisabled = monthStart >= maxMonthStart;
+
+  // Start grid on Monday
+  const gridStart = new Date(monthStart);
+  const offset = (gridStart.getDay() + 6) % 7; // Mon=0
+  gridStart.setDate(gridStart.getDate() - offset);
 
   const cells = [];
   for (let i = 0; i < 42; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const key = dkeyUTC(d);
-    const isAllowedDow = allowedDows.has(d.getDay());
-    const withinWindow = key >= cutoffKey && key <= maxKey;
-    const has = !!slotsByDay[key];
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    const key = keyLocal(d);
+    const inMonth = d.getMonth() === monthStart.getMonth();
+    const inRange = d >= minDate && d <= maxDate;
+    const has = !!slotsByDay[key]; // backend decides allowed days; if it has slots, we highlight it
     const selected = selectedDay === key;
-
-    const disabled = !(isAllowedDow && withinWindow && has);
+    const disabled = !(inMonth && inRange && has);
 
     cells.push(
       <div
@@ -223,9 +219,7 @@ function MonthGrid({
           (disabled ? "disabled " : "") +
           (selected ? "selected " : "")
         }
-        onClick={() => {
-          if (!disabled) setSelectedDay(key);
-        }}
+        onClick={() => { if (!disabled) setSelectedDay(key); }}
         role="button"
         tabIndex={0}
       >
@@ -234,16 +228,16 @@ function MonthGrid({
     );
   }
 
-  const monthName = monthCursor.toLocaleString([], { month: "long", year: "numeric" });
+  const monthName = monthStart.toLocaleString([], { month: "long", year: "numeric" });
   return (
     <div className="panel" style={{ marginBottom: 12 }}>
       <div className="monthbar">
         <div style={{ fontWeight: 700 }}>{monthName}</div>
         <div className="nav">
           <button className="btn" disabled={prevDisabled}
-            onClick={() => !prevDisabled && setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>‹</button>
+                  onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}>‹</button>
           <button className="btn" disabled={nextDisabled}
-            onClick={() => !nextDisabled && setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>›</button>
+                  onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}>›</button>
         </div>
       </div>
       <div className="monthgrid">
@@ -263,8 +257,10 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [selected2, setSelected2] = useState(state.membershipSlots || []);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
-  const area = state.area || "right";
-  const allowedDows = useMemo(() => allowedDowsForArea(area), [area]);
+  // booking window: 24h from now through 30 days ahead
+  const now = new Date();
+  const minDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); // earliest day to book (24h rule at day level)
+  const maxDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30);
 
   useEffect(() => {
     setLoading(true);
@@ -274,23 +270,43 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area, // LEFT/RIGHT controls which days backend returns
+        area: state.area || "right",
       }),
     })
       .then((r) => r.json())
       .then((d) => {
         const s = d.slots || [];
         setSlots(s);
-        // preselect first valid day that actually has slots
-        const g = groupByDay(s);
+        const g = groupByDayLocal(s);
+        // Preselect the first day with slots that lies within the current month view
         const firstKey = Object.keys(g).sort()[0] || null;
         setSelectedDay(firstKey);
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons, area]);
+  }, [state.service_key, state.addons, state.area]);
 
-  const slotsByDay = useMemo(() => groupByDay(slots), [slots]);
+  const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
   const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
+
+  // If the visible month changes and current selectedDay is off-screen or has no slots, pick the first day WITH slots in that month
+  useEffect(() => {
+    if (!selectedDay) return;
+    const sdDate = new Date(selectedDay + "T00:00:00");
+    const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+    const sameMonth = sdDate.getMonth() === monthStart.getMonth() && sdDate.getFullYear() === monthStart.getFullYear();
+    if (!sameMonth || (slotsByDay[selectedDay] || []).length === 0) {
+      // find first day WITH slots in the visible month and within the allowed window
+      const firstInMonth = Object.keys(slotsByDay)
+        .filter(k => {
+          const d = new Date(k + "T00:00:00");
+          return d.getMonth() === monthStart.getMonth()
+              && d.getFullYear() === monthStart.getFullYear()
+              && d >= minDate && d <= maxDate;
+        })
+        .sort()[0] || null;
+      setSelectedDay(firstInMonth);
+    }
+  }, [monthCursor, slotsByDay]); // eslint-disable-line
 
   function choose(slot) {
     if (isMembership) {
@@ -315,7 +331,8 @@ function Calendar({ onNext, onBack, state, setState }) {
         setSelectedDay={setSelectedDay}
         monthCursor={monthCursor}
         setMonthCursor={setMonthCursor}
-        allowedDows={allowedDows}
+        minDate={minDate}
+        maxDate={maxDate}
       />
 
       <div className="panel daylist">
