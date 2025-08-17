@@ -1,11 +1,11 @@
 export const WORKING_HOURS = {
-  1: { start: "15:40", end: "21:00" }, // Mon
+  1: { start: "15:40", end: "21:00" },
   2: { start: "15:40", end: "21:00" },
   3: { start: "15:40", end: "21:00" },
   4: { start: "15:40", end: "21:00" },
-  5: { start: "15:40", end: "21:00" }, // Fri
-  6: { start: "09:00", end: "19:30" }, // Sat
-  0: { start: "09:00", end: "19:30" }  // Sun
+  5: { start: "15:40", end: "21:00" },
+  6: { start: "09:00", end: "19:30" },
+  0: { start: "09:00", end: "19:30" }
 };
 export const BUFFER_MINUTES = 20;
 export const MAX_DAYS_AHEAD = 30;
@@ -20,3 +20,4 @@ export const ADDONS = {
   wax: { name: "Full Body Wax", extraMinutes: 15, price: 15 },
   polish: { name: "Hand Polish", extraMinutes: 15, price: 15 }
 };
+
