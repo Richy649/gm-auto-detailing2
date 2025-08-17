@@ -1,56 +1,45 @@
-// backend/src/server.js
 import express from "express";
 import cors from "cors";
 import { createCheckoutSession, stripeWebhook } from "./payments.js";
 
 const app = express();
 
-/* ---------- CORS: allow your Vercel frontend ---------- */
+/* CORS */
 const ALLOW_ORIGIN = process.env.FRONTEND_PUBLIC_URL || "*";
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin || ALLOW_ORIGIN === "*" || origin === ALLOW_ORIGIN) return cb(null, true);
-      return cb(null, false);
-    },
-    credentials: false,
-  })
-);
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || ALLOW_ORIGIN === "*" || origin === ALLOW_ORIGIN) return cb(null, true);
+    return cb(null, false);
+  }
+}));
 
-/* ---------- Stripe webhook needs RAW body (keep BEFORE express.json) ---------- */
-app.post(
-  "/api/webhooks/stripe",
+/* Stripe webhook (RAW body) */
+app.post("/api/webhooks/stripe",
   express.raw({ type: "application/json" }),
   (req, _res, next) => { req.rawBody = req.body; next(); },
   stripeWebhook
 );
 
-/* ---------- All other routes use JSON parser ---------- */
+/* JSON for the rest */
 app.use(express.json());
 
-/* ---------- Config endpoint used by your frontend ---------- */
+/* Config for frontend */
 app.get("/api/config", (_req, res) => {
   res.json({
     services: {
       exterior: { name: "Exterior Detail", duration: 75, price: 40 },
       full: { name: "Full Detail", duration: 120, price: 60 },
-      standard_membership: {
-        name: "Standard Membership (2 Exterior visits)",
-        duration: 75, visits: 2, visitService: "exterior", price: 70,
-      },
-      premium_membership: {
-        name: "Premium Membership (2 Full visits)",
-        duration: 120, visits: 2, visitService: "full", price: 100,
-      },
+      standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 70 },
+      premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 100 },
     },
     addons: { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } },
   });
 });
 
-/* ---------- Payments ---------- */
+/* Stripe: create checkout session */
 app.post("/api/pay/create-checkout-session", createCheckoutSession);
 
-/* ---------- Healthcheck ---------- */
+/* Health */
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 8787;
