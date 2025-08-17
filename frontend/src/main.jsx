@@ -40,19 +40,24 @@ const dstr = (iso) =>
   });
 const cx = (...a) => a.filter(Boolean).join(" ");
 
-/* local YYYY-MM-DD key (no UTC surprises) */
 function keyLocal(date) {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
+function labelDay(date) {
+  return date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+}
 function groupByDayLocal(slots) {
   const g = {};
   for (const s of slots || []) {
-    const k = keyLocal(new Date(s.start_iso)); // local day key
+    const d = new Date(s.start_iso);
+    const k = keyLocal(d);
     (g[k] ||= []).push(s);
   }
+  // sort each day's slots by time
+  for (const k of Object.keys(g)) g[k].sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
   return g;
 }
 
@@ -177,90 +182,17 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Live month calendar (clickable days with slots, 30-day window) -------- */
-function MonthGrid({
-  slotsByDay,
-  selectedDay,
-  setSelectedDay,
-  monthCursor,
-  setMonthCursor,
-  minDate,
-  maxDate
-}) {
-  const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
-  const minMonthStart = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
-  const maxMonthStart = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
-
-  const prevDisabled = monthStart <= minMonthStart;
-  const nextDisabled = monthStart >= maxMonthStart;
-
-  // Start grid on Monday
-  const gridStart = new Date(monthStart);
-  const offset = (gridStart.getDay() + 6) % 7; // Mon=0
-  gridStart.setDate(gridStart.getDate() - offset);
-
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    const d = new Date(gridStart);
-    d.setDate(gridStart.getDate() + i);
-    const key = keyLocal(d);
-    const inMonth = d.getMonth() === monthStart.getMonth();
-    const inRange = d >= minDate && d <= maxDate;
-    const has = !!slotsByDay[key]; // backend decides allowed days; if it has slots, we highlight it
-    const selected = selectedDay === key;
-    const disabled = !(inMonth && inRange && has);
-
-    cells.push(
-      <div
-        key={key}
-        className={
-          "daycell " +
-          (has ? "has " : "") +
-          (disabled ? "disabled " : "") +
-          (selected ? "selected " : "")
-        }
-        onClick={() => { if (!disabled) setSelectedDay(key); }}
-        role="button"
-        tabIndex={0}
-      >
-        {d.getDate()}
-      </div>
-    );
-  }
-
-  const monthName = monthStart.toLocaleString([], { month: "long", year: "numeric" });
-  return (
-    <div className="panel" style={{ marginBottom: 12 }}>
-      <div className="monthbar">
-        <div style={{ fontWeight: 700 }}>{monthName}</div>
-        <div className="nav">
-          <button className="btn" disabled={prevDisabled}
-                  onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}>‹</button>
-          <button className="btn" disabled={nextDisabled}
-                  onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}>›</button>
-        </div>
-      </div>
-      <div className="monthgrid">
-        {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="dow">{d}</div>)}
-        {cells}
-      </div>
-    </div>
-  );
-}
-
+/* ---------- Live day list calendar (next 30 days with availability) -------- */
 function Calendar({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDay, setSelectedDay] = useState(null);
+
+  const [selectedDayKey, setSelectedDayKey] = useState(null);
   const [selected, setSelected] = useState(state.slot || null);
   const [selected2, setSelected2] = useState(state.membershipSlots || []);
-  const [monthCursor, setMonthCursor] = useState(new Date());
 
-  // booking window: 24h from now through 30 days ahead
-  const now = new Date();
-  const minDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); // earliest day to book (24h rule at day level)
-  const maxDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30);
+  const area = state.area || "right";
 
   useEffect(() => {
     setLoading(true);
@@ -270,7 +202,7 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area: state.area || "right",
+        area, // left/right controls days on backend
       }),
     })
       .then((r) => r.json())
@@ -278,35 +210,15 @@ function Calendar({ onNext, onBack, state, setState }) {
         const s = d.slots || [];
         setSlots(s);
         const g = groupByDayLocal(s);
-        // Preselect the first day with slots that lies within the current month view
-        const firstKey = Object.keys(g).sort()[0] || null;
-        setSelectedDay(firstKey);
+        const keys = Object.keys(g).sort();
+        setSelectedDayKey(keys[0] || null);
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons, state.area]);
+  }, [state.service_key, state.addons, area]);
 
   const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
-  const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-
-  // If the visible month changes and current selectedDay is off-screen or has no slots, pick the first day WITH slots in that month
-  useEffect(() => {
-    if (!selectedDay) return;
-    const sdDate = new Date(selectedDay + "T00:00:00");
-    const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
-    const sameMonth = sdDate.getMonth() === monthStart.getMonth() && sdDate.getFullYear() === monthStart.getFullYear();
-    if (!sameMonth || (slotsByDay[selectedDay] || []).length === 0) {
-      // find first day WITH slots in the visible month and within the allowed window
-      const firstInMonth = Object.keys(slotsByDay)
-        .filter(k => {
-          const d = new Date(k + "T00:00:00");
-          return d.getMonth() === monthStart.getMonth()
-              && d.getFullYear() === monthStart.getFullYear()
-              && d >= minDate && d <= maxDate;
-        })
-        .sort()[0] || null;
-      setSelectedDay(firstInMonth);
-    }
-  }, [monthCursor, slotsByDay]); // eslint-disable-line
+  const dayKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
+  const daySlots = selectedDayKey ? (slotsByDay[selectedDayKey] || []) : [];
 
   function choose(slot) {
     if (isMembership) {
@@ -325,25 +237,55 @@ function Calendar({ onNext, onBack, state, setState }) {
 
   return (
     <div className={cx(loading && "loading")}>
-      <MonthGrid
-        slotsByDay={slotsByDay}
-        selectedDay={selectedDay}
-        setSelectedDay={setSelectedDay}
-        monthCursor={monthCursor}
-        setMonthCursor={setMonthCursor}
-        minDate={minDate}
-        maxDate={maxDate}
-      />
+      <div className="panel" style={{ marginBottom: 12 }}>
+        <h2 style={{ marginTop: 0 }}>Choose a day</h2>
+
+        {dayKeys.length === 0 && !loading && (
+          <div className="muted">No available days for this service in the next month.</div>
+        )}
+
+        {/* Scrollable day chips */}
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            overflowX: "auto",
+            paddingBottom: 6,
+            marginTop: 6,
+          }}
+        >
+          {dayKeys.map((key) => {
+            const d = new Date(key + "T00:00:00");
+            const selected = key === selectedDayKey;
+            return (
+              <button
+                key={key}
+                onClick={() => setSelectedDayKey(key)}
+                className="btn"
+                style={{
+                  flex: "0 0 auto",
+                  borderRadius: 999,
+                  padding: "10px 14px",
+                  fontWeight: 600,
+                  outline: selected ? "2px solid #9ca3af" : "none",
+                }}
+              >
+                {labelDay(d)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       <div className="panel daylist">
         <h3 style={{ marginTop: 0 }}>
-          {selectedDay
-            ? new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
-            : "Select a highlighted day"}
+          {selectedDayKey
+            ? new Date(selectedDayKey).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
+            : "Select a day"}
         </h3>
 
-        {(!selectedDay || daySlots.length === 0) && (
-          <div className="muted">No times on this day. Pick another highlighted day.</div>
+        {(!selectedDayKey || daySlots.length === 0) && (
+          <div className="muted">No times on this day. Pick another day above.</div>
         )}
 
         {daySlots.length > 0 && (
