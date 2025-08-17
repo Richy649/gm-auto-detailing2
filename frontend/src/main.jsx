@@ -273,3 +273,345 @@ function Calendar({ onNext, onBack, state, setState }) {
   function choose(slot) {
     if (isMembership) {
       setSelected2((curr) => {
+        const exists = curr.find((s) => s.start_iso === slot.start_iso);
+        if (exists) return curr.filter((s) => s.start_iso !== slot.start_iso);
+        if (curr.length >= 2) return [curr[1], slot];
+        return [...curr, slot];
+      });
+    } else {
+      setSelected(slot);
+    }
+  }
+  const canContinue = isMembership ? selected2.length === 2 : !!selected;
+
+  return (
+    <div className={cx("panel", loading && "loading")}>
+      <h2>Choose a time</h2>
+      {days.length === 0 && !loading && (
+        <div className="alert">No slots available. Try another service or date.</div>
+      )}
+      {days.map((k) => (
+        <div key={k} className="day">
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>
+            {new Date(k).toLocaleDateString([], {
+              weekday: "long",
+              month: "short",
+              day: "numeric",
+            })}
+          </div>
+          {grouped[k].map((s) => {
+            const sel = isMembership
+              ? !!selected2.find((x) => x.start_iso === s.start_iso)
+              : selected?.start_iso === s.start_iso;
+            return (
+              <span
+                key={s.start_iso}
+                className={cx("slot", sel && "sel")}
+                onClick={() => choose(s)}
+              >
+                {new Date(s.start_iso).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            );
+          })}
+        </div>
+      ))}
+
+      <div className="stickybar">
+        <div className="muted">
+          {isMembership
+            ? `${selected2.length}/2 times selected`
+            : selected
+            ? dstr(selected.start_iso)
+            : "Select a time"}
+        </div>
+        <div className="right">
+          <button className="btn" onClick={onBack}>
+            Back
+          </button>
+          <button
+            className="btn primary"
+            disabled={!canContinue}
+            onClick={() => {
+              if (isMembership) setState((s) => ({ ...s, membershipSlots: selected2 }));
+              else setState((s) => ({ ...s, slot: selected }));
+              onNext();
+            }}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Confirm({ onBack, state, setState }) {
+  const isMembership = state.service_key?.includes("membership");
+  const total = useMemo(() => {
+    const map = { exterior: 60, full: 120, standard_membership: 100, premium_membership: 220 };
+    const addonsMap = { wax: 15, polish: 15 };
+    let t = map[state.service_key] || 0;
+    if (!isMembership) t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
+    return t;
+  }, [state.service_key, state.addons, isMembership]);
+
+  async function confirm() {
+    const payload = {
+      customer: state.customer,
+      area: state.area || "right",
+      service_key: state.service_key,
+      addons: state.addons || [],
+      slot: state.slot,
+      membershipSlots: state.membershipSlots,
+    };
+    const res = await fetch(API + "/book", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then((r) => r.json());
+    if (res.ok) {
+      alert("Booking successful! Check your email for confirmation.");
+      setState({});
+      location.href = "/";
+    } else {
+      alert("Error: " + (res.error || "Unknown"));
+    }
+  }
+
+  return (
+    <div className="panel stack">
+      <h2>Confirm your booking</h2>
+      <div className="row">
+        <div className="panel" style={{ flex: "1 1 260px" }}>
+          <div><b>Name:</b> {state.customer?.name}</div>
+          <div><b>Phone:</b> {state.customer?.phone}</div>
+          <div><b>Address:</b> {state.customer?.address}</div>
+          <div><b>Area:</b> {state.area?.toUpperCase()}</div>
+          <div><b>Service:</b> {state.service_key}</div>
+          <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
+          <div>
+            <b>When:</b>{" "}
+            {isMembership
+              ? state.membershipSlots?.map((s) => dstr(s.start_iso)).join(" & ")
+              : state.slot && dstr(state.slot.start_iso)}
+          </div>
+        </div>
+        <div className="panel" style={{ flex: "1 1 260px" }}>
+          <div className="muted">Total due</div>
+          <div style={{ fontSize: 28, fontWeight: 800 }}>{fmtGBP(total)}</div>
+          <div className="muted">Full payment upfront via Stripe</div>
+        </div>
+      </div>
+
+      <div className="stickybar">
+        <div><b>Total:</b> {fmtGBP(total)}</div>
+        <div className="right">
+          <button className="btn" onClick={onBack}>Back</button>
+          <button className="btn primary" onClick={confirm}>Confirm & Pay</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- widget mode (compact embed) ---------- */
+function Widget() {
+  const [state, setState] = useState({ area: "right", service_key: "exterior" });
+  const [slots, setSlots] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch(API + "/availability", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_key: state.service_key,
+        addons: [],
+        area: state.area,
+      }),
+    })
+      .then((r) => r.json())
+      .then((d) => setSlots(d.slots?.slice(0, 10) || []))
+      .finally(() => setLoading(false));
+  }, [state.service_key, state.area]);
+
+  return (
+    <div className="widget">
+      <div className="panel stack">
+        <h2>Book now</h2>
+        <div className="row">
+          <select
+            value={state.service_key}
+            onChange={(e) => setState((s) => ({ ...s, service_key: e.target.value }))}
+          >
+            <option value="exterior">Exterior Detail</option>
+            <option value="full">Full Detail</option>
+            <option value="standard_membership">Standard Membership</option>
+            <option value="premium_membership">Premium Membership</option>
+          </select>
+          <select
+            value={state.area}
+            onChange={(e) => setState((s) => ({ ...s, area: e.target.value }))}
+          >
+            <option value="left">Left</option>
+            <option value="right">Right</option>
+          </select>
+        </div>
+        <div className={cx(loading && "loading")}>
+          <div className="muted">Next available times:</div>
+          <div>
+            {slots.map((s) => (
+              <span key={s.start_iso} className="slot">
+                {dstr(s.start_iso)}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="right">
+          <a className="btn primary" href="/">Open full booking</a>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- admin (protected) ---------- */
+function useAdminAuth() {
+  const [token, setToken] = useState(localStorage.getItem("adminKey") || "");
+  function ask() {
+    const t = prompt("Admin passcode:");
+    if (t) {
+      localStorage.setItem("adminKey", t);
+      setToken(t);
+    }
+  }
+  function clear() {
+    localStorage.removeItem("adminKey");
+    setToken("");
+  }
+  return { token, ask, clear };
+}
+function Admin() {
+  const { token, ask, clear } = useAdminAuth();
+  const [rows, setRows] = useState([]);
+  const [reviews, setReviews] = useState([]);
+  const [tips, setTips] = useState(0);
+
+  useEffect(() => {
+    if (!token) return;
+    const H = { "x-admin-key": token };
+    fetch(API + "/admin/bookings", { headers: H })
+      .then((r) => r.json())
+      .then((d) => setRows(d.bookings || []));
+    fetch(API + "/admin/reviews", { headers: H })
+      .then((r) => r.json())
+      .then((d) => {
+        setReviews(d.reviews || []);
+        setTips(d.total_tips_gbp || 0);
+      });
+  }, [token]);
+
+  if (!token) {
+    return (
+      <div className="panel">
+        <h2>Admin</h2>
+        <p className="muted">This area is protected.</p>
+        <button className="btn primary" onClick={ask}>Enter passcode</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel stack">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <h2>Admin — Bookings</h2>
+        <button className="btn" onClick={clear}>Sign out</button>
+      </div>
+      <div className="row">
+        <div className="panel" style={{flex:'1 1 260px'}}>
+          <div className="muted">Total tips</div>
+          <div style={{fontSize:24,fontWeight:800}}>{fmtGBP(tips)}</div>
+        </div>
+      </div>
+      <div className="panel">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr><th>Start</th><th>End</th><th>Service</th><th>Client</th><th>Status</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{borderBottom:'1px solid #e5e7eb'}}>
+                <td>{dstr(r.start_iso)}</td>
+                <td>{new Date(r.end_iso).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</td>
+                <td>{r.service_key}</td>
+                <td>{r.name} — {r.phone}</td>
+                <td>{r.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <h3>Latest Reviews</h3>
+      <div className="panel">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr><th>When</th><th>Client</th><th>Rating</th><th>Comments</th><th>Tip</th></tr></thead>
+          <tbody>
+            {reviews.slice(0,20).map((r) => (
+              <tr key={r.id} style={{borderBottom:'1px solid #e5e7eb'}}>
+                <td>{dstr(r.created_at)}</td>
+                <td>{r.name} — {r.phone}</td>
+                <td>{r.rating}</td>
+                <td>{r.comments}</td>
+                <td>{fmtGBP((r.tip_amount_pence||0)/100)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- router ---------- */
+function App() {
+  const [state, setState] = useState({});
+  const [step, setStep] = useState(0);
+  const [config, setConfig] = useState({ services: {}, addons: {} });
+  useEffect(() => { fetch(API + "/config").then((r) => r.json()).then(setConfig).catch(()=>{}); }, []);
+  return (
+    <>
+      <Header />
+      <Stepper step={step} />
+      {step === 0 && <Details onNext={() => setStep(1)} state={state} setState={setState} />}
+      {step === 1 && (
+        <Services
+          onNext={() => setStep(2)}
+          onBack={() => setStep(0)}
+          state={state}
+          setState={setState}
+          config={config}
+        />
+      )}
+      {step === 2 && (
+        <Calendar
+          onNext={() => setStep(3)}
+          onBack={() => setStep(1)}
+          state={{ ...state }}
+          setState={setState}
+        />
+      )}
+      {step === 3 && <Confirm onBack={() => setStep(2)} state={state} setState={setState} />}
+      <div className="footer muted">© GM Auto Detailing</div>
+    </>
+  );
+}
+function Router() {
+  const path = location.pathname;
+  if (path.startsWith("/widget")) return <Widget />;
+  if (path.startsWith("/admin")) return <Admin />;
+  return <App />;
+}
+
+createRoot(document.getElementById("root")).render(<Router />);
