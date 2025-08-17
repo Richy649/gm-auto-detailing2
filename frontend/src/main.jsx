@@ -4,9 +4,8 @@ import "./calendar.css";
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
-/* No geolocating for now (we show all available days) */
+/* No geolocating for now (show all available days) */
 
-/* Safe defaults (used only if backend/config is empty) */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -16,7 +15,6 @@ const DEFAULT_SERVICES = {
 const DEFAULT_ADDONS = { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } };
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
 
-/* Utils */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const keyLocal = (date) => {
@@ -27,6 +25,7 @@ const keyLocal = (date) => {
 };
 const dstr = (iso) =>
   new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
 function groupByDayLocal(slots) {
   const g = {};
   for (const s of slots || []) {
@@ -38,19 +37,23 @@ function groupByDayLocal(slots) {
   return g;
 }
 function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
+function sameLocalDay(isoA, isoB) {
+  const a = new Date(isoA), b = new Date(isoB);
+  return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+}
 
-/* Header (single centered logo for non-Details steps) */
+/* Header (big centered logo for non-Details steps) — inline size so nothing overrides it */
 function Header() {
   return (
     <header className="gm header">
-      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
+      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" style={{ height: "200px" }} />
     </header>
   );
 }
 
-/* ---------------- Details (logo left big, content right) ---------------- */
+/* ---------------- Details (logo left VERY BIG, content right; input order fixed) ---------------- */
 function Details({ onNext, state, setState }) {
-  const [v, setV] = useState(state.customer || { name: "", phone: "", address: "", email: "" });
+  const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
 
   const ok = v.name.trim().length>1 && v.phone.trim().length>6 && v.address.trim().length>5;
@@ -58,9 +61,9 @@ function Details({ onNext, state, setState }) {
   return (
     <div className="gm page-section">
       <div className="gm details-grid">
-        {/* Left: huge logo */}
+        {/* Left: huge logo (forced inline height so nothing caps it) */}
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "320px" }} />
         </div>
 
         {/* Right: refined intro + form */}
@@ -73,11 +76,11 @@ function Details({ onNext, state, setState }) {
           <h2 className="gm h2">Your details</h2>
           <div className="gm row">
             <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
-            <input className="gm input" placeholder="Phone"     value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
+            <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
           </div>
           <div className="gm row">
-            <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
-            <input className="gm input" placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
+            <input className="gm input" placeholder="Email (for confirmation)" value={v.email} onChange={(e)=>setV({...v, email:e.target.value})}/>
+            <input className="gm input" placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
           </div>
 
           <div className="gm actions">
@@ -90,7 +93,7 @@ function Details({ onNext, state, setState }) {
   );
 }
 
-/* ---------------- Services (See times at bottom + addon blurbs) ---------------- */
+/* ---------------- Services (Wax left, Polish right, descriptions, CTA bottom) ---------------- */
 function Services({ onNext, onBack, state, setState, config }) {
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
@@ -127,6 +130,7 @@ function Services({ onNext, onBack, state, setState, config }) {
 
         <div className="gm section-divider"></div>
 
+        {/* Add-ons chips */}
         <div>
           <div className="gm muted" style={{ marginBottom: 6, fontWeight: 800 }}>Add-ons (optional)</div>
           <div className="gm addon-row">
@@ -143,20 +147,21 @@ function Services({ onNext, onBack, state, setState, config }) {
               );
             })}
           </div>
+        </div>
 
-          {/* Mini advertising blurbs under each addon */}
-          <div className="gm addon-benefits">
-            <div className="gm benefit">
-              <div className="benefit-title">Full Body Wax</div>
-              <div className="benefit-copy">Deep gloss and slick feel. Adds a protective layer to help repel grime and water.</div>
-            </div>
-            <div className="gm benefit">
-              <div className="benefit-title">Hand Polish</div>
-              <div className="benefit-copy">Refreshes tired paintwork by reducing haze and light oxidation for a richer shine.</div>
-            </div>
+        {/* Benefits: WAX left, POLISH right, each with own description below */}
+        <div className="gm addon-benefits two-col">
+          <div className="gm benefit left">
+            <div className="benefit-title">Full Body Wax</div>
+            <div className="benefit-copy">Deep gloss and slick feel. Adds a protective layer that helps repel grime and water between washes.</div>
+          </div>
+          <div className="gm benefit right">
+            <div className="benefit-title">Hand Polish</div>
+            <div className="benefit-copy">Reduces haze and light oxidation to refresh tired paintwork, restoring clarity and depth to the finish.</div>
           </div>
         </div>
 
+        {/* CTA at the very bottom (below benefits) */}
         <div className="gm actions bottom-stick">
           <button className="gm btn" onClick={onBack}>Back</button>
           <button className="gm btn primary" onClick={onNext}>See times</button>
@@ -194,7 +199,8 @@ function MonthGrid({
   latestKey,
   bookedDays = [],
   membershipCount,
-  isMembership
+  isMembership,
+  onRemoveDay = () => {}
 }) {
   const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
   const monthTitle = monthStart.toLocaleString([], { month: "long", year: "numeric" });
@@ -203,7 +209,6 @@ function MonthGrid({
   const earliestDate = earliestKey ? new Date(earliestKey + "T00:00:00") : null;
   const latestDate   = latestKey   ? new Date(latestKey   + "T00:00:00") : null;
 
-  // month navigation limits (only months that contain slots)
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
   const curIdx = ym(monthStart);
   const minIdx = earliestDate ? ym(new Date(earliestDate.getFullYear(), earliestDate.getMonth(), 1)) : curIdx;
@@ -211,7 +216,6 @@ function MonthGrid({
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  // clip first and last months to the actual window
   const inEarliest = earliestDate &&
     monthStart.getFullYear() === earliestDate.getFullYear() &&
     monthStart.getMonth()  === earliestDate.getMonth();
@@ -221,6 +225,14 @@ function MonthGrid({
 
   const startDay = inEarliest ? earliestDate.getDate() : 1;
   const endDay   = inLatest   ? latestDate.getDate()   : daysInMonth;
+
+  const closeBtnStyle = {
+    position: "absolute", top: 6, right: 6, width: 22, height: 22,
+    borderRadius: 999, background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
+    fontWeight: 900, lineHeight: "20px", fontSize: 14, display: "inline-flex",
+    alignItems: "center", justifyContent: "center", cursor: "pointer",
+    boxShadow: "0 1px 2px rgba(0,0,0,.12)"
+  };
 
   const cells = [];
   for (let day = startDay; day <= endDay; day++) {
@@ -232,25 +244,46 @@ function MonthGrid({
     const label = `${day}${daySuffix(day)}`;
 
     cells.push(
-      <button
-        key={k}
-        className={cx("gm daycell", has && "has", selected && "selected", chosen && "chosen")}
-        disabled={!has || chosen}
-        onClick={() => setSelectedDay(k)}
-        title={d.toDateString()}
-        type="button"
-      >
-        {label}
-      </button>
+      <div key={k} className="gm daywrap" style={{ position: "relative" }}>
+        <button
+          className={cx("gm daycell", has && "has", selected && "selected", chosen && "chosen")}
+          disabled={!has || chosen}
+          onClick={() => setSelectedDay(k)}
+          title={d.toDateString()}
+          type="button"
+          style={{ width: "100%" }}
+        >
+          {label}
+        </button>
+        {isMembership && chosen && (
+          <button
+            type="button"
+            aria-label="Remove this booked day"
+            style={closeBtnStyle}
+            onClick={(e) => { e.stopPropagation(); onRemoveDay(k); }}
+            title="Remove this booking"
+          >
+            ×
+          </button>
+        )}
+      </div>
     );
   }
+
+  // Amber counter style (same yellow family as chosen day)
+  const counterStyle = {
+    background: "#fff7ed",
+    border: "1px solid #f59e0b",
+    color: "#b45309",
+    fontWeight: 900,
+  };
 
   return (
     <div>
       <div className="gm monthbar">
         <div className="gm monthtitle">{monthTitle}</div>
         <div className="gm monthtools">
-          {isMembership && <span className="gm counter">{membershipCount}/2</span>}
+          {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
           <button className="gm btn ghost" disabled={prevDisabled}
             onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}
           >‹</button>
@@ -279,6 +312,22 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
+  // build helper that ignores clicks on already-booked days (extra safety for very fast clicks)
+  const bookedDays = (state.membershipSlots || []).map(s => keyLocal(new Date(s.start_iso)));
+  const onPickDay = (k) => {
+    if (bookedDays.includes(k)) return; // ignore choosing a day that’s already used
+    setSelectedDay(k);
+    setState((s) => ({ ...s, selectedDay: k }));
+  };
+
+  const onRemoveDay = (dayKey) => {
+    setState((st) => ({
+      ...st,
+      membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey)
+    }));
+    // Keep selectedDay as is; user can re-pick if needed
+  };
+
   useEffect(() => {
     setLoading(true);
     fetchAllSlots(state.service_key, state.addons)
@@ -293,8 +342,7 @@ function Calendar({ onNext, onBack, state, setState }) {
             const firstDate = new Date(firstKey + "T00:00:00");
             setMonthCursor(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
             setSelectedDay(firstKey);
-          } else {
-            setSelectedDay(null);
+            setState((st)=>({ ...st, selectedDay: firstKey }));
           }
         } else {
           const d = new Date(selectedDay + "T00:00:00");
@@ -302,16 +350,15 @@ function Calendar({ onNext, onBack, state, setState }) {
         }
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons]); // eslint-disable-line
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.service_key, state.addons]);
 
   const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const earliestKey = allKeys[0] || null;
   const latestKey = allKeys[allKeys.length - 1] || null;
 
-  const bookedDays = (state.membershipSlots || []).map(s => keyLocal(new Date(s.start_iso)));
   const selectedIsBooked = bookedDays.includes(selectedDay || "");
-
   const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
 
   return (
@@ -324,7 +371,7 @@ function Calendar({ onNext, onBack, state, setState }) {
         <MonthGrid
           slotsByDay={slotsByDay}
           selectedDay={selectedDay}
-          setSelectedDay={(k)=>{ setSelectedDay(k); setState(s=>({...s, selectedDay:k})); }}
+          setSelectedDay={onPickDay}
           monthCursor={monthCursor}
           setMonthCursor={setMonthCursor}
           earliestKey={earliestKey}
@@ -332,6 +379,7 @@ function Calendar({ onNext, onBack, state, setState }) {
           bookedDays={bookedDays}
           membershipCount={(state.membershipSlots || []).length}
           isMembership={isMembership}
+          onRemoveDay={onRemoveDay}
         />
 
         {isMembership && selectedIsBooked && (
@@ -347,7 +395,7 @@ function Calendar({ onNext, onBack, state, setState }) {
             className="gm btn primary"
             disabled={!selectedDay || selectedIsBooked}
             onClick={() => {
-              // Preload the day’s times to avoid flicker on the next page
+              // Preload the day’s times to avoid flicker
               setState((s)=>({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
               onNext();
             }}
@@ -360,7 +408,7 @@ function Calendar({ onNext, onBack, state, setState }) {
   );
 }
 
-/* -------- Times (no flicker; big boxes; date centered) ---------- */
+/* -------- Times (no flicker; swap-on-same-day; removable selection; big boxes) ---------- */
 function Times({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
@@ -368,7 +416,6 @@ function Times({ onNext, onBack, state, setState }) {
   const [isLoading, setIsLoading] = useState(daySlots.length === 0);
 
   useEffect(() => {
-    // Fetch fresh (but we already show prefetched, so no "no times" flash)
     fetchAllSlots(state.service_key, state.addons)
       .then((s)=>{
         const filtered = s.filter((sl)=> keyLocal(new Date(sl.start_iso)) === selectedDay);
@@ -385,27 +432,51 @@ function Times({ onNext, onBack, state, setState }) {
           ? state.slot
           : null;
 
-  function sameLocalDay(isoA, isoB) {
-    const a = new Date(isoA), b = new Date(isoB);
-    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  // SWAP-on-same-day, prevent dupes, atomic update to resist fast clicks
+  function choose(slot) {
+    if (!isMembership) {
+      setState((st) => ({ ...st, slot }));
+      return;
+    }
+    setState((st) => {
+      const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
+      const dayK = keyLocal(new Date(slot.start_iso));
+
+      // If day already chosen, swap to the newly clicked time
+      const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
+      if (idxSameDay !== -1) {
+        ms[idxSameDay] = slot;
+        return { ...st, membershipSlots: ms };
+      }
+
+      if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
+
+      // If already 2 different days, replace the most recent (slot #2)
+      return { ...st, membershipSlots: [ms[0], slot] };
+    });
   }
 
-  function choose(slot) {
-    if (isMembership) {
-      const current = state.membershipSlots || [];
-      if (current.length === 1 && sameLocalDay(current[0].start_iso, slot.start_iso)) {
-        alert("Membership visits must be on two different days.");
-        return;
-      }
-      const exists = current.find((s) => s.start_iso === slot.start_iso);
-      if (exists) setState((st)=>({ ...st, membershipSlots: current.filter((s)=>s.start_iso!==slot.start_iso) }));
-      else setState((st)=>({ ...st, membershipSlots: current.length >= 2 ? [current[1], slot] : [...current, slot] }));
+  // remove selection handlers (for the "×" close buttons)
+  function removeSelectedSlot(slot) {
+    if (!isMembership) {
+      setState((st) => ({ ...st, slot: null }));
     } else {
-      setState((st)=>({ ...st, slot }));
+      setState((st) => ({
+        ...st,
+        membershipSlots: (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso)
+      }));
     }
   }
 
   const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
+
+  const closeBtnStyle = {
+    position: "absolute", top: 6, right: 6, width: 22, height: 22,
+    borderRadius: 999, background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
+    fontWeight: 900, lineHeight: "20px", fontSize: 14, display: "inline-flex",
+    alignItems: "center", justifyContent: "center", cursor: "pointer",
+    boxShadow: "0 1px 2px rgba(0,0,0,.12)"
+  };
 
   return (
     <div className="gm page-section">
@@ -425,9 +496,22 @@ function Times({ onNext, onBack, state, setState }) {
             const sel = selected?.start_iso === s.start_iso ||
                         (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
             return (
-              <button key={s.start_iso} className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
-                {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </button>
+              <div key={s.start_iso} className="gm timebox-wrap" style={{ position: "relative" }}>
+                <button className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
+                  {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </button>
+                {sel && (
+                  <button
+                    type="button"
+                    aria-label="Remove this booking"
+                    style={closeBtnStyle}
+                    onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }}
+                    title="Remove this booking"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -439,7 +523,7 @@ function Times({ onNext, onBack, state, setState }) {
             disabled={!canNext}
             onClick={() => {
               if (isMembership && (state.membershipSlots||[]).length === 1) {
-                onBack(); // choose second date; first day remains highlighted
+                onBack(); // choose second date; first day stays highlighted
               } else {
                 onNext();
               }
@@ -491,8 +575,9 @@ function Confirm({ onBack, state, setState }) {
         <div className="gm row">
           <div className="gm panel sub">
             <div><b>Name:</b> {state.customer?.name}</div>
-            <div><b>Phone:</b> {state.customer?.phone}</div>
             <div><b>Address:</b> {state.customer?.address}</div>
+            <div><b>Email:</b> {state.customer?.email}</div>
+            <div><b>Phone:</b> {state.customer?.phone}</div>
             <div><b>Service:</b> {state.service_key}</div>
             <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
             <div><b>When:</b> {when || "—"}</div>
