@@ -2,24 +2,22 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./calendar.css";
 
-/* ===== Config ===== */
+const API = import.meta.env.VITE_API || "http://localhost:8787/api";
+
+/* ===== Booking window / rules ===== */
 const MAX_DAYS_AHEAD = 30;
 const MIN_LEAD_MIN = 24 * 60;
-const BUFFER_MIN = 30;              // 30-min buffer between jobs
-const SLOT_STEP_MIN = 15;           // 15-min grid for neat times
+const BUFFER_MIN = 30;
 
-/* ===== Service catalog (fallback if /config is empty) ===== */
+/* ===== Catalog (with your new prices) ===== */
 const DEFAULT_SERVICES = {
-  exterior: { name: "Exterior Detail", duration: 75, price: 60 },
-  full: { name: "Full Detail", duration: 120, price: 120 },
-  standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 100 },
-  premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 220 },
+  exterior: { name: "Exterior Detail", duration: 75, price: 40 },
+  full: { name: "Full Detail", duration: 120, price: 60 },
+  standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 70 },
+  premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 100 },
 };
 const DEFAULT_ADDONS = { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } };
 
-const API = import.meta.env.VITE_API || "http://localhost:8787/api";
-
-/* ===== Utils ===== */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
@@ -32,36 +30,15 @@ const keyLocal = (date) => {
 };
 const dstr = (iso) =>
   new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
 const isWeekend = (d) => [0, 6].includes(d.getDay());
 const addMinutes = (d, mins) => new Date(d.getTime() + mins * 60000);
-const clone = (d) => new Date(d.getTime());
+const toISO = (day, hm) => {
+  const [H, M] = hm.split(":").map(Number);
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), H, M, 0, 0).toISOString();
+};
 
-function alignUp(date, minutes = SLOT_STEP_MIN) {
-  const d = new Date(date);
-  const ms = minutes * 60000;
-  const rem = d.getTime() % ms;
-  if (rem !== 0) d.setTime(d.getTime() + (ms - rem));
-  return d;
-}
-
-/* ===== Working window (local time) =====
-   Weekdays: 16:00–21:00
-   Weekends: 09:00–19:30
-   We allow the *last* job of the day to end after the window end. */
-function workWindowLocal(day) {
-  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate());
-  let start, end;
-  if (isWeekend(d)) {
-    start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0, 0);
-    end   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 19, 30, 0, 0);
-  } else {
-    start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 16, 0, 0, 0);
-    end   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 21, 0, 0, 0);
-  }
-  return { start, end };
-}
-
-/* Resolve service duration, mapping memberships to their visit service duration */
+/* ===== Service duration resolver (memberships map to their visit service) ===== */
 function serviceDuration(service_key, services) {
   const svc = services?.[service_key];
   if (!svc) return 0;
@@ -71,93 +48,119 @@ function serviceDuration(service_key, services) {
   return svc.duration || 0;
 }
 
-/* Generate *packed* slots for a day given a duration:
-   - 15-min aligned
-   - 30-min buffer *between* jobs (not before first)
-   - respects 24h lead time
-   - last job may run past the day's end (we still allow its start if it begins before end)
-   - returns [{start_iso, end_iso}]
-*/
-function generateDaySlots(day, durationMin, now = new Date()) {
-  const { start, end } = workWindowLocal(day);
+/* =========================================================================
+   FAMILY TEMPLATES (capacity-optimised, overrun ≤ 45m, weekday bans kept)
+   -------------------------------------------------------------------------
+   Weekdays (Mon–Fri) start at 16:00. Overrun allowed until 21:45 max.
+   No 19:30 or 21:00 starts. Families:
+   - W_3x75:         16:00(75), 17:45(75), 19:45(75)
+   - W_2x120:        16:00(120), 18:30(120)
+   - W_MIX_A:        16:00(120), 18:30(75), 20:15(75)
+   - W_MIX_B:        16:00(75), 17:45(120), 20:15(75)
 
-  // Lead-time gate
-  const minStart = addMinutes(now, MIN_LEAD_MIN);
-  const firstStart = alignUp(new Date(Math.max(start.getTime(), minStart.getTime())), SLOT_STEP_MIN);
+   Weekends (Sat–Sun) start at 09:00. Overrun allowed until 20:15 max.
+   Families (examples that fill the day well and respect +45):
+   - WE_6x75:        09:00, 10:45, 12:30, 14:15, 16:00, 17:45 (all 75)
+   - WE_4x120:       09:00, 11:30, 14:00, 16:30 (all 120)
+   - WE_3x120_2x75:  09:00(120), 11:30(120), 14:00(120), 16:30(75), 18:15(75)
+   - WE_1x120_5x75:  09:00(120), 11:30, 13:15, 15:00, 16:45, 18:30 (rest 75)
+   - WE_2x120_3x75:  09:00(120), 11:30(120), 14:00(75), 15:45(75), 17:30(75)
+   ========================================================================= */
+function weekdayFamilies() {
+  return [
+    { id: "W_3x75", slots: [{t:"16:00",d:75},{t:"17:45",d:75},{t:"19:45",d:75}] },
+    { id: "W_2x120", slots: [{t:"16:00",d:120},{t:"18:30",d:120}] },
+    { id: "W_MIX_A", slots: [{t:"16:00",d:120},{t:"18:30",d:75},{t:"20:15",d:75}] },
+    { id: "W_MIX_B", slots: [{t:"16:00",d:75},{t:"17:45",d:120},{t:"20:15",d:75}] },
+  ];
+}
+function weekendFamilies() {
+  return [
+    { id: "WE_6x75",        slots: [{t:"09:00",d:75},{t:"10:45",d:75},{t:"12:30",d:75},{t:"14:15",d:75},{t:"16:00",d:75},{t:"17:45",d:75}] },
+    { id: "WE_4x120",       slots: [{t:"09:00",d:120},{t:"11:30",d:120},{t:"14:00",d:120},{t:"16:30",d:120}] },
+    { id: "WE_3x120_2x75",  slots: [{t:"09:00",d:120},{t:"11:30",d:120},{t:"14:00",d:120},{t:"16:30",d:75},{t:"18:15",d:75}] },
+    { id: "WE_1x120_5x75",  slots: [{t:"09:00",d:120},{t:"11:30",d:75},{t:"13:15",d:75},{t:"15:00",d:75},{t:"16:45",d:75},{t:"18:30",d:75}] },
+    { id: "WE_2x120_3x75",  slots: [{t:"09:00",d:120},{t:"11:30",d:120},{t:"14:00",d:75},{t:"15:45",d:75},{t:"17:30",d:75}] },
+  ];
+}
+function familiesForDay(day) { return isWeekend(day) ? weekendFamilies() : weekdayFamilies(); }
 
-  if (firstStart > end) return [];
-
-  const slots = [];
-  let cur = firstStart;
-
-  while (true) {
-    // if there's already a slot, we must respect buffer after previous end
-    if (slots.length) {
-      const prevEnd = new Date(slots[slots.length - 1].end_iso);
-      const earliest = addMinutes(prevEnd, BUFFER_MIN);
-      if (cur < earliest) cur = alignUp(earliest, SLOT_STEP_MIN);
-    }
-
-    // normal case: fits inside window
-    const candidateEnd = addMinutes(cur, durationMin);
-    if (candidateEnd <= end) {
-      slots.push({ start_iso: cur.toISOString(), end_iso: candidateEnd.toISOString() });
-      // move to next start by duration+buffer
-      cur = alignUp(addMinutes(candidateEnd, BUFFER_MIN), SLOT_STEP_MIN);
-      if (cur > end && slots.length) break;
-      continue;
-    }
-
-    // overrun case: allow LAST job to start before end even if it ends after
-    if (cur < end) {
-      slots.push({ start_iso: cur.toISOString(), end_iso: candidateEnd.toISOString() });
-    }
-    break;
+/* Choose a family for a selected (time,duration), with sensible priorities */
+function pickFamily(day, timeHHMM, dur) {
+  const fams = familiesForDay(day);
+  const fits = fams.filter(f => f.slots.some(s => s.t === timeHHMM && s.d === dur));
+  if (!fits.length) return null;
+  // Priority: weekend — most jobs; weekday — mixed > 3x75 > 2x120
+  if (isWeekend(day)) {
+    const score = (f) => f.slots.length; // more jobs first
+    return fits.sort((a,b)=>score(b)-score(a))[0];
+  } else {
+    const order = ["W_MIX_A","W_MIX_B","W_3x75","W_2x120"];
+    return fits.sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id))[0];
   }
-
-  return slots;
 }
 
-/* Build a 30-day availability map keyed by 'YYYY-MM-DD' for the chosen duration */
-function generateAvailability(daysAhead, durationMin, now = new Date()) {
+/* Build the displayable slots for a day, respecting family lock & 24h lead.
+   - If family locked for that day -> only show that family’s starts
+   - Else -> show union of starts across families (for the selected duration)
+*/
+function dayStartsForDuration(day, durationMin, familyLockId, now = new Date()) {
+  const fams = familiesForDay(day);
+  const inLead = addMinutes(now, MIN_LEAD_MIN);
+  const famList = familyLockId ? fams.filter(f=>f.id===familyLockId) : fams;
+
+  const starts = [];
+  for (const f of famList) {
+    for (const s of f.slots) {
+      if (s.d !== durationMin) continue; // show only starts for the chosen service duration
+      const iso = toISO(day, s.t);
+      if (new Date(iso) >= inLead) starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: f.id, t: s.t, d: s.d });
+    }
+  }
+  // de-dup by time
+  const byT = new Map();
+  for (const x of starts) if (!byT.has(x.start_iso)) byT.set(x.start_iso, x);
+  return Array.from(byT.values()).sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
+}
+
+/* Build calendar availability map (days that have at least one start for the chosen duration) */
+function buildCalendarAvailability(durationMin, now = new Date(), dayLocks = {}) {
   const map = {};
-  for (let i = 0; i <= daysAhead; i++) {
+  for (let i = 0; i <= MAX_DAYS_AHEAD; i++) {
     const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
-    const slots = generateDaySlots(day, durationMin, now);
-    if (slots.length) map[keyLocal(day)] = slots;
+    const k = keyLocal(day);
+    const list = dayStartsForDuration(day, durationMin, dayLocks[k] || null, now);
+    if (list.length) map[k] = list;
   }
   return map;
 }
 
-/* ===== Sticky logo header ===== */
+/* ===== Header ===== */
 function Header() {
   return (
     <header className="gm header">
-      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" style={{ height: "200px" }} />
+      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" style={{ height: "220px" }} />
     </header>
   );
 }
 
-/* ===== Details (logo big left; order: Name, Address, Email, Phone) ===== */
+/* ===== Details ===== */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
-
   const ok = v.name.trim().length>1 && v.phone.trim().length>6 && v.address.trim().length>5;
 
   return (
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "360px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "380px" }} />
         </div>
-
         <div className="gm details-right">
           <p className="gm hero-note">
             Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right address and can reach you if plans change.
             I treat every booking like it’s my own car—if anything isn’t clear, message me and I’ll make it right.
           </p>
-
           <h2 className="gm h2" style={{textAlign:'center'}}>Your details</h2>
           <div className="gm row">
             <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
@@ -167,7 +170,6 @@ function Details({ onNext, state, setState }) {
             <input className="gm input" placeholder="Email (for confirmation)" value={v.email} onChange={(e)=>setV({...v, email:e.target.value})}/>
             <input className="gm input" placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
           </div>
-
           <div className="gm actions">
             <button className="gm btn" disabled>Back</button>
             <button className="gm btn primary" onClick={onNext} disabled={!ok}>Next</button>
@@ -178,28 +180,27 @@ function Details({ onNext, state, setState }) {
   );
 }
 
-/* ===== Services (Add-on cards with price + Add/Remove; headings centred) ===== */
+/* ===== Services (add-ons are time-free) ===== */
 function Services({ onNext, onBack, state, setState, config }) {
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
-
   const firstKey = Object.keys(svc)[0];
+
   const [service, setService] = useState(state.service_key && svc[state.service_key] ? state.service_key : firstKey);
   const [addons, setAddons] = useState(state.addons || []);
-
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
-  // When service changes: reset incompatible selections + date/slots (prevents carry-over)
+  // Switching service clears incompatible selections and any day family locks
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
-      const next = { ...s, service_key: service };
+      const next = { ...s, service_key: service, dayLocks: {} };
       next.selectedDay = null;
       next.prefetchedDaySlots = [];
       if (isMembership) next.slot = null; else next.membershipSlots = [];
       return next;
     });
-  }, [service, setState]);
+  }, [service]); // eslint-disable-line
 
   function toggleAddon(k) {
     setAddons((a) => (a.includes(k) ? a.filter((x) => x !== k) : [...a, k]));
@@ -286,7 +287,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ===== Calendar grid (driven by client-generated availability) ===== */
+/* ===== Month grid ===== */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -317,16 +318,12 @@ function MonthGrid({
   const startDay = inEarliest ? new Date(earliestKey+"T00:00:00").getDate() : 1;
   const endDay   = inLatest   ? new Date(latestKey+"T00:00:00").getDate()   : daysInMonth;
 
-  const counterStyle = {
-    background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900,
-  };
-
+  const counterStyle = { background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900 };
   const closeBtnStyle = {
-    position: "absolute", top: 6, right: 6, width: 22, height: 22,
-    borderRadius: 999, background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
+    position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 999,
+    background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
     fontWeight: 900, lineHeight: "20px", fontSize: 14, display: "inline-flex",
-    alignItems: "center", justifyContent: "center", cursor: "pointer",
-    boxShadow: "0 1px 2px rgba(0,0,0,.12)"
+    alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.12)"
   };
 
   const cells = [];
@@ -336,7 +333,6 @@ function MonthGrid({
     const has = !!slotsByDay[k];
     const selected = selectedDay === k;
     const chosen = bookedDays.includes(k);
-    const label = `${day}`;
 
     cells.push(
       <div key={k} className="gm daywrap" style={{ position: "relative" }}>
@@ -348,7 +344,7 @@ function MonthGrid({
           type="button"
           style={{ width: "100%" }}
         >
-          {label}
+          {day}
         </button>
         {isMembership && chosen && (
           <button
@@ -381,28 +377,26 @@ function MonthGrid({
       </div>
 
       <div className="gm small-note">We hope you can find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
-
       <div className="gm dowrow">
         {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
       </div>
-
       <div className="gm monthgrid">{cells}</div>
     </div>
   );
 }
 
-/* ===== Calendar container ===== */
+/* ===== Calendar (uses template availability for the chosen service) ===== */
 function Calendar({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const durationMin = serviceDuration(state.service_key, services);
+  const dayLocks = state.dayLocks || {};
 
-  // Build 30-day availability map for chosen duration
   const [slotsByDay, setSlotsByDay] = useState({});
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
   useEffect(() => {
-    const map = generateAvailability(MAX_DAYS_AHEAD, durationMin, new Date());
+    const map = buildCalendarAvailability(durationMin, new Date(), dayLocks);
     setSlotsByDay(map);
     const keys = Object.keys(map).sort();
     if (keys.length && !selectedDay) {
@@ -415,7 +409,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
       setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [durationMin]);
+  }, [durationMin, JSON.stringify(dayLocks)]);
 
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const earliestKey = allKeys[0] || null;
@@ -425,17 +419,12 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   const selectedIsBooked = bookedDays.includes(selectedDay || "");
 
   const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-
-  const onPickDay = (k) => {
-    if (bookedDays.includes(k)) return;
-    setSelectedDay(k);
-    setState((s) => ({ ...s, selectedDay: k }));
-  };
-
+  const onPickDay = (k) => { if (!bookedDays.includes(k)) { setSelectedDay(k); setState((s)=>({ ...s, selectedDay: k })); } };
   const onRemoveDay = (dayKey) => {
     setState((st) => ({
       ...st,
-      membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey)
+      membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey),
+      dayLocks: { ...(st.dayLocks||{}), [dayKey]: undefined }
     }));
   };
 
@@ -472,7 +461,6 @@ function Calendar({ onNext, onBack, state, setState, services }) {
             className="gm btn primary"
             disabled={!selectedDay || selectedIsBooked}
             onClick={() => {
-              // Preload the day’s times (no flicker)
               setState((s)=>({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
               onNext();
             }}
@@ -485,20 +473,23 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===== Times (built from client-generated availability; swap-on-same-day; “×” to remove) ===== */
+/* ===== Times (family lock + gating; add-ons = zero time) ===== */
 function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
-
   const durationMin = serviceDuration(state.service_key, services);
-  const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
 
+  const day = new Date(selectedDay + "T00:00:00");
+  const dayLocks = state.dayLocks || {};
+  const familyLockId = dayLocks[selectedDay] || null;
+
+  // Build starts for this day/duration respecting any lock (no network)
+  const [daySlots, setDaySlots] = useState([]);
   useEffect(() => {
-    // Rebuild slots for this day and this duration (instant, no network)
-    const d = new Date(selectedDay + "T00:00:00");
-    setDaySlots(generateDaySlots(d, durationMin, new Date()));
-  }, [selectedDay, durationMin]);
+    setDaySlots(dayStartsForDuration(day, durationMin, familyLockId, new Date()));
+  }, [selectedDay, durationMin, familyLockId]);
 
+  // Current selection on this day (normal or membership)
   const selected =
     isMembership
       ? (state.membershipSlots || []).find((s)=> s && keyLocal(new Date(s.start_iso)) === selectedDay)
@@ -506,44 +497,59 @@ function Times({ onNext, onBack, state, setState, services }) {
           ? state.slot
           : null;
 
-  function sameLocalDay(isoA, isoB) {
-    const a = new Date(isoA), b = new Date(isoB);
-    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
-  }
-
-  // SWAP-on-same-day, prevent dupes, atomic update to resist fast clicks
+  // Choose a slot -> lock family (if not locked), then apply selection (swap-on-same-day for membership)
   function choose(slot) {
-    if (!isMembership) {
-      setState((st) => ({ ...st, slot }));
-      return;
-    }
-    setState((st) => {
-      const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
-      const dayK = keyLocal(new Date(slot.start_iso));
+    const t = new Date(slot.start_iso);
+    const hh = String(t.getHours()).padStart(2,"0");
+    const mm = String(t.getMinutes()).padStart(2,"0");
+    const timeHHMM = `${hh}:${mm}`;
+    const dur = durationMin; // add-ons add ZERO time by your rule
 
-      // If day already chosen, swap to the newly clicked time
-      const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
-      if (idxSameDay !== -1) {
-        ms[idxSameDay] = slot;
-        return { ...st, membershipSlots: ms };
+    setState((st) => {
+      // Determine / keep family lock for this day
+      const nextLocks = { ...(st.dayLocks || {}) };
+      if (!nextLocks[selectedDay]) {
+        const fam = pickFamily(day, timeHHMM, dur);
+        if (fam) nextLocks[selectedDay] = fam.id;
       }
 
-      if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
+      if (!isMembership) {
+        return { ...st, dayLocks: nextLocks, slot };
+      }
 
-      // If already 2 different days, replace the most recent (slot #2)
-      return { ...st, membershipSlots: [ms[0], slot] };
+      // Membership: swap on same day, prevent dupes
+      const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
+      const dayK = keyLocal(new Date(slot.start_iso));
+      const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
+      if (idxSameDay !== -1) {
+        ms[idxSameDay] = slot; // swap to the newly clicked time
+        return { ...st, dayLocks: nextLocks, membershipSlots: ms };
+      }
+      if (ms.length < 2) return { ...st, dayLocks: nextLocks, membershipSlots: [...ms, slot] };
+      return { ...st, dayLocks: nextLocks, membershipSlots: [ms[0], slot] };
     });
   }
 
+  // Remove selection (also clears family lock if nothing left that day)
   function removeSelectedSlot(slot) {
-    if (!isMembership) {
-      setState((st) => ({ ...st, slot: null }));
-    } else {
-      setState((st) => ({
-        ...st,
-        membershipSlots: (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso)
-      }));
-    }
+    setState((st) => {
+      if (!isMembership) {
+        const next = { ...st, slot: null };
+        // no selection left on this day → free the lock
+        const locks = { ...(st.dayLocks || {}) };
+        delete locks[selectedDay];
+        next.dayLocks = locks;
+        return next;
+      }
+      const ms = (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso);
+      const next = { ...st, membershipSlots: ms };
+      if (!ms.find(x => keyLocal(new Date(x.start_iso)) === selectedDay)) {
+        const locks = { ...(st.dayLocks || {}) };
+        delete locks[selectedDay];
+        next.dayLocks = locks;
+      }
+      return next;
+    });
   }
 
   const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
@@ -610,11 +616,11 @@ function Times({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===== Confirm (unchanged logic) ===== */
+/* ===== Confirm (updated totals with your prices; add-ons don't change time) ===== */
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = React.useMemo(() => {
-    const map = { exterior: 60, full: 120, standard_membership: 100, premium_membership: 220 };
+    const map = { exterior: 40, full: 60, standard_membership: 70, premium_membership: 100 };
     const addonsMap = { wax: 15, polish: 15 };
     let t = map[state.service_key] || 0;
     if (!isMembership) t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
@@ -637,7 +643,7 @@ function Confirm({ onBack, state, setState }) {
     else { alert("Error: " + (res.error || "Unknown")); }
   }
 
-  const when = isMembership
+  const when = state.service_key?.includes("membership")
     ? (state.membershipSlots||[]).map((s) => dstr(s.start_iso)).join(" & ")
     : state.slot && dstr(state.slot.start_iso);
 
@@ -671,7 +677,7 @@ function Confirm({ onBack, state, setState }) {
   );
 }
 
-/* ===== App (stepper) ===== */
+/* ===== App ===== */
 function App() {
   const [state, setState] = useState({});
   const [step, setStep] = useState(0);
@@ -708,8 +714,8 @@ function App() {
             services={services}
             onNext={() => setStep(3)}
             onBack={() => {
-              // Leaving Calendar back to Services: reset selections entirely
-              setState((s)=>({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] }));
+              // Leaving Calendar resets selections and locks (per your request)
+              setState((s)=>({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [], dayLocks: {} }));
               setStep(1);
             }}
             state={state}
