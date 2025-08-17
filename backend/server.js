@@ -1,14 +1,14 @@
-// backend/server.js (ESM)
+// backend/server.js
 import express from "express";
 import cors from "cors";
 import { createCheckoutSession, stripeWebhook } from "./payments.js";
 
 const app = express();
 
-/* CORS (allow all while testing; tighten later) */
+/* CORS (allow all during setup) */
 app.use(cors());
 
-/* Stripe webhook MUST get the raw body (before express.json) */
+/* Stripe webhook BEFORE json parser, using raw body */
 app.post(
   "/api/webhooks/stripe",
   express.raw({ type: "application/json" }),
@@ -16,7 +16,7 @@ app.post(
   stripeWebhook
 );
 
-/* All other routes use JSON */
+/* JSON for normal routes */
 app.use(express.json());
 
 /* Config for frontend */
@@ -32,7 +32,7 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
-/* Stripe checkout session */
+/* Stripe: create checkout session */
 app.post("/api/pay/create-checkout-session", createCheckoutSession);
 
 /* Health */
