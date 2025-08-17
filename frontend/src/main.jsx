@@ -15,7 +15,7 @@ function sideOfSplit(A, B, P) {
   return P.lon < lonOnLine ? "left" : "right"; // west=left, east=right
 }
 
-/* ---- defaults (used if backend returns empty) ---- */
+/* defaults if backend /config is empty (safety) */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 60, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -90,8 +90,10 @@ function Details({ onNext, state, setState }) {
         <input placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
         <input placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
       </div>
-      <input placeholder="Address (full address — we’ll pick your Sheen side automatically)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
-      <input placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
+      <div className="row">
+        <input placeholder="Address (full address — we’ll pick your Sheen side automatically)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
+        <input placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
+      </div>
       {err && <div className="muted" style={{ color: "#b91c1c" }}>{err}</div>}
       <div className="right" style={{ marginTop: 8 }}>
         <button className="btn" disabled>Back</button>
@@ -104,7 +106,6 @@ function Details({ onNext, state, setState }) {
 }
 
 function Services({ onNext, onBack, state, setState, config }) {
-  // use backend values if present; otherwise defaults
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
 
@@ -161,12 +162,60 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
+/* ---------- Live month calendar: pick day -> show times for that day ---------- */
+function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMonthCursor }) {
+  const firstOfMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+  const start = new Date(firstOfMonth);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // start on Monday
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const key = d.toISOString().slice(0, 10);
+    const isCurrentMonth = d.getMonth() === monthCursor.getMonth();
+    const has = !!slotsByDay[key];
+    const selected = selectedDay === key;
+    cells.push(
+      <div
+        key={key}
+        className={
+          "daycell " +
+          (has ? "has " : "") +
+          (!isCurrentMonth ? "disabled " : "") +
+          (selected ? "selected " : "")
+        }
+        onClick={() => isCurrentMonth && has && setSelectedDay(key)}
+      >
+        {d.getDate()}
+      </div>
+    );
+  }
+  const monthName = monthCursor.toLocaleString([], { month: "long", year: "numeric" });
+  return (
+    <div className="panel" style={{ marginBottom: 12 }}>
+      <div className="monthbar">
+        <div style={{ fontWeight: 700 }}>{monthName}</div>
+        <div className="nav">
+          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>‹</button>
+          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>›</button>
+        </div>
+      </div>
+      <div className="monthgrid">
+        {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="dow">{d}</div>)}
+        {cells}
+      </div>
+    </div>
+  );
+}
+
 function Calendar({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedDay, setSelectedDay] = useState(null);
   const [selected, setSelected] = useState(state.slot || null);
   const [selected2, setSelected2] = useState(state.membershipSlots || []);
+  const [monthCursor, setMonthCursor] = useState(new Date());
 
   useEffect(() => {
     setLoading(true);
@@ -176,23 +225,22 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area: state.area || "right", // LEFT/RIGHT computed on Details → controls days shown
+        area: state.area || "right", // LEFT/RIGHT computed on Details → controls days returned
       }),
     })
       .then((r) => r.json())
-      .then((d) => setSlots(d.slots || []))
+      .then((d) => {
+        setSlots(d.slots || []);
+        // preselect first day with slots
+        const g = groupByDay(d.slots || []);
+        const firstKey = Object.keys(g).sort()[0] || null;
+        setSelectedDay(firstKey);
+      })
       .finally(() => setLoading(false));
   }, [state.service_key, state.addons, state.area]);
 
-  const grouped = useMemo(() => {
-    const g = {};
-    for (const s of slots) {
-      const k = dkey(s.start_iso);
-      (g[k] ||= []).push(s);
-    }
-    return g;
-  }, [slots]);
-  const days = Object.keys(grouped).sort();
+  const slotsByDay = useMemo(() => groupByDay(slots), [slots]);
+  const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
 
   function choose(slot) {
     if (isMembership) {
@@ -210,41 +258,70 @@ function Calendar({ onNext, onBack, state, setState }) {
   const canNext = isMembership ? selected2.length === 2 : !!selected;
 
   return (
-    <div className={cx("panel", loading && "loading")}>
-      <h2 style={{ marginTop: 0 }}>Choose a time</h2>
-      {days.length === 0 && !loading && <div className="muted">No slots available for your area/dates.</div>}
-      {days.map((k) => (
-        <div key={k} className="day">
-          <div style={{ fontWeight: 700, marginBottom: 6 }}>
-            {new Date(k).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
-          </div>
-          {grouped[k].map((s) => {
-            const sel = isMembership
-              ? !!selected2.find((x) => x.start_iso === s.start_iso)
-              : selected?.start_iso === s.start_iso;
-            return (
-              <span key={s.start_iso} className={cx("slot", sel && "sel")} onClick={() => choose(s)}>
-                {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </span>
-            );
-          })}
-        </div>
-      ))}
+    <div className={cx(loading && "loading")}>
+      <MonthGrid
+        slotsByDay={slotsByDay}
+        selectedDay={selectedDay}
+        setSelectedDay={setSelectedDay}
+        monthCursor={monthCursor}
+        setMonthCursor={setMonthCursor}
+      />
 
-      <div className="stickybar">
-        <div className="muted">
-          {isMembership ? `${selected2.length}/2 times selected` : selected ? dstr(selected.start_iso) : "Select a time"}
-        </div>
-        <div className="right">
-          <button className="btn" onClick={onBack}>Back</button>
-            <button className="btn primary" disabled={!canNext}
+      <div className="panel daylist">
+        <h3 style={{ marginTop: 0 }}>
+          {selectedDay
+            ? new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
+            : "Select a highlighted day"}
+        </h3>
+
+        {(!selectedDay || daySlots.length === 0) && (
+          <div className="muted">No times on this day. Pick another highlighted day.</div>
+        )}
+
+        {daySlots.length > 0 && (
+          <div>
+            {daySlots.map((s) => {
+              const sel = isMembership
+                ? !!selected2.find((x) => x.start_iso === s.start_iso)
+                : selected?.start_iso === s.start_iso;
+              return (
+                <span
+                  key={s.start_iso}
+                  className={"slot " + (sel ? "sel" : "")}
+                  onClick={() => choose(s)}
+                >
+                  {new Date(s.start_iso).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="stickybar" style={{ marginTop: 12 }}>
+          <div className="muted">
+            {isMembership
+              ? `${selected2.length}/2 times selected`
+              : selected
+              ? dstr(selected.start_iso)
+              : "Select a time"}
+          </div>
+          <div className="right">
+            <button className="btn" onClick={onBack}>Back</button>
+            <button
+              className="btn primary"
+              disabled={!canNext}
               onClick={() => {
                 if (isMembership) setState((s) => ({ ...s, membershipSlots: selected2 }));
                 else setState((s) => ({ ...s, slot: selected }));
                 onNext();
-              }}>
+              }}
+            >
               Continue
             </button>
+          </div>
         </div>
       </div>
     </div>
@@ -264,7 +341,7 @@ function Confirm({ onBack, state, setState }) {
   async function confirm() {
     const payload = {
       customer: state.customer,
-      area: state.area || "right", // already decided on Details
+      area: state.area || "right",
       service_key: state.service_key,
       addons: state.addons || [],
       slot: state.slot,
@@ -289,7 +366,7 @@ function Confirm({ onBack, state, setState }) {
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Confirm</h2>
       <div className="row">
-        <div className="panel" style={{ flex: "1 1 260px" }}>
+        <div className="panel" style={{ flex: "1 1 320px" }}>
           <div><b>Name:</b> {state.customer?.name}</div>
           <div><b>Phone:</b> {state.customer?.phone}</div>
           <div><b>Address:</b> {state.customer?.address}</div>
@@ -298,7 +375,7 @@ function Confirm({ onBack, state, setState }) {
           <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
           <div><b>When:</b> {when || "—"}</div>
         </div>
-        <div className="panel" style={{ flex: "1 1 260px" }}>
+        <div className="panel" style={{ flex: "1 1 320px" }}>
           <div className="muted">Total due</div>
           <div style={{ fontSize: 28, fontWeight: 800 }}>{fmtGBP(total)}</div>
         </div>
@@ -325,7 +402,6 @@ function App() {
     fetch(API + "/config")
       .then((r) => r.json())
       .then((d) => {
-        // guard against empty responses
         const services = hasKeys(d?.services) ? d.services : DEFAULT_SERVICES;
         const addons = hasKeys(d?.addons) ? d.addons : DEFAULT_ADDONS;
         setConfig({ services, addons });
