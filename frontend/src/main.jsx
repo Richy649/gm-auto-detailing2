@@ -2,12 +2,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./calendar.css";
 
-/* ===================== API base ===================== */
+/* ===================== API base (with safe fallback) ===================== */
 const API =
   (typeof window !== "undefined" && window.__API__) ||
   import.meta.env.VITE_API ||
   "https://gm-auto-detailing2.onrender.com/api";
-
 
 /* ===================== Booking rules ===================== */
 const MAX_DAYS_AHEAD = 30;
@@ -31,12 +30,19 @@ const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
 
+/* IMPORTANT: never use new Date("YYYY-MM-DD") (UTC parse). */
 const keyLocal = (date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 };
+const dateFromKeyLocal = (key) => {
+  if (!key) return new Date();
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1); // local midnight
+};
+
 const dstr = (iso) =>
   new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 
@@ -117,7 +123,6 @@ function buildCalendarAvailability(durationMin, now = new Date()) {
 function Header() {
   return (
     <header className="gm header">
-      {/* Put your logo file at /public/logo.png (Vercel) */}
       <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" style={{ height: "220px" }} />
     </header>
   );
@@ -285,16 +290,16 @@ function MonthGrid({
 
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
   const curIdx = ym(monthStart);
-  const minIdx = earliestKey ? ym(new Date(earliestKey + "T00:00:00")) : curIdx;
-  const maxIdx = latestKey ? ym(new Date(latestKey + "T00:00:00")) : curIdx;
+  const minIdx = earliestKey ? ym(dateFromKeyLocal(earliestKey)) : curIdx;
+  const maxIdx = latestKey ? ym(dateFromKeyLocal(latestKey)) : curIdx;
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  const inEarliest = earliestKey && monthStart.getFullYear() === new Date(earliestKey + "T00:00:00").getFullYear() && monthStart.getMonth() === new Date(earliestKey + "T00:00:00").getMonth();
-  const inLatest = latestKey && monthStart.getFullYear() === new Date(latestKey + "T00:00:00").getFullYear() && monthStart.getMonth() === new Date(latestKey + "T00:00:00").getMonth();
+  const inEarliest = earliestKey && monthStart.getFullYear() === dateFromKeyLocal(earliestKey).getFullYear() && monthStart.getMonth() === dateFromKeyLocal(earliestKey).getMonth();
+  const inLatest = latestKey && monthStart.getFullYear() === dateFromKeyLocal(latestKey).getFullYear() && monthStart.getMonth() === dateFromKeyLocal(latestKey).getMonth();
 
-  const startDay = inEarliest ? new Date(earliestKey + "T00:00:00").getDate() : 1;
-  const endDay = inLatest ? new Date(latestKey + "T00:00:00").getDate() : daysInMonth;
+  const startDay = inEarliest ? dateFromKeyLocal(earliestKey).getDate() : 1;
+  const endDay = inLatest ? dateFromKeyLocal(latestKey).getDate() : daysInMonth;
 
   const counterStyle = { background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900 };
 
@@ -405,10 +410,10 @@ function Calendar({ onNext, onBack, state, setState, services }) {
     if (keys.length && !selectedDay) {
       setSelectedDay(keys[0]);
       setState((s) => ({ ...s, selectedDay: keys[0] }));
-      const first = new Date(keys[0] + "T00:00:00");
+      const first = dateFromKeyLocal(keys[0]);
       setMonthCursor(new Date(first.getFullYear(), first.getMonth(), 1));
     } else if (selectedDay) {
-      const d = new Date(selectedDay + "T00:00:00");
+      const d = dateFromKeyLocal(selectedDay);
       setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -452,7 +457,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
 
         {isMembership && selectedIsBooked && (
           <div className="gm note" style={{ marginTop: 10 }}>
-            You’ve already booked <b>{new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}</b>.
+            You’ve already booked <b>{dateFromKeyLocal(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}</b>.
             Please pick a <b>different day</b> for your second visit.
           </div>
         )}
@@ -475,13 +480,13 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===================== Times (stable list; logo left, times right) ===================== */
+/* ===================== Times (logo left, times right) ===================== */
 function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
   const durationMin = serviceDuration(state.service_key, services);
 
-  const day = new Date(selectedDay + "T00:00:00");
+  const day = dateFromKeyLocal(selectedDay); // <-- local date (fixes Mon/Tue shift)
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
   useEffect(() => {
     setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
@@ -497,7 +502,7 @@ function Times({ onNext, onBack, state, setState, services }) {
 
   function choose(slot) {
     if (!isMembership) {
-      setState((st) => ({ ...st, slot }));
+      setState((st) => ({ ...st, slot: slot }));
       return;
     }
     // Membership: swap time if same day already chosen, else add (max 2 days, not the same day twice)
@@ -547,7 +552,7 @@ function Times({ onNext, onBack, state, setState, services }) {
         {/* Right: Date + big time boxes */}
         <div className="gm details-right">
           <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 16, fontWeight: 900 }}>
-            {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
+            {dateFromKeyLocal(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
           </h2>
 
           <div
@@ -607,15 +612,13 @@ function Times({ onNext, onBack, state, setState, services }) {
 
 /* ===================== Confirm (Stripe) ===================== */
 function Confirm({ onBack, state, setState }) {
-  const isMembership = state.service_key?.includes("membership");
   const [loading, setLoading] = useState(false);
 
   // Totals (must match backend)
-  const total = React.useMemo(() => {
+  const total = useMemo(() => {
     const map = { exterior: 40, full: 60, standard_membership: 70, premium_membership: 100 };
     const addonsMap = { wax: 15, polish: 15 };
     let t = map[state.service_key] || 0;
-    // Add-ons are charged for all services (including memberships)
     t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
     return t;
   }, [state.service_key, state.addons]);
@@ -658,7 +661,7 @@ function Confirm({ onBack, state, setState }) {
     }
   }
 
-  const when = isMembership
+  const when = state.service_key?.includes("membership")
     ? (state.membershipSlots || []).map((s) => dstr(s.start_iso)).join(" & ")
     : state.slot && dstr(state.slot.start_iso);
 
@@ -695,11 +698,46 @@ function Confirm({ onBack, state, setState }) {
   );
 }
 
+/* ===================== Thank You ===================== */
+function ThankYou() {
+  return (
+    <div className="gm page-section">
+      <Header />
+      <div className="gm panel" style={{ textAlign:'center' }}>
+        <h2 className="gm h2" style={{ fontWeight: 900, marginBottom: 10 }}>Thank you for your booking! 🎉</h2>
+        <p className="gm muted" style={{ marginBottom: 12 }}>
+          A confirmation will be sent to your email. If you don’t see it, please check your spam folder.
+        </p>
+        <button
+          className="gm btn primary"
+          onClick={() => {
+            // clear query params and go back to start
+            window.history.replaceState({}, "", "/");
+            window.location.reload();
+          }}
+        >
+          Back to start
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ===================== App ===================== */
 function App() {
   const [state, setState] = useState({});
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState({ services: {}, addons: {} });
+
+  // Detect Stripe return (?paid=1 / ?cancelled=1)
+  useEffect(() => {
+    const qp = new URLSearchParams(window.location.search);
+    if (qp.get("paid") === "1") {
+      setStep(5); // show Thank You
+    } else if (qp.get("cancelled") === "1") {
+      alert("Payment cancelled. Your booking wasn’t completed.");
+    }
+  }, []);
 
   useEffect(() => {
     fetch(API + "/config")
@@ -742,6 +780,7 @@ function App() {
         )}
         {step === 3 && <Times services={services} onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
         {step === 4 && <Confirm onBack={() => setStep(3)} state={state} setState={setState} />}
+        {step === 5 && <ThankYou />}
       </div>
     </div>
   );
