@@ -1,0 +1,15 @@
+{
+  "name": "gm-booking-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "better-sqlite3": "^9.4.0",
+    "dotenv": "^16.4.5",
+    "cors": "^2.8.5"
+  }
+}
