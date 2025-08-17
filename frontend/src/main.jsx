@@ -15,7 +15,7 @@ function sideOfSplit(A, B, P) {
   return P.lon < lonOnLine ? "left" : "right"; // west=left, east=right
 }
 
-/* defaults if backend /config is empty (safety) */
+/* ---- defaults (used if backend returns empty) ---- */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 60, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -40,6 +40,14 @@ const dstr = (iso) =>
   });
 const dkey = (iso) => new Date(iso).toISOString().slice(0, 10);
 const cx = (...a) => a.filter(Boolean).join(" ");
+function groupByDay(slots) {
+  const g = {};
+  for (const s of slots || []) {
+    const k = dkey(s.start_iso);
+    (g[k] ||= []).push(s);
+  }
+  return g;
+}
 
 /* Geocode via Nominatim (no key; light usage) */
 async function geocodeAddress(address) {
@@ -166,7 +174,10 @@ function Services({ onNext, onBack, state, setState, config }) {
 function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMonthCursor }) {
   const firstOfMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
   const start = new Date(firstOfMonth);
-  start.setDate(start.getDate() - ((start.getDay() + 6) % 7)); // start on Monday
+  // Start week on Monday
+  const offset = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - offset);
+
   const cells = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(start);
@@ -196,8 +207,22 @@ function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMo
       <div className="monthbar">
         <div style={{ fontWeight: 700 }}>{monthName}</div>
         <div className="nav">
-          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>‹</button>
-          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>›</button>
+          <button
+            className="btn"
+            onClick={() =>
+              setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))
+            }
+          >
+            ‹
+          </button>
+          <button
+            className="btn"
+            onClick={() =>
+              setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))
+            }
+          >
+            ›
+          </button>
         </div>
       </div>
       <div className="monthgrid">
@@ -230,9 +255,9 @@ function Calendar({ onNext, onBack, state, setState }) {
     })
       .then((r) => r.json())
       .then((d) => {
-        setSlots(d.slots || []);
-        // preselect first day with slots
-        const g = groupByDay(d.slots || []);
+        const s = d.slots || [];
+        setSlots(s);
+        const g = groupByDay(s);
         const firstKey = Object.keys(g).sort()[0] || null;
         setSelectedDay(firstKey);
       })
@@ -341,7 +366,7 @@ function Confirm({ onBack, state, setState }) {
   async function confirm() {
     const payload = {
       customer: state.customer,
-      area: state.area || "right",
+      area: state.area || "right", // already decided on Details
       service_key: state.service_key,
       addons: state.addons || [],
       slot: state.slot,
