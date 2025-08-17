@@ -1,4 +1,3 @@
-export function toMinutes(hhmm){ const [h,m]=hhmm.split(':').map(Number); return h*60+m; }
 export function addMinutes(date, mins){ return new Date(new Date(date).getTime()+mins*60000); }
 export function clampToWorkingWindow(date, dayCfg){
   const d = new Date(date);
