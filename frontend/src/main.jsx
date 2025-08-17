@@ -4,7 +4,7 @@ import "./calendar.css"; // scoped styles only
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
-/* ---- No geolocating for now (show all days). If you re-enable later, we’ll plug it back. ---- */
+/* ---- No geolocating for now: we let users book any available day. ---- */
 
 /* Safe defaults (used only if backend/config is empty) */
 const DEFAULT_SERVICES = {
@@ -39,7 +39,7 @@ function groupByDayLocal(slots) {
 }
 function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
 
-/* Single, centered logo (always visible) */
+/* Header (single centered logo for all non-Details pages) */
 function Header() {
   return (
     <header className="gm header">
@@ -56,31 +56,36 @@ function Details({ onNext, state, setState }) {
   const ok = v.name.trim().length>1 && v.phone.trim().length>6 && v.address.trim().length>5;
 
   return (
-    <div className="gm panel details-panel">
-      <Header />
+    <div className="gm page-section">
+      <div className="gm details-grid">
+        {/* Left: big logo */}
+        <div className="gm details-left">
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
+        </div>
 
-      {/* Heartfelt intro */}
-      <div className="gm hero-note">
-        Welcome to <b>GM Auto Detailing</b>. Pop your details in below so we arrive at the right place and can reach you if anything
-        changes. I treat every booking like it’s my own car—if you ever need a hand or something isn’t clear, just tell me and
-        I’ll make it right.
-      </div>
+        {/* Right: intro + form */}
+        <div className="gm details-right">
+          <div className="gm hero-note">
+            Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right place and can reach you if
+            anything changes. I treat every booking like it’s my own car—if anything isn’t clear, tell me and I’ll
+            make it right. You’ll always speak to me directly.
+          </div>
 
-      <h2 className="gm h2">Your details</h2>
-      <div className="gm row">
-        <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
-        <input className="gm input" placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
-      </div>
-      <div className="gm row">
-        <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
-        <input className="gm input" placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
-      </div>
+          <h2 className="gm h2">Your details</h2>
+          <div className="gm row">
+            <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
+            <input className="gm input" placeholder="Phone"     value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
+          </div>
+          <div className="gm row">
+            <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
+            <input className="gm input" placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
+          </div>
 
-      <div className="gm actions">
-        <button className="gm btn" disabled>Back</button>
-        <button className="gm btn primary" onClick={onNext} disabled={!ok}>
-          Next
-        </button>
+          <div className="gm actions">
+            <button className="gm btn" disabled>Back</button>
+            <button className="gm btn primary" onClick={onNext} disabled={!ok}>Next</button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -96,58 +101,60 @@ function Services({ onNext, onBack, state, setState, config }) {
   useEffect(() => setState((s) => ({ ...s, service_key: service, addons })), [service, addons]);
 
   return (
-    <div className="gm panel">
+    <div className="gm page-section">
       <Header />
-      <h2 className="gm h2">Choose your service</h2>
+      <div className="gm panel">
+        <h2 className="gm h2">Choose your service</h2>
 
-      <div className="gm cards">
-        {Object.entries(svc).map(([key, val]) => {
-          const isMembership = key.includes("membership") || val.visits >= 2;
-          return (
-            <button
-              type="button"
-              key={key}
-              className={cx("gm card", service === key && "selected")}
-              onClick={() => setService(key)}
-            >
-              <div className="gm card-title">{val.name}</div>
-              {"price" in val && <div className="gm muted">{fmtGBP(val.price)}</div>}
-              {!isMembership && "duration" in val && <div className="gm muted">{val.duration} min</div>}
-              {isMembership && <div className="gm muted">{val.visits || 2} visits • {val.duration || 0} min each</div>}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="gm section-divider"></div>
-
-      <div>
-        <div className="gm muted" style={{ marginBottom: 6, fontWeight: 800 }}>Add-ons (optional)</div>
-        <div className="gm addon-row">
-          {Object.entries(addonsCfg).map(([k, v]) => {
-            const on = addons.includes(k);
+        <div className="gm cards">
+          {Object.entries(svc).map(([key, val]) => {
+            const isMembership = key.includes("membership") || val.visits >= 2;
             return (
               <button
-                key={k}
-                className={cx("gm chip", on && "chip-on")}
-                onClick={() => setAddons((a) => (on ? a.filter((x) => x !== k) : [...a, k]))}
+                type="button"
+                key={key}
+                className={cx("gm card", service === key && "selected")}
+                onClick={() => setService(key)}
               >
-                {v.name} · {fmtGBP(v.price)}
+                <div className="gm card-title">{val.name}</div>
+                {"price" in val && <div className="gm muted">{fmtGBP(val.price)}</div>}
+                {!isMembership && "duration" in val && <div className="gm muted">{val.duration} min</div>}
+                {isMembership && <div className="gm muted">{val.visits || 2} visits • {val.duration || 0} min each</div>}
               </button>
             );
           })}
         </div>
-      </div>
 
-      <div className="gm actions bottom-stick">
-        <button className="gm btn" onClick={onBack}>Back</button>
-        <button className="gm btn primary" onClick={onNext}>See times</button>
+        <div className="gm section-divider"></div>
+
+        <div>
+          <div className="gm muted" style={{ marginBottom: 6, fontWeight: 800 }}>Add-ons (optional)</div>
+          <div className="gm addon-row">
+            {Object.entries(addonsCfg).map(([k, v]) => {
+              const on = addons.includes(k);
+              return (
+                <button
+                  key={k}
+                  className={cx("gm chip", on && "chip-on")}
+                  onClick={() => setAddons((a) => (on ? a.filter((x) => x !== k) : [...a, k]))}
+                >
+                  {v.name} · {fmtGBP(v.price)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="gm actions bottom-stick">
+          <button className="gm btn" onClick={onBack}>Back</button>
+          <button className="gm btn primary" onClick={onNext}>See times</button>
+        </div>
       </div>
     </div>
   );
 }
 
-/* Fetch availability from backend and merge left/right days so users can book any day */
+/* Merge left+right availability so customers can book any day */
 async function fetchAllSlots(service_key, addons) {
   const body = (area) => ({
     method: "POST",
@@ -164,7 +171,7 @@ async function fetchAllSlots(service_key, addons) {
   return Array.from(map.values()).sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
 }
 
-/* Strict Month Grid: starts at FIRST bookable day and stops at LAST bookable day */
+/* Strict Month Grid: starts at FIRST bookable day, ends at LAST bookable day */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -173,6 +180,7 @@ function MonthGrid({
   setMonthCursor,
   earliestKey,
   latestKey,
+  bookedDays = [],
   membershipCount,
   isMembership
 }) {
@@ -206,15 +214,16 @@ function MonthGrid({
   for (let day = startDay; day <= endDay; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
-    const has = !!slotsByDay[k];          // clickable only if backend returned slots for that exact day
+    const has = !!slotsByDay[k];                   // clickable only if backend returned slots for that exact day
     const selected = selectedDay === k;
+    const chosen = bookedDays.includes(k);         // already booked membership day (keep highlighted)
     const label = `${day}${daySuffix(day)}`;
 
     cells.push(
       <button
         key={k}
-        className={cx("gm daycell", has && "has", selected && "selected")}
-        disabled={!has}
+        className={cx("gm daycell", has && "has", selected && "selected", chosen && "chosen")}
+        disabled={!has || chosen}
         onClick={() => setSelectedDay(k)}
         title={d.toDateString()}
         type="button"
@@ -239,7 +248,7 @@ function MonthGrid({
         </div>
       </div>
 
-      <div className="gm small-note">We hope you find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
+      <div className="gm small-note">We hope you can find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
 
       <div className="gm dowrow">
         {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
@@ -255,7 +264,8 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [selectedDay, setSelectedDay] = useState(null);
+  // Keep previously selected day if returning from Times (so highlight stays)
+  const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
   useEffect(() => {
@@ -265,25 +275,33 @@ function Calendar({ onNext, onBack, state, setState }) {
         setSlots(s);
         const g = groupByDayLocal(s);
         const keys = Object.keys(g).sort();
-        const firstKey = keys[0] || null;
-        if (firstKey) {
-          const firstDate = new Date(firstKey + "T00:00:00");
-          setMonthCursor(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
-          setSelectedDay(firstKey);
+        if (!selectedDay) {
+          const firstKey = keys[0] || null;
+          if (firstKey) {
+            const firstDate = new Date(firstKey + "T00:00:00");
+            setMonthCursor(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
+            setSelectedDay(firstKey);
+          } else {
+            setSelectedDay(null);
+          }
         } else {
-          setSelectedDay(null);
+          const d = new Date(selectedDay + "T00:00:00");
+          setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
         }
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons]);
+  }, [state.service_key, state.addons]); // eslint-disable-line
 
   const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const earliestKey = allKeys[0] || null;
   const latestKey = allKeys[allKeys.length - 1] || null;
 
+  const bookedDays = (state.membershipSlots || []).map(s => keyLocal(new Date(s.start_iso)));
+  const selectedIsBooked = bookedDays.includes(selectedDay || "");
+
   return (
-    <div className={cx("gm-booking", loading && "loading")}>
+    <div className={cx("gm page-section", loading && "loading")}>
       <Header />
 
       <div className="gm panel">
@@ -292,20 +310,28 @@ function Calendar({ onNext, onBack, state, setState }) {
         <MonthGrid
           slotsByDay={slotsByDay}
           selectedDay={selectedDay}
-          setSelectedDay={setSelectedDay}
+          setSelectedDay={(k)=>{ setSelectedDay(k); setState(s=>({...s, selectedDay:k})); }}
           monthCursor={monthCursor}
           setMonthCursor={setMonthCursor}
           earliestKey={earliestKey}
           latestKey={latestKey}
+          bookedDays={bookedDays}
           membershipCount={(state.membershipSlots || []).length}
           isMembership={isMembership}
         />
+
+        {isMembership && selectedIsBooked && (
+          <div className="gm note" style={{ marginTop: 10 }}>
+            You’ve already booked <b>{new Date(selectedDay).toLocaleDateString([], {weekday:"long", month:"short", day:"numeric"})}</b>.
+            Please pick a <b>different day</b> for your second visit.
+          </div>
+        )}
 
         <div className="gm actions">
           <button className="gm btn" onClick={onBack}>Back</button>
           <button
             className="gm btn primary"
-            disabled={!selectedDay}
+            disabled={!selectedDay || selectedIsBooked}
             onClick={() => { setState((s)=>({ ...s, selectedDay })); onNext(); }}
           >
             See times
@@ -331,6 +357,7 @@ function Times({ onNext, onBack, state, setState }) {
       });
   }, [selectedDay, state.service_key, state.addons]);
 
+  // current selection on this day
   const selected =
     isMembership
       ? (state.membershipSlots || []).find((s)=> s && keyLocal(new Date(s.start_iso)) === selectedDay)
@@ -338,9 +365,19 @@ function Times({ onNext, onBack, state, setState }) {
           ? state.slot
           : null;
 
+  function sameLocalDay(isoA, isoB) {
+    const a = new Date(isoA), b = new Date(isoB);
+    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  }
+
   function choose(slot) {
     if (isMembership) {
       const current = state.membershipSlots || [];
+      // Do not allow both visits on the same calendar day
+      if (current.length === 1 && sameLocalDay(current[0].start_iso, slot.start_iso)) {
+        alert("Membership visits must be on two different days.");
+        return;
+      }
       const exists = current.find((s) => s.start_iso === slot.start_iso);
       if (exists) setState((st)=>({ ...st, membershipSlots: current.filter((s)=>s.start_iso!==slot.start_iso) }));
       else setState((st)=>({ ...st, membershipSlots: current.length >= 2 ? [current[1], slot] : [...current, slot] }));
@@ -352,7 +389,7 @@ function Times({ onNext, onBack, state, setState }) {
   const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
 
   return (
-    <div className="gm-booking">
+    <div className="gm page-section">
       <Header />
       <div className="gm panel">
         <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 10 }}>
@@ -380,8 +417,7 @@ function Times({ onNext, onBack, state, setState }) {
             disabled={!canNext}
             onClick={() => {
               if (isMembership && (state.membershipSlots||[]).length === 1) {
-                // need second day
-                setState((s)=>({ ...s, selectedDay: null }));
+                // Go back to calendar for visit #2 — keep the first day highlighted
                 onBack();
               } else {
                 onNext();
@@ -427,7 +463,7 @@ function Confirm({ onBack, state, setState }) {
     : state.slot && dstr(state.slot.start_iso);
 
   return (
-    <div className="gm-booking">
+    <div className="gm page-section">
       <Header />
       <div className="gm panel">
         <h2 className="gm h2">Confirm</h2>
@@ -473,12 +509,16 @@ function App() {
   }, []);
 
   return (
-    <div className="gm-booking wrap">
-      {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
-      {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
-      {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
-      {step === 3 && <Times    onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
-      {step === 4 && <Confirm  onBack={() => setStep(3)} state={state} setState={setState} />}
+    <div className="gm-site">
+      <div className="gm-booking wrap">
+        {/* No global header on Details — it has its own left-logo layout */}
+        {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
+
+        {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
+        {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
+        {step === 3 && <Times    onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
+        {step === 4 && <Confirm  onBack={() => setStep(3)} state={state} setState={setState} />}
+      </div>
     </div>
   );
 }
