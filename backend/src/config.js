@@ -1,4 +1,4 @@
-// Strong defaults so /api/config is never empty
+// Business hours (edit these to your real hours if needed)
 export const WORKING_HOURS = {
   1: { start: "15:40", end: "21:00" }, // Mon
   2: { start: "15:40", end: "21:00" }, // Tue
@@ -9,27 +9,35 @@ export const WORKING_HOURS = {
   0: { start: "09:00", end: "19:30" }, // Sun
 };
 
-export const BUFFER_MINUTES = 20;
-export const MAX_DAYS_AHEAD = 30;
+// Buffers & window
+export const BUFFER_MINUTES = 20;   // gap before/after each job
+export const MAX_DAYS_AHEAD = 30;   // book up to 30 days ahead
 
-// SERVICES you can tweak later — these WILL appear in the UI
+// Services & durations (PER VISIT)
 export const SERVICES = {
-  exterior: { name: "Exterior Detail", duration: 60, price: 60 },
-  full: { name: "Full Detail", duration: 120, price: 120 },
+  exterior: { name: "Exterior Detail", duration: 75, price: 60 },
+  full:     { name: "Full Detail",     duration: 120, price: 120 },
+
+  // Memberships are TWO SEPARATE VISITS.
+  // We set duration to the per-visit length so availability works correctly.
   standard_membership: {
-    name: "Standard Membership",
-    includes: ["exterior", "exterior"], // 2 visits
-    price: 100,
+    name: "Standard Membership (2 visits of Exterior Detail)",
+    duration: 75,     // per visit
+    visits: 2,
+    visitService: "exterior",
+    price: 100
   },
   premium_membership: {
-    name: "Premium Membership",
-    includes: ["full", "full"], // 2 visits
-    price: 220,
+    name: "Premium Membership (2 visits of Full Detail)",
+    duration: 120,    // per visit
+    visits: 2,
+    visitService: "full",
+    price: 220
   },
 };
 
 // Optional add-ons
 export const ADDONS = {
-  wax: { name: "Full Body Wax", extraMinutes: 15, price: 15 },
-  polish: { name: "Hand Polish", extraMinutes: 15, price: 15 },
+  wax:    { name: "Full Body Wax", extraMinutes: 15, price: 15 },
+  polish: { name: "Hand Polish",   extraMinutes: 15, price: 15 },
 };
