@@ -1,10 +1,20 @@
 /* Bubbly, modern vibe */
 @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;800;900&display=swap');
 
-.gm-booking.wrap{ max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; font-family: 'Nunito', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+:root{ --pagebg:#e5e7eb; } /* darker grey background */
 
+.gm-site{ background: var(--pagebg); min-height: 100vh; }
+
+.gm-booking.wrap{
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+  font-family: 'Nunito', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+}
+
+/* Header (used on all non-Details steps) */
 .gm.header{ display:flex; align-items:center; justify-content:center; padding:10px 0 18px; }
-.gm.logo{ height: 90px; object-fit: contain; }
+.gm.logo{ height: 120px; object-fit: contain; }
 
 /* Panels */
 .gm.panel{ background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:22px; margin:12px 0; }
@@ -13,15 +23,28 @@
 .gm.h3{ margin:0 0 8px; font-weight:900; letter-spacing:.2px; }
 .gm.muted{ color:#6b7280; font-weight:600; }
 .gm.row{ display:flex; gap:10px; flex-wrap:wrap; }
+.gm.page-section{ margin-top: 8px; }
 
-/* Hero note above details */
+/* DETAILS PAGE (logo left, content right) */
+.gm.details-grid{
+  display:grid;
+  grid-template-columns: 420px 1fr;
+  gap: 16px;
+  align-items: center;
+}
+.gm.details-left{
+  display:flex; align-items:center; justify-content:center;
+  background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:20px;
+  min-height: 320px;
+}
+.gm.logo-big{ height: 220px; object-fit: contain; }
+.gm.details-right{
+  background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:22px;
+}
 .gm.hero-note{
   background:#f8fafc; border:1px solid #e5e7eb; border-radius:14px;
   padding:12px 14px; margin-bottom:16px; color:#0f172a; font-weight:700;
 }
-
-/* Details sizing (more room) */
-.details-panel{ padding-top: 12px; }
 
 /* Inputs */
 .gm.input{
@@ -53,7 +76,7 @@
 
 /* Notes */
 .gm.note{ background:#f8fafc; border:1px dashed #e5e7eb; padding:10px 12px; border-radius:12px; color:#6b7280; }
-.gm.small-note{ color:#6b7280; font-weight:700; margin-bottom:8px; }
+.gm.small-note{ color:#6b7280; font-weight:700; margin:8px 0; }
 
 /* Month Calendar (slightly smaller overall) */
 .gm.monthbar{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
@@ -72,28 +95,34 @@
 }
 .gm.daycell{
   width:100%; aspect-ratio:1/1; border-radius:12px;
-  border:1px solid #e5e7eb; background:#f3f4f6; /* stronger grey */
+  border:1px solid #e5e7eb; background:#f3f4f6; /* stronger grey for unbookable */
   font-weight:900; display:flex; align-items:center; justify-content:center;
   cursor:not-allowed; color:#cbd5e1;
 }
-.gm.daycell.has{
-  cursor:pointer; color:#0f172a; border-color:#d1d5db; background:#fff;
-}
+.gm.daycell.has{ cursor:pointer; color:#0f172a; border-color:#d1d5db; background:#fff; }
 .gm.daycell.has:hover{ outline:3px solid rgba(156,163,175,.45); }
 .gm.daycell.selected{ outline:3px solid #9ca3af; }
+.gm.daycell.chosen{ background:#fff7ed; border-color:#f59e0b; box-shadow: inset 0 0 0 3px rgba(245,158,11,.35); } /* highlight already-booked day */
 
 /* Big time boxes */
 .gm.timegrid{
   display:grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap:12px; margin-top: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap:14px; margin-top: 10px;
 }
 .gm.timebox{
   border:1px solid #e5e7eb; background:#fff; border-radius:18px;
-  padding:22px; font-weight:900; font-size:22px; text-align:center; cursor:pointer;
+  padding:24px; font-weight:900; font-size:24px; text-align:center; cursor:pointer;
 }
 .gm.timebox-on{ background:#dcfce7; border-color:#86efac; }
 
 /* Misc */
 .loading{ opacity:.6; pointer-events:none; }
 .gm.total{ font-size:32px; font-weight:900; }
+
+/* Responsive tweak */
+@media (max-width: 860px){
+  .gm.details-grid{ grid-template-columns: 1fr; }
+  .gm.details-left{ min-height: unset; }
+  .gm.logo-big{ height: 160px; }
+}
