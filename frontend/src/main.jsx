@@ -3,23 +3,32 @@ import { createRoot } from "react-dom/client";
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
-/* ==== Sheen split line (YOUR EXACT COORDS) ==================================
-   A = TOP, B = BOTTOM (lat, lon). We compute the longitude of the line at the
-   address’s latitude and classify: west (smaller/more negative lon) = "left",
-   east = "right".
-============================================================================= */
+/* ==== Sheen split line (your exact coords) ================================= */
 const SHEEN_SPLIT = {
   A: { lat: 51.471333, lon: -0.267963 }, // TOP
-  B: { lat: 51.457055, lon: -0.267663 }  // BOTTOM
+  B: { lat: 51.457055, lon: -0.267663 }, // BOTTOM
 };
 const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 function sideOfSplit(A, B, P) {
   const t = clamp((P.lat - A.lat) / (B.lat - A.lat), 0, 1);
   const lonOnLine = A.lon + (B.lon - A.lon) * t;
-  return P.lon < lonOnLine ? "left" : "right";
+  return P.lon < lonOnLine ? "left" : "right"; // west=left, east=right
 }
 
-/* Simple formatter/helpers */
+/* ---- defaults (used if backend returns empty) ---- */
+const DEFAULT_SERVICES = {
+  exterior: { name: "Exterior Detail", duration: 60, price: 60 },
+  full: { name: "Full Detail", duration: 120, price: 120 },
+  standard_membership: { name: "Standard Membership", includes: ["exterior","exterior"], price: 100 },
+  premium_membership: { name: "Premium Membership", includes: ["full","full"], price: 220 },
+};
+const DEFAULT_ADDONS = {
+  wax: { name: "Full Body Wax", price: 15 },
+  polish: { name: "Hand Polish", price: 15 },
+};
+const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
+
+/* utils */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const dstr = (iso) =>
   new Date(iso).toLocaleString([], {
@@ -32,7 +41,7 @@ const dstr = (iso) =>
 const dkey = (iso) => new Date(iso).toISOString().slice(0, 10);
 const cx = (...a) => a.filter(Boolean).join(" ");
 
-/* Geocode address via Nominatim (no key needed; fine for light usage) */
+/* Geocode via Nominatim (no key; light usage) */
 async function geocodeAddress(address) {
   const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
     address
@@ -64,7 +73,7 @@ function Details({ onNext, state, setState }) {
     setLoading(true);
     try {
       const p = await geocodeAddress(v.address);
-      const area = sideOfSplit(SHEEN_SPLIT.A, SHEEN_SPLIT.B, p); // left/right decided HERE
+      const area = sideOfSplit(SHEEN_SPLIT.A, SHEEN_SPLIT.B, p); // decide LEFT/RIGHT here
       setState((s) => ({ ...s, area }));
       onNext();
     } catch (e) {
@@ -78,38 +87,15 @@ function Details({ onNext, state, setState }) {
     <div className={cx("panel", loading && "loading")}>
       <h2 style={{ marginTop: 0 }}>Your details</h2>
       <div className="row">
-        <input
-          placeholder="Full name"
-          value={v.name}
-          onChange={(e) => setV({ ...v, name: e.target.value })}
-        />
-        <input
-          placeholder="Phone"
-          value={v.phone}
-          onChange={(e) => setV({ ...v, phone: e.target.value })}
-        />
+        <input placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
+        <input placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
       </div>
-      <input
-        placeholder="Address (full address — we’ll pick your Sheen side automatically)"
-        value={v.address}
-        onChange={(e) => setV({ ...v, address: e.target.value })}
-      />
-      <input
-        placeholder="Email (for confirmation)"
-        value={v.email || ""}
-        onChange={(e) => setV({ ...v, email: e.target.value })}
-      />
+      <input placeholder="Address (full address — we’ll pick your Sheen side automatically)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
+      <input placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
       {err && <div className="muted" style={{ color: "#b91c1c" }}>{err}</div>}
       <div className="right" style={{ marginTop: 8 }}>
-        <button className="btn" disabled>
-          Back
-        </button>
-        <button
-          className="btn primary"
-          onClick={next}
-          disabled={!ok || loading}
-          title={!ok ? "Fill name, phone, and address" : "Next"}
-        >
+        <button className="btn" disabled>Back</button>
+        <button className="btn primary" onClick={next} disabled={!ok || loading}>
           {loading ? "Checking address…" : "Next"}
         </button>
       </div>
@@ -118,32 +104,14 @@ function Details({ onNext, state, setState }) {
 }
 
 function Services({ onNext, onBack, state, setState, config }) {
-  const [service, setService] = useState(state.service_key || "exterior");
-  const [addons, setAddons] = useState(state.addons || []);
-  useEffect(
-    () => setState((s) => ({ ...s, service_key: service, addons })),
-    [service, addons]
-  );
+  // use backend values if present; otherwise defaults
+  const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
+  const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
 
-  // If your backend /config already returns services & addons, they’ll replace these defaults.
-  const svc = config?.services || {
-    exterior: { name: "Exterior Detail", duration: 60, price: 60 },
-    full: { name: "Full Detail", duration: 120, price: 120 },
-    standard_membership: {
-      name: "Standard Membership",
-      includes: ["exterior", "exterior"],
-      price: 100,
-    },
-    premium_membership: {
-      name: "Premium Membership",
-      includes: ["full", "full"],
-      price: 220,
-    },
-  };
-  const addonsCfg = config?.addons || {
-    wax: { name: "Full Body Wax", price: 15 },
-    polish: { name: "Hand Polish", price: 15 },
-  };
+  const firstKey = Object.keys(svc)[0];
+  const [service, setService] = useState(state.service_key && svc[state.service_key] ? state.service_key : firstKey);
+  const [addons, setAddons] = useState(state.addons || []);
+  useEffect(() => setState((s) => ({ ...s, service_key: service, addons })), [service, addons]);
 
   return (
     <div className="panel">
@@ -159,20 +127,14 @@ function Services({ onNext, onBack, state, setState, config }) {
           >
             <div style={{ fontWeight: 700 }}>{val.name}</div>
             {"price" in val && <div className="muted">{fmtGBP(val.price)}</div>}
-            {"duration" in val && (
-              <div className="muted">{val.duration} min</div>
-            )}
-            {"includes" in val && (
-              <div className="muted">Includes: {val.includes.join(" + ")}</div>
-            )}
+            {"duration" in val && <div className="muted">{val.duration} min</div>}
+            {"includes" in val && <div className="muted">Includes: {val.includes.join(" + ")}</div>}
           </div>
         ))}
       </div>
 
       <div style={{ marginTop: 6 }}>
-        <div className="muted" style={{ marginBottom: 6 }}>
-          Add-ons (optional)
-        </div>
+        <div className="muted" style={{ marginBottom: 6 }}>Add-ons (optional)</div>
         <div className="row">
           {Object.entries(addonsCfg).map(([k, v]) => {
             const on = addons.includes(k);
@@ -192,12 +154,8 @@ function Services({ onNext, onBack, state, setState, config }) {
       </div>
 
       <div className="right" style={{ marginTop: 10 }}>
-        <button className="btn" onClick={onBack}>
-          Back
-        </button>
-        <button className="btn primary" onClick={onNext}>
-          See times
-        </button>
+        <button className="btn" onClick={onBack}>Back</button>
+        <button className="btn primary" onClick={onNext}>See times</button>
       </div>
     </div>
   );
@@ -218,7 +176,7 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area: state.area || "right", // THIS decides which days are returned
+        area: state.area || "right", // LEFT/RIGHT computed on Details → controls days shown
       }),
     })
       .then((r) => r.json())
@@ -254,32 +212,19 @@ function Calendar({ onNext, onBack, state, setState }) {
   return (
     <div className={cx("panel", loading && "loading")}>
       <h2 style={{ marginTop: 0 }}>Choose a time</h2>
-      {days.length === 0 && !loading && (
-        <div className="muted">No slots available for your area/dates.</div>
-      )}
+      {days.length === 0 && !loading && <div className="muted">No slots available for your area/dates.</div>}
       {days.map((k) => (
         <div key={k} className="day">
           <div style={{ fontWeight: 700, marginBottom: 6 }}>
-            {new Date(k).toLocaleDateString([], {
-              weekday: "long",
-              month: "short",
-              day: "numeric",
-            })}
+            {new Date(k).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
           </div>
           {grouped[k].map((s) => {
             const sel = isMembership
               ? !!selected2.find((x) => x.start_iso === s.start_iso)
               : selected?.start_iso === s.start_iso;
             return (
-              <span
-                key={s.start_iso}
-                className={cx("slot", sel && "sel")}
-                onClick={() => choose(s)}
-              >
-                {new Date(s.start_iso).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
+              <span key={s.start_iso} className={cx("slot", sel && "sel")} onClick={() => choose(s)}>
+                {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             );
           })}
@@ -288,28 +233,18 @@ function Calendar({ onNext, onBack, state, setState }) {
 
       <div className="stickybar">
         <div className="muted">
-          {isMembership
-            ? `${selected2.length}/2 times selected`
-            : selected
-            ? dstr(selected.start_iso)
-            : "Select a time"}
+          {isMembership ? `${selected2.length}/2 times selected` : selected ? dstr(selected.start_iso) : "Select a time"}
         </div>
         <div className="right">
-          <button className="btn" onClick={onBack}>
-            Back
-          </button>
-          <button
-            className="btn primary"
-            disabled={!canNext}
-            onClick={() => {
-              if (isMembership)
-                setState((s) => ({ ...s, membershipSlots: selected2 }));
-              else setState((s) => ({ ...s, slot: selected }));
-              onNext();
-            }}
-          >
-            Continue
-          </button>
+          <button className="btn" onClick={onBack}>Back</button>
+            <button className="btn primary" disabled={!canNext}
+              onClick={() => {
+                if (isMembership) setState((s) => ({ ...s, membershipSlots: selected2 }));
+                else setState((s) => ({ ...s, slot: selected }));
+                onNext();
+              }}>
+              Continue
+            </button>
         </div>
       </div>
     </div>
@@ -319,42 +254,28 @@ function Calendar({ onNext, onBack, state, setState }) {
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = useMemo(() => {
-    const map = {
-      exterior: 60,
-      full: 120,
-      standard_membership: 100,
-      premium_membership: 220,
-    };
+    const map = { exterior: 60, full: 120, standard_membership: 100, premium_membership: 220 };
     const addonsMap = { wax: 15, polish: 15 };
     let t = map[state.service_key] || 0;
-    if (!isMembership)
-      t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
+    if (!isMembership) t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
     return t;
   }, [state.service_key, state.addons, isMembership]);
 
   async function confirm() {
-    // area already computed on Details; just send booking
     const payload = {
       customer: state.customer,
-      area: state.area || "right",
+      area: state.area || "right", // already decided on Details
       service_key: state.service_key,
       addons: state.addons || [],
       slot: state.slot,
       membershipSlots: state.membershipSlots,
     };
-
     const res = await fetch(API + "/book", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     }).then((r) => r.json());
-
     if (res.ok) {
-      alert(
-        `Booking confirmed (${(state.area || "right").toUpperCase()}). Check your email for confirmation.`
-      );
-      setState({});
-      location.href = "/";
+      alert(`Booking confirmed (${(state.area || "right").toUpperCase()}). Check your email for confirmation.`);
+      setState({}); location.href = "/";
     } else {
       alert("Error: " + (res.error || "Unknown"));
     }
@@ -399,37 +320,25 @@ function App() {
   const [state, setState] = useState({});
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState({ services: {}, addons: {} });
+
   useEffect(() => {
     fetch(API + "/config")
       .then((r) => r.json())
-      .then(setConfig)
-      .catch(() => {});
+      .then((d) => {
+        // guard against empty responses
+        const services = hasKeys(d?.services) ? d.services : DEFAULT_SERVICES;
+        const addons = hasKeys(d?.addons) ? d.addons : DEFAULT_ADDONS;
+        setConfig({ services, addons });
+      })
+      .catch(() => setConfig({ services: DEFAULT_SERVICES, addons: DEFAULT_ADDONS }));
   }, []);
+
   return (
     <>
-      {step === 0 && (
-        <Details onNext={() => setStep(1)} state={state} setState={setState} />
-      )}
-      {step === 1 && (
-        <Services
-          onNext={() => setStep(2)}
-          onBack={() => setStep(0)}
-          state={state}
-          setState={setState}
-          config={config}
-        />
-      )}
-      {step === 2 && (
-        <Calendar
-          onNext={() => setStep(3)}
-          onBack={() => setStep(1)}
-          state={state}
-          setState={setState}
-        />
-      )}
-      {step === 3 && (
-        <Confirm onBack={() => setStep(2)} state={state} setState={setState} />
-      )}
+      {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
+      {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
+      {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
+      {step === 3 && <Confirm  onBack={() => setStep(2)} state={state} setState={setState} />}
     </>
   );
 }
