@@ -6,10 +6,10 @@ const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
 /* ===== Booking window / rules ===== */
 const MAX_DAYS_AHEAD = 30;
-const MIN_LEAD_MIN = 24 * 60;
+const MIN_LEAD_MIN = 24 * 60; // 24 hours
 const BUFFER_MIN = 30;
 
-/* ===== Catalog (with your new prices) ===== */
+/* ===== Catalog (with your prices) ===== */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 40 },
   full: { name: "Full Detail", duration: 120, price: 60 },
@@ -49,17 +49,20 @@ function serviceDuration(service_key, services) {
 }
 
 /* =========================================================================
-   FAMILY TEMPLATES (capacity-optimised, overrun ≤ 45m, weekday bans kept)
+   FAMILY TEMPLATES (capacity-optimised, +45m overrun cap, weekday bans kept)
    -------------------------------------------------------------------------
-   Weekdays (Mon–Fri) start at 16:00. Overrun allowed until 21:45 max.
-   No 19:30 or 21:00 starts. Families:
+   Weekdays (Mon–Fri) start 16:00. Overrun allowed until 21:45 max.
+   No 19:30 or 21:00 starts.
+
+   Families:
    - W_3x75:         16:00(75), 17:45(75), 19:45(75)
    - W_2x120:        16:00(120), 18:30(120)
    - W_MIX_A:        16:00(120), 18:30(75), 20:15(75)
    - W_MIX_B:        16:00(75), 17:45(120), 20:15(75)
 
-   Weekends (Sat–Sun) start at 09:00. Overrun allowed until 20:15 max.
-   Families (examples that fill the day well and respect +45):
+   Weekends (Sat–Sun) start 09:00. Overrun allowed until 20:15 max.
+
+   Families:
    - WE_6x75:        09:00, 10:45, 12:30, 14:15, 16:00, 17:45 (all 75)
    - WE_4x120:       09:00, 11:30, 14:00, 16:30 (all 120)
    - WE_3x120_2x75:  09:00(120), 11:30(120), 14:00(120), 16:30(75), 18:15(75)
@@ -68,59 +71,64 @@ function serviceDuration(service_key, services) {
    ========================================================================= */
 function weekdayFamilies() {
   return [
-    { id: "W_3x75", slots: [{t:"16:00",d:75},{t:"17:45",d:75},{t:"19:45",d:75}] },
-    { id: "W_2x120", slots: [{t:"16:00",d:120},{t:"18:30",d:120}] },
-    { id: "W_MIX_A", slots: [{t:"16:00",d:120},{t:"18:30",d:75},{t:"20:15",d:75}] },
-    { id: "W_MIX_B", slots: [{t:"16:00",d:75},{t:"17:45",d:120},{t:"20:15",d:75}] },
+    { id: "W_3x75", slots: [{ t: "16:00", d: 75 }, { t: "17:45", d: 75 }, { t: "19:45", d: 75 }] },
+    { id: "W_2x120", slots: [{ t: "16:00", d: 120 }, { t: "18:30", d: 120 }] },
+    { id: "W_MIX_A", slots: [{ t: "16:00", d: 120 }, { t: "18:30", d: 75 }, { t: "20:15", d: 75 }] },
+    { id: "W_MIX_B", slots: [{ t: "16:00", d: 75 }, { t: "17:45", d: 120 }, { t: "20:15", d: 75 }] },
   ];
 }
 function weekendFamilies() {
   return [
-    { id: "WE_6x75",        slots: [{t:"09:00",d:75},{t:"10:45",d:75},{t:"12:30",d:75},{t:"14:15",d:75},{t:"16:00",d:75},{t:"17:45",d:75}] },
-    { id: "WE_4x120",       slots: [{t:"09:00",d:120},{t:"11:30",d:120},{t:"14:00",d:120},{t:"16:30",d:120}] },
-    { id: "WE_3x120_2x75",  slots: [{t:"09:00",d:120},{t:"11:30",d:120},{t:"14:00",d:120},{t:"16:30",d:75},{t:"18:15",d:75}] },
-    { id: "WE_1x120_5x75",  slots: [{t:"09:00",d:120},{t:"11:30",d:75},{t:"13:15",d:75},{t:"15:00",d:75},{t:"16:45",d:75},{t:"18:30",d:75}] },
-    { id: "WE_2x120_3x75",  slots: [{t:"09:00",d:120},{t:"11:30",d:120},{t:"14:00",d:75},{t:"15:45",d:75},{t:"17:30",d:75}] },
+    { id: "WE_6x75", slots: [{ t: "09:00", d: 75 }, { t: "10:45", d: 75 }, { t: "12:30", d: 75 }, { t: "14:15", d: 75 }, { t: "16:00", d: 75 }, { t: "17:45", d: 75 }] },
+    { id: "WE_4x120", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 120 }, { t: "16:30", d: 120 }] },
+    { id: "WE_3x120_2x75", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 120 }, { t: "16:30", d: 75 }, { t: "18:15", d: 75 }] },
+    { id: "WE_1x120_5x75", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 75 }, { t: "13:15", d: 75 }, { t: "15:00", d: 75 }, { t: "16:45", d: 75 }, { t: "18:30", d: 75 }] },
+    { id: "WE_2x120_3x75", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 75 }, { t: "15:45", d: 75 }, { t: "17:30", d: 75 }] },
   ];
 }
 function familiesForDay(day) { return isWeekend(day) ? weekendFamilies() : weekdayFamilies(); }
 
-/* Choose a family for a selected (time,duration), with sensible priorities */
+/* Pick a compatible family for the first selection */
 function pickFamily(day, timeHHMM, dur) {
   const fams = familiesForDay(day);
   const fits = fams.filter(f => f.slots.some(s => s.t === timeHHMM && s.d === dur));
   if (!fits.length) return null;
-  // Priority: weekend — most jobs; weekday — mixed > 3x75 > 2x120
   if (isWeekend(day)) {
-    const score = (f) => f.slots.length; // more jobs first
-    return fits.sort((a,b)=>score(b)-score(a))[0];
+    // Prefer the family that yields more total jobs
+    const score = (f) => f.slots.length;
+    return fits.sort((a, b) => score(b) - score(a))[0];
   } else {
-    const order = ["W_MIX_A","W_MIX_B","W_3x75","W_2x120"];
-    return fits.sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id))[0];
+    // Weekday priority: mixed > 3x75 > 2x120
+    const order = ["W_MIX_A", "W_MIX_B", "W_3x75", "W_2x120"];
+    return fits.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))[0];
   }
 }
 
-/* Build the displayable slots for a day, respecting family lock & 24h lead.
-   - If family locked for that day -> only show that family’s starts
-   - Else -> show union of starts across families (for the selected duration)
+/* Canonical family BEFORE any pick (prevents 17:45 & 18:30 appearing together) */
+function canonicalFamilyForDuration(day, durationMin) {
+  if (isWeekend(day)) return durationMin === 120 ? "WE_4x120" : "WE_6x75";
+  return durationMin === 120 ? "W_2x120" : "W_3x75";
+}
+
+/* Build displayable starts for a day:
+   - If a family lock exists → show that family’s starts (for selected duration)
+   - Else → show ONLY canonical family for the selected duration (clean buffer view)
+   - Respect 24h lead
 */
 function dayStartsForDuration(day, durationMin, familyLockId, now = new Date()) {
   const fams = familiesForDay(day);
+  const famId = familyLockId || canonicalFamilyForDuration(day, durationMin);
+  const fam = fams.find(f => f.id === famId);
+  if (!fam) return [];
   const inLead = addMinutes(now, MIN_LEAD_MIN);
-  const famList = familyLockId ? fams.filter(f=>f.id===familyLockId) : fams;
 
   const starts = [];
-  for (const f of famList) {
-    for (const s of f.slots) {
-      if (s.d !== durationMin) continue; // show only starts for the chosen service duration
-      const iso = toISO(day, s.t);
-      if (new Date(iso) >= inLead) starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: f.id, t: s.t, d: s.d });
-    }
+  for (const s of fam.slots) {
+    if (s.d !== durationMin) continue; // add-ons are zero time; duration = base service only
+    const iso = toISO(day, s.t);
+    if (new Date(iso) >= inLead) starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: fam.id, t: s.t, d: s.d });
   }
-  // de-dup by time
-  const byT = new Map();
-  for (const x of starts) if (!byT.has(x.start_iso)) byT.set(x.start_iso, x);
-  return Array.from(byT.values()).sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
+  return starts.sort((a, b) => new Date(a.start_iso) - new Date(b.start_iso));
 }
 
 /* Build calendar availability map (days that have at least one start for the chosen duration) */
@@ -148,7 +156,7 @@ function Header() {
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
-  const ok = v.name.trim().length>1 && v.phone.trim().length>6 && v.address.trim().length>5;
+  const ok = v.name.trim().length > 1 && v.phone.trim().length > 6 && v.address.trim().length > 5;
 
   return (
     <div className="gm page-section">
@@ -161,14 +169,14 @@ function Details({ onNext, state, setState }) {
             Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right address and can reach you if plans change.
             I treat every booking like it’s my own car—if anything isn’t clear, message me and I’ll make it right.
           </p>
-          <h2 className="gm h2" style={{textAlign:'center'}}>Your details</h2>
+          <h2 className="gm h2" style={{ textAlign: 'center' }}>Your details</h2>
           <div className="gm row">
-            <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
-            <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
+            <input className="gm input" placeholder="Full name" value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} />
+            <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e) => setV({ ...v, address: e.target.value })} />
           </div>
           <div className="gm row">
-            <input className="gm input" placeholder="Email (for confirmation)" value={v.email} onChange={(e)=>setV({...v, email:e.target.value})}/>
-            <input className="gm input" placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
+            <input className="gm input" placeholder="Email (for confirmation)" value={v.email} onChange={(e) => setV({ ...v, email: e.target.value })} />
+            <input className="gm input" placeholder="Phone" value={v.phone} onChange={(e) => setV({ ...v, phone: e.target.value })} />
           </div>
           <div className="gm actions">
             <button className="gm btn" disabled>Back</button>
@@ -217,11 +225,11 @@ function Services({ onNext, onBack, state, setState, config }) {
           borderRadius: 14,
         }}
       >
-        <div className="benefit-title" style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+        <div className="benefit-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>{title}</span><span>{fmtGBP(price)}</span>
         </div>
         <div className="benefit-copy">{desc}</div>
-        <div style={{marginTop:10, display:'flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end'}}>
+        <div style={{ marginTop: 10, display: 'flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end' }}>
           <button type="button" className="gm btn" onClick={() => toggleAddon(k)} style={{ fontWeight: 900 }}>
             {on ? "Remove" : "Add"}
           </button>
@@ -234,7 +242,7 @@ function Services({ onNext, onBack, state, setState, config }) {
     <div className="gm page-section">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2" style={{ textAlign:'center' }}>Choose your service</h2>
+        <h2 className="gm h2" style={{ textAlign: 'center' }}>Choose your service</h2>
 
         <div className="gm cards">
           {Object.entries(svc).map(([key, val]) => {
@@ -257,11 +265,11 @@ function Services({ onNext, onBack, state, setState, config }) {
 
         <div className="gm section-divider"></div>
 
-        <div className="gm muted" style={{ marginBottom: 10, fontWeight: 900, textAlign:'center' }}>
+        <div className="gm muted" style={{ marginBottom: 10, fontWeight: 900, textAlign: 'center' }}>
           Add-ons (optional)
         </div>
 
-        <div className="gm addon-benefits two-col" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+        <div className="gm addon-benefits two-col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <AddonCard
             k="wax"
             title="Full Body Wax"
@@ -308,15 +316,15 @@ function MonthGrid({
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
   const curIdx = ym(monthStart);
   const minIdx = earliestKey ? ym(new Date(earliestKey + "T00:00:00")) : curIdx;
-  const maxIdx = latestKey   ? ym(new Date(latestKey   + "T00:00:00")) : curIdx;
+  const maxIdx = latestKey ? ym(new Date(latestKey + "T00:00:00")) : curIdx;
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  const inEarliest = earliestKey && monthStart.getFullYear() === new Date(earliestKey+"T00:00:00").getFullYear() && monthStart.getMonth() === new Date(earliestKey+"T00:00:00").getMonth();
-  const inLatest   = latestKey   && monthStart.getFullYear() === new Date(latestKey+"T00:00:00").getFullYear()   && monthStart.getMonth() === new Date(latestKey+"T00:00:00").getMonth();
+  const inEarliest = earliestKey && monthStart.getFullYear() === new Date(earliestKey + "T00:00:00").getFullYear() && monthStart.getMonth() === new Date(earliestKey + "T00:00:00").getMonth();
+  const inLatest = latestKey && monthStart.getFullYear() === new Date(latestKey + "T00:00:00").getFullYear() && monthStart.getMonth() === new Date(latestKey + "T00:00:00").getMonth();
 
-  const startDay = inEarliest ? new Date(earliestKey+"T00:00:00").getDate() : 1;
-  const endDay   = inLatest   ? new Date(latestKey+"T00:00:00").getDate()   : daysInMonth;
+  const startDay = inEarliest ? new Date(earliestKey + "T00:00:00").getDate() : 1;
+  const endDay = inLatest ? new Date(latestKey + "T00:00:00").getDate() : daysInMonth;
 
   const counterStyle = { background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900 };
   const closeBtnStyle = {
@@ -363,8 +371,8 @@ function MonthGrid({
 
   return (
     <div>
-      <div className="gm monthbar" style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center' }}>
-        <div className="gm monthtitle" style={{ justifySelf:'center' }}>{monthTitle}</div>
+      <div className="gm monthbar" style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
+        <div className="gm monthtitle" style={{ justifySelf: 'center' }}>{monthTitle}</div>
         <div className="gm monthtools">
           {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
           <button className="gm btn ghost" disabled={prevDisabled}
@@ -378,7 +386,7 @@ function MonthGrid({
 
       <div className="gm small-note">We hope you can find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
       <div className="gm dowrow">
-        {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
       </div>
       <div className="gm monthgrid">{cells}</div>
     </div>
@@ -401,14 +409,14 @@ function Calendar({ onNext, onBack, state, setState, services }) {
     const keys = Object.keys(map).sort();
     if (keys.length && !selectedDay) {
       setSelectedDay(keys[0]);
-      setState((s)=>({ ...s, selectedDay: keys[0] }));
+      setState((s) => ({ ...s, selectedDay: keys[0] }));
       const first = new Date(keys[0] + "T00:00:00");
       setMonthCursor(new Date(first.getFullYear(), first.getMonth(), 1));
     } else if (selectedDay) {
       const d = new Date(selectedDay + "T00:00:00");
       setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [durationMin, JSON.stringify(dayLocks)]);
 
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
@@ -419,12 +427,12 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   const selectedIsBooked = bookedDays.includes(selectedDay || "");
 
   const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-  const onPickDay = (k) => { if (!bookedDays.includes(k)) { setSelectedDay(k); setState((s)=>({ ...s, selectedDay: k })); } };
+  const onPickDay = (k) => { if (!bookedDays.includes(k)) { setSelectedDay(k); setState((s) => ({ ...s, selectedDay: k })); } };
   const onRemoveDay = (dayKey) => {
     setState((st) => ({
       ...st,
       membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey),
-      dayLocks: { ...(st.dayLocks||{}), [dayKey]: undefined }
+      dayLocks: { ...(st.dayLocks || {}), [dayKey]: undefined }
     }));
   };
 
@@ -450,7 +458,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
 
         {isMembership && selectedIsBooked && (
           <div className="gm note" style={{ marginTop: 10 }}>
-            You’ve already booked <b>{new Date(selectedDay).toLocaleDateString([], {weekday:"long", month:"short", day:"numeric"})}</b>.
+            You’ve already booked <b>{new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}</b>.
             Please pick a <b>different day</b> for your second visit.
           </div>
         )}
@@ -461,7 +469,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
             className="gm btn primary"
             disabled={!selectedDay || selectedIsBooked}
             onClick={() => {
-              setState((s)=>({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
+              setState((s) => ({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
               onNext();
             }}
           >
@@ -473,7 +481,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===== Times (family lock + gating; add-ons = zero time) ===== */
+/* -------- Times (logo left, times right; big boxes; family lock stays) ---------- */
 function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
@@ -484,7 +492,7 @@ function Times({ onNext, onBack, state, setState, services }) {
   const familyLockId = dayLocks[selectedDay] || null;
 
   // Build starts for this day/duration respecting any lock (no network)
-  const [daySlots, setDaySlots] = useState([]);
+  const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
   useEffect(() => {
     setDaySlots(dayStartsForDuration(day, durationMin, familyLockId, new Date()));
   }, [selectedDay, durationMin, familyLockId]);
@@ -492,18 +500,18 @@ function Times({ onNext, onBack, state, setState, services }) {
   // Current selection on this day (normal or membership)
   const selected =
     isMembership
-      ? (state.membershipSlots || []).find((s)=> s && keyLocal(new Date(s.start_iso)) === selectedDay)
+      ? (state.membershipSlots || []).find((s) => s && keyLocal(new Date(s.start_iso)) === selectedDay)
       : state.slot && keyLocal(new Date(state.slot.start_iso)) === selectedDay
-          ? state.slot
-          : null;
+        ? state.slot
+        : null;
 
   // Choose a slot -> lock family (if not locked), then apply selection (swap-on-same-day for membership)
   function choose(slot) {
     const t = new Date(slot.start_iso);
-    const hh = String(t.getHours()).padStart(2,"0");
-    const mm = String(t.getMinutes()).padStart(2,"0");
+    const hh = String(t.getHours()).padStart(2, "0");
+    const mm = String(t.getMinutes()).padStart(2, "0");
     const timeHHMM = `${hh}:${mm}`;
-    const dur = durationMin; // add-ons add ZERO time by your rule
+    const dur = durationMin; // add-ons add ZERO time
 
     setState((st) => {
       // Determine / keep family lock for this day
@@ -535,7 +543,6 @@ function Times({ onNext, onBack, state, setState, services }) {
     setState((st) => {
       if (!isMembership) {
         const next = { ...st, slot: null };
-        // no selection left on this day → free the lock
         const locks = { ...(st.dayLocks || {}) };
         delete locks[selectedDay];
         next.dayLocks = locks;
@@ -552,71 +559,97 @@ function Times({ onNext, onBack, state, setState, services }) {
     });
   }
 
-  const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
+  const canNext = isMembership ? ((state.membershipSlots || []).length > 0) : !!selected;
 
   const closeBtnStyle = {
-    position: "absolute", top: 6, right: 6, width: 22, height: 22,
+    position: "absolute", top: 10, right: 10, width: 26, height: 26,
     borderRadius: 999, background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
-    fontWeight: 900, lineHeight: "20px", fontSize: 14, display: "inline-flex",
+    fontWeight: 900, lineHeight: "24px", fontSize: 16, display: "inline-flex",
     alignItems: "center", justifyContent: "center", cursor: "pointer",
     boxShadow: "0 1px 2px rgba(0,0,0,.12)"
   };
 
   return (
     <div className="gm page-section">
-      <Header />
-      <div className="gm panel">
-        <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 10 }}>
-          {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
-        </h2>
-
-        <div className="gm timegrid">
-          {daySlots.map((s)=> {
-            const sel = selected?.start_iso === s.start_iso ||
-                        (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
-            return (
-              <div key={s.start_iso} className="gm timebox-wrap" style={{ position: "relative" }}>
-                <button className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
-                  {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </button>
-                {sel && (
-                  <button
-                    type="button"
-                    aria-label="Remove this booking"
-                    style={closeBtnStyle}
-                    onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }}
-                    title="Remove this booking"
-                  >
-                    ×
-                  </button>
-                )}
-              </div>
-            );
-          })}
+      {/* Split layout like Details */}
+      <div className="gm details-grid">
+        {/* Left: BIG logo */}
+        <div className="gm details-left">
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "380px" }} />
         </div>
 
-        <div className="gm actions">
-          <button className="gm btn" onClick={onBack}>Back to calendar</button>
-          <button
-            className="gm btn primary"
-            disabled={!canNext}
-            onClick={() => {
-              if (isMembership && (state.membershipSlots||[]).length === 1) {
-                onBack(); // choose second date; first day stays highlighted
-              } else {
-                onNext();
-              }
+        {/* Right: Date + big time boxes */}
+        <div className="gm details-right">
+          <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 14 }}>
+            {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
+          </h2>
+
+          <div
+            className="gm timegrid"
+            style={{
+              display: "grid",
+              gap: 12,
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             }}
           >
-            {isMembership && (state.membershipSlots||[]).length === 1 ? "Choose second date" : "Continue"}
-          </button>
+            {daySlots.map((s) => {
+              const sel = selected?.start_iso === s.start_iso ||
+                (isMembership && (state.membershipSlots || []).some(x => x.start_iso === s.start_iso));
+              return (
+                <div key={s.start_iso} className="gm timebox-wrap" style={{ position: "relative" }}>
+                  <button
+                    className={cx("gm timebox", sel && "timebox-on")}
+                    onClick={() => choose(s)}
+                    type="button"
+                    style={{
+                      fontSize: 22,
+                      fontWeight: 900,
+                      padding: "22px 18px",
+                      minHeight: 72,
+                      borderRadius: 14,
+                    }}
+                  >
+                    {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </button>
+                  {sel && (
+                    <button
+                      type="button"
+                      aria-label="Remove this booking"
+                      style={closeBtnStyle}
+                      onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }}
+                      title="Remove this booking"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="gm actions" style={{ marginTop: 16 }}>
+            <button className="gm btn" onClick={onBack}>Back to calendar</button>
+            <button
+              className="gm btn primary"
+              disabled={!canNext}
+              onClick={() => {
+                if (isMembership && (state.membershipSlots || []).length === 1) {
+                  onBack(); // choose second date; first day stays highlighted
+                } else {
+                  onNext();
+                }
+              }}
+            >
+              {isMembership && (state.membershipSlots || []).length === 1 ? "Choose second date" : "Continue"}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/* ===== Confirm (updated totals with your prices; add-ons don't change time) ===== */
+/* ===== Confirm (totals with your prices; add-ons don't change time) ===== */
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = React.useMemo(() => {
@@ -644,7 +677,7 @@ function Confirm({ onBack, state, setState }) {
   }
 
   const when = state.service_key?.includes("membership")
-    ? (state.membershipSlots||[]).map((s) => dstr(s.start_iso)).join(" & ")
+    ? (state.membershipSlots || []).map((s) => dstr(s.start_iso)).join(" & ")
     : state.slot && dstr(state.slot.start_iso);
 
   return (
@@ -699,7 +732,7 @@ function App() {
   return (
     <div className="gm-site">
       <div className="gm-booking wrap">
-        {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
+        {step === 0 && <Details onNext={() => setStep(1)} state={state} setState={setState} />}
         {step === 1 && (
           <Services
             onNext={() => setStep(2)}
@@ -715,7 +748,7 @@ function App() {
             onNext={() => setStep(3)}
             onBack={() => {
               // Leaving Calendar resets selections and locks (per your request)
-              setState((s)=>({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [], dayLocks: {} }));
+              setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [], dayLocks: {} }));
               setStep(1);
             }}
             state={state}
