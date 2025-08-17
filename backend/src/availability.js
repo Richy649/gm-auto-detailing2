@@ -1,73 +1,71 @@
 import { WORKING_HOURS, BUFFER_MINUTES, SERVICES, ADDONS, MAX_DAYS_AHEAD } from './config.js';
 import { db } from './db.js';
-import { addMinutes, clampToWorkingWindow } from './util.js';
 
-const overlaps = (a, b, c, d) => a < d && c < b;
-const serviceDuration = (key, addons = []) => {
-  const base = SERVICES[key]?.duration || 0;
-  const extra = addons.reduce((s, k) => s + (ADDONS[k]?.extraMinutes || 0), 0);
+const MS = 60 * 1000;
+const addMin = (d, m) => new Date(d.getTime() + m * MS);
+const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && bStart < aEnd;
+
+function parseHHMM(str) {
+  const [h, m] = (str || '00:00').split(':').map(n => parseInt(n, 10));
+  return { h: h || 0, m: m || 0 };
+}
+function dayWindow(date, cfg) {
+  const { h: sh, m: sm } = parseHHMM(cfg?.start);
+  const { h: eh, m: em } = parseHHMM(cfg?.end);
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate(), sh, sm, 0, 0);
+  const end   = new Date(date.getFullYear(), date.getMonth(), date.getDate(), eh, em, 0, 0);
+  return { start, end };
+}
+function serviceDuration(service_key, addons=[]) {
+  const base = SERVICES[service_key]?.duration || 0;
+  const extra = addons.reduce((s,k)=> s + (ADDONS[k]?.extraMinutes || 0), 0);
   return base + extra;
-};
+}
 
 /**
- * LIVE availability (recomputed on each request):
- * - filters days by 'allowedDows' (Set of 0..6)
- * - excludes already-booked slots from DB
- * - excludes anything < 24h from now
- * - excludes anything > MAX_DAYS_AHEAD from now
+ * LIVE availability generator (source of truth)
+ * - local timezone (set TZ=Europe/London in env)
+ * - 24h minimum notice
+ * - 30 days ahead max (MAX_DAYS_AHEAD)
+ * - filters days by allowedDows if provided
+ * - excludes existing DB bookings + buffer
  */
 export function getAvailability({ service_key, addons = [], fromDateISO, allowedDows }) {
   const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startDate = new Date(fromDateISO || startOfToday);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const windowStart = fromDateISO ? new Date(fromDateISO) : startOfToday;
+  const windowEnd = new Date(startOfToday.getTime() + MAX_DAYS_AHEAD * 24 * 60 * 60 * 1000);
   const cutoffMin = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24h rule
-  const maxDate = new Date(now.getTime() + MAX_DAYS_AHEAD * 24 * 60 * 60 * 1000);
   const duration = serviceDuration(service_key, addons);
   const out = [];
   if (!duration) return out;
 
-  // Loop day-by-day from today to maxDate
-  for (
-    let d = new Date(startOfToday);
-    d <= maxDate;
-    d = addMinutes(d, 24 * 60)
-  ) {
-    const dow = d.getDay(); // 0=Sun...6=Sat
+  for (let d = new Date(windowStart); d <= windowEnd; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    const dow = d.getDay(); // 0=Sun..6=Sat
     if (allowedDows && !allowedDows.has(dow)) continue;
 
     const cfg = WORKING_HOURS[dow];
     if (!cfg) continue;
+    const { start: dayStart, end: dayEnd } = dayWindow(d, cfg);
+    if (dayEnd <= dayStart) continue;
 
-    const { start, end } = clampToWorkingWindow(d, cfg);
-
-    // Busy blocks from DB for this day
-    const rows = db
-      .prepare(
-        `
-      SELECT start_iso,end_iso
+    // Get all bookings overlapping this day window
+    const rows = db.prepare(`
+      SELECT start_iso, end_iso
       FROM bookings
-      WHERE start_iso >= ? AND start_iso < ?
-        AND status IN ('scheduled','started')
-    `
-      )
-      .all(start.toISOString(), end.toISOString());
+      WHERE NOT (? <= start_iso OR ? >= end_iso)
+    `).all(dayStart.toISOString(), dayEnd.toISOString());
+    const busy = rows.map(r => ({ start: new Date(r.start_iso), end: new Date(r.end_iso) }));
 
-    const blocks = rows.map((r) => ({
-      start: new Date(r.start_iso),
-      end: new Date(r.end_iso),
-    }));
+    // Generate candidate slots every 5 minutes
+    for (let s = new Date(dayStart); addMin(s, duration) <= dayEnd; s = addMin(s, 5)) {
+      if (s < cutoffMin) continue;               // 24h minimum
+      const e = addMin(s, duration);
+      const sBuf = addMin(s, -BUFFER_MINUTES);
+      const eBuf = addMin(e,  BUFFER_MINUTES);
 
-    for (let t = new Date(start); addMinutes(t, duration) <= end; t = addMinutes(t, 5)) {
-      const s = new Date(t);
-      const e = addMinutes(s, duration);
-
-      // Enforce 24h cutoff
-      if (s < cutoffMin) continue;
-
-      const sBuf = addMinutes(s, -BUFFER_MINUTES);
-      const eBuf = addMinutes(e, BUFFER_MINUTES);
-      const conflict = blocks.some((b) => overlaps(sBuf, eBuf, b.start, b.end));
-      if (!conflict) out.push({ start_iso: s.toISOString(), end_iso: e.toISOString() });
+      const clash = busy.some(b => overlaps(sBuf, eBuf, b.start, b.end));
+      if (!clash) out.push({ start_iso: s.toISOString(), end_iso: e.toISOString() });
     }
   }
 
