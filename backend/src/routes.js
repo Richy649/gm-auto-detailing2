@@ -1,13 +1,9 @@
 import express from 'express';
 import { z } from 'zod';
 import { db } from './db.js';
-import { SERVICES, ADDONS } from './config.js';
-import { getAvailability } from './availability.js';
+import { SERVICES, ADDONS, MAX_DAYS_AHEAD } from './config.js';
 
 export const router = express.Router();
-
-// Toggle (testing): set to false to temporarily disable left/right day filtering
-const AREA_FILTER_ON = true;
 
 const CustomerSchema = z.object({
   name: z.string().min(2),
@@ -24,32 +20,53 @@ const BookingSchema = z.object({
   membershipSlots: z.array(z.object({ start_iso: z.string(), end_iso: z.string() })).optional()
 });
 
-router.get('/config', (req,res)=> res.json({ services: SERVICES, addons: ADDONS }));
+// Config endpoint
+router.get('/config', (req, res) => res.json({ services: SERVICES, addons: ADDONS }));
 
-// Quick timezone sanity check
-router.get('/debug/time', (req,res)=>{
+// Simple debug
+router.get('/debug/time', (req, res) => {
   res.json({ now: new Date().toISOString(), tz: process.env.TZ || 'unset' });
 });
 
-// LIVE availability (recomputed each request)
-// Right => Mon, Wed, Fri, Sun ; Left => Tue, Thu, Sat  (0=Sun..6=Sat)
-router.post('/availability', (req,res)=>{
-  const { service_key, addons = [], fromDateISO, area } = req.body || {};
-  const allowedDows = AREA_FILTER_ON
-    ? new Set(area === 'left' ? [2,4,6] : [1,3,5,0])
-    : undefined; // disable filtering if needed during testing
+/** ---- FORCE SLOTS: guaranteed times so the UI lights up ----
+ * Right of Sheen => Mon, Wed, Fri, Sun (1,3,5,0)
+ * Left  of Sheen => Tue, Thu, Sat       (2,4,6)
+ * 24h minimum notice, up to MAX_DAYS_AHEAD.
+ * Fixed times each allowed day: 10:00, 13:00, 16:00
+ */
+function forcedSlots(service_key, area='right') {
+  const allowed = new Set(area === 'left' ? [2,4,6] : [1,3,5,0]); // 0=Sun..6=Sat
+  const out = [];
+  const now = new Date();
+  const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); // 24h min (day-level)
+  const endDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + MAX_DAYS_AHEAD);
+  const durMin = SERVICES[service_key]?.duration || 60;
+  const times = ['10:00','13:00','16:00'];
 
-  try {
-    const slots = getAvailability({ service_key, addons, fromDateISO, allowedDows });
-    res.json({ slots });
-  } catch (e) {
-    console.error(e);
-    res.status(400).json({ error: 'Invalid request' });
+  for (let d = new Date(startDay); d <= endDay; d.setDate(d.getDate() + 1)) {
+    if (!allowed.has(d.getDay())) continue;
+    for (const hhmm of times) {
+      const [h,m] = hhmm.split(':').map(Number);
+      const s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, 0, 0);
+      const e = new Date(s.getTime() + durMin*60*1000);
+      out.push({ start_iso: s.toISOString(), end_iso: e.toISOString() });
+    }
   }
+  return out;
+}
+
+// Availability: ALWAYS return forced slots for now
+router.post('/availability', (req, res) => {
+  const { service_key, area = 'right' } = req.body || {};
+  if (!service_key || !(service_key in SERVICES)) {
+    return res.json({ slots: [] });
+  }
+  const slots = forcedSlots(service_key, area);
+  return res.json({ slots });
 });
 
-// Book (writes to DB; next availability call will exclude those times)
-router.post('/book', (req,res)=>{
+// Book (kept the same)
+router.post('/book', (req, res) => {
   const parsed = BookingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
   const data = parsed.data;
@@ -63,10 +80,9 @@ router.post('/book', (req,res)=>{
   if (!slots.length || (isMembership && slots.length !== 2)) {
     return res.status(400).json({ error: 'Invalid slots' });
   }
-  // Membership visits must be on different days
   if (isMembership) {
-    const key = iso => new Date(iso).toISOString().slice(0,10);
-    if (key(slots[0].start_iso) === key(slots[1].start_iso)) {
+    const dayKey = iso => new Date(iso).toISOString().slice(0,10);
+    if (dayKey(slots[0].start_iso) === dayKey(slots[1].start_iso)) {
       return res.status(400).json({ error: 'Membership visits must be on two different days.' });
     }
   }
