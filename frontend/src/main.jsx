@@ -38,12 +38,12 @@ const dstr = (iso) =>
     hour: "2-digit",
     minute: "2-digit",
   });
-const dkey = (iso) => new Date(iso).toISOString().slice(0, 10);
+const dkeyUTC = (d) => new Date(d).toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
 const cx = (...a) => a.filter(Boolean).join(" ");
 function groupByDay(slots) {
   const g = {};
   for (const s of slots || []) {
-    const k = dkey(s.start_iso);
+    const k = dkeyUTC(s.start_iso);
     (g[k] ||= []).push(s);
   }
   return g;
@@ -175,30 +175,44 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Live month calendar ---------- */
-function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMonthCursor, allowedDows }) {
+/* ---------- Live month calendar (clickable, 24h cutoff, 30-day window) -------- */
+function MonthGrid({
+  slotsByDay,
+  selectedDay,
+  setSelectedDay,
+  monthCursor,
+  setMonthCursor,
+  allowedDows
+}) {
   const now = new Date();
-  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // start of today
-  const cutoffKey = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0,10); // 24h rule → earliest day key
+  const cutoffKey = new Date(now.getTime() + 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10); // earliest bookable day (24h)
+  const maxKey = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10); // last bookable day (30 days)
 
-  const firstOfMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+  const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+  const prevDisabled = monthStart <= new Date(now.getFullYear(), now.getMonth(), 1);
+  const nextMonthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1);
+  const nextDisabled = dkeyUTC(nextMonthStart) > maxKey;
+
+  const firstOfMonth = monthStart;
   const start = new Date(firstOfMonth);
-  // Start week on Monday
-  const offset = (start.getDay() + 6) % 7;
+  const offset = (start.getDay() + 6) % 7; // Monday start
   start.setDate(start.getDate() - offset);
 
   const cells = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
-    const key = d.toISOString().slice(0, 10);
-    const isCurrentMonth = d.getMonth() === monthCursor.getMonth();
+    const key = dkeyUTC(d);
     const isAllowedDow = allowedDows.has(d.getDay());
-    const isAfterCutoffDay = key >= cutoffKey; // simple day-level 24h check
+    const withinWindow = key >= cutoffKey && key <= maxKey;
     const has = !!slotsByDay[key];
     const selected = selectedDay === key;
 
-    const disabled = !isCurrentMonth || !isAllowedDow || !isAfterCutoffDay;
+    const disabled = !(isAllowedDow && withinWindow && has);
 
     cells.push(
       <div
@@ -210,21 +224,26 @@ function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMo
           (selected ? "selected " : "")
         }
         onClick={() => {
-          if (!disabled && has) setSelectedDay(key);
+          if (!disabled) setSelectedDay(key);
         }}
+        role="button"
+        tabIndex={0}
       >
         {d.getDate()}
       </div>
     );
   }
+
   const monthName = monthCursor.toLocaleString([], { month: "long", year: "numeric" });
   return (
     <div className="panel" style={{ marginBottom: 12 }}>
       <div className="monthbar">
         <div style={{ fontWeight: 700 }}>{monthName}</div>
         <div className="nav">
-          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>‹</button>
-          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>›</button>
+          <button className="btn" disabled={prevDisabled}
+            onClick={() => !prevDisabled && setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>‹</button>
+          <button className="btn" disabled={nextDisabled}
+            onClick={() => !nextDisabled && setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>›</button>
         </div>
       </div>
       <div className="monthgrid">
