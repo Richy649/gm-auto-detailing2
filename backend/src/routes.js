@@ -23,19 +23,23 @@ const BookingSchema = z.object({
 
 router.get('/config', (req,res)=> res.json({ services: SERVICES, addons: ADDONS }));
 
-router.post('/availability', (req,res)=>{
+// LIVE availability: filters days by area AND merges Google Calendar busy events
+router.post('/availability', async (req,res)=>{
   const { service_key, addons=[], fromDateISO, area } = req.body || {};
-  // Right side => Mon, Wed, Fri, Sun ; Left side => Tue, Thu, Sat
+
+  // Right => Mon, Wed, Fri, Sun ; Left => Tue, Thu, Sat
   // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
   const allowedDows = new Set(area === 'left' ? [2,4,6] : [1,3,5,0]);
+
   try {
-    const slots = getAvailability({ service_key, addons, fromDateISO, allowedDows });
+    const slots = await getAvailability({ service_key, addons, fromDateISO, allowedDows });
     res.json({ slots });
   } catch (e) {
     res.status(400).json({ error: 'Invalid request' });
   }
 });
 
+// Booking writes to DB (and availability will naturally exclude it next time)
 router.post('/book', (req,res)=>{
   const parsed = BookingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
@@ -55,7 +59,8 @@ router.post('/book', (req,res)=>{
     const tx = db.transaction(()=>{
       for(const s of slots){
         const overlap = db.prepare(`
-          SELECT id FROM bookings WHERE status IN ('scheduled','started')
+          SELECT id FROM bookings
+          WHERE status IN ('scheduled','started')
           AND NOT(? <= start_iso OR ? >= end_iso)
         `).all(s.start_iso, s.end_iso);
         if (overlap.length) throw new Error('Conflict');
