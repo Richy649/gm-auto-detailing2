@@ -67,7 +67,7 @@ router.post('/book', (req,res)=>{
   res.json({ ok:true });
 });
 
-/* minimal admin list (no auth yet; we’ll lock this later) */
+/* minimal admin list (we can secure later) */
 router.get('/admin/bookings', (req,res)=>{
   const rows = db.prepare(`
     SELECT b.*, c.name, c.phone
@@ -77,3 +77,4 @@ router.get('/admin/bookings', (req,res)=>{
   `).all();
   res.json({ bookings: rows });
 });
+
