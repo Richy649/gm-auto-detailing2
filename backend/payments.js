@@ -1,18 +1,31 @@
+// backend/payments.js
 import Stripe from "stripe";
 import { createCalendarEvent } from "./googleCalendar.js";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 const CURRENCY = "gbp";
 const FRONTEND_PUBLIC_URL = process.env.FRONTEND_PUBLIC_URL || "http://localhost:5173";
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
+// Prices in pence
 const PRICES = { exterior: 4000, full: 6000, standard_membership: 7000, premium_membership: 10000 };
 const ADDONS = { wax: 1500, polish: 1500 };
+
+let _stripe = null;
+function getStripe() {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!_stripe) {
+    if (!key) throw new Error("STRIPE_SECRET_KEY is missing");
+    _stripe = new Stripe(key, { apiVersion: "2024-06-20" });
+  }
+  return _stripe;
+}
 
 export async function createCheckoutSession(req, res) {
   try {
     const { customer, service_key, addons = [], slot, membershipSlots = [] } = req.body || {};
     if (!customer || !service_key) return res.status(400).json({ ok: false, error: "Missing customer or service_key" });
+
+    const stripe = getStripe();
 
     const line_items = [
       {
@@ -46,18 +59,21 @@ export async function createCheckoutSession(req, res) {
     res.json({ ok: true, url: session.url });
   } catch (err) {
     console.error("createCheckoutSession error:", err);
-    res.status(500).json({ ok: false, error: "Failed to create checkout session" });
+    res.status(500).json({ ok: false, error: err.message || "Failed to create checkout session" });
   }
 }
 
 export async function stripeWebhook(req, res) {
   try {
-    const sig = req.headers["stripe-signature"];
     let event;
-    if (WEBHOOK_SECRET) {
-      event = stripe.webhooks.constructEvent(req.rawBody, sig, WEBHOOK_SECRET);
+    const sig = req.headers["stripe-signature"];
+
+    if (WEBHOOK_SECRET && req.rawBody) {
+      // Only need raw body here; no need to init Stripe with a key for verification
+      event = (getStripe()).webhooks.constructEvent(req.rawBody, sig, WEBHOOK_SECRET);
     } else {
-      event = req.body; // dev fallback
+      // Dev fallback: accept parsed JSON
+      event = req.body;
     }
 
     if (event.type === "checkout.session.completed") {
@@ -68,8 +84,8 @@ export async function stripeWebhook(req, res) {
       const customer = JSON.parse(md.customer || "{}");
       const slot = md.slot ? JSON.parse(md.slot) : null;
       const membershipSlots = md.membershipSlots ? JSON.parse(md.membershipSlots) : [];
-      const slots = membershipSlots.length ? membershipSlots : (slot ? [slot] : []);
 
+      const slots = membershipSlots.length ? membershipSlots : (slot ? [slot] : []);
       for (const x of slots) {
         try {
           await createCalendarEvent({
