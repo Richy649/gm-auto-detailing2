@@ -6,6 +6,9 @@ import { getAvailability } from './availability.js';
 
 export const router = express.Router();
 
+// Toggle (testing): set to false to temporarily disable left/right day filtering
+const AREA_FILTER_ON = true;
+
 const CustomerSchema = z.object({
   name: z.string().min(2),
   phone: z.string().min(6),
@@ -23,20 +26,29 @@ const BookingSchema = z.object({
 
 router.get('/config', (req,res)=> res.json({ services: SERVICES, addons: ADDONS }));
 
+// Quick timezone sanity check
+router.get('/debug/time', (req,res)=>{
+  res.json({ now: new Date().toISOString(), tz: process.env.TZ || 'unset' });
+});
+
 // LIVE availability (recomputed each request)
-// Right => Mon, Wed, Fri, Sun ; Left => Tue, Thu, Sat
+// Right => Mon, Wed, Fri, Sun ; Left => Tue, Thu, Sat  (0=Sun..6=Sat)
 router.post('/availability', (req,res)=>{
   const { service_key, addons = [], fromDateISO, area } = req.body || {};
-  const allowedDows = new Set(area === 'left' ? [2,4,6] : [1,3,5,0]); // 0=Sun..6=Sat
+  const allowedDows = AREA_FILTER_ON
+    ? new Set(area === 'left' ? [2,4,6] : [1,3,5,0])
+    : undefined; // disable filtering if needed during testing
+
   try {
     const slots = getAvailability({ service_key, addons, fromDateISO, allowedDows });
     res.json({ slots });
   } catch (e) {
+    console.error(e);
     res.status(400).json({ error: 'Invalid request' });
   }
 });
 
-// Book (writes to DB; availability will reflect immediately on next fetch)
+// Book (writes to DB; next availability call will exclude those times)
 router.post('/book', (req,res)=>{
   const parsed = BookingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
@@ -46,9 +58,17 @@ router.post('/book', (req,res)=>{
     .run(data.customer.name, data.customer.phone, data.customer.address, data.area, data.customer.email || null);
   const customer_id = c.lastInsertRowid;
 
-  const slots = data.service_key.includes('membership') ? (data.membershipSlots || []) : [data.slot].filter(Boolean);
-  if (!slots.length || (data.service_key.includes('membership') && slots.length !== 2)) {
+  const isMembership = data.service_key.includes('membership');
+  const slots = isMembership ? (data.membershipSlots || []) : [data.slot].filter(Boolean);
+  if (!slots.length || (isMembership && slots.length !== 2)) {
     return res.status(400).json({ error: 'Invalid slots' });
+  }
+  // Membership visits must be on different days
+  if (isMembership) {
+    const key = iso => new Date(iso).toISOString().slice(0,10);
+    if (key(slots[0].start_iso) === key(slots[1].start_iso)) {
+      return res.status(400).json({ error: 'Membership visits must be on two different days.' });
+    }
   }
 
   const insert = db.prepare('INSERT INTO bookings (customer_id, service_key, addons, start_iso, end_iso, status) VALUES (?,?,?,?,?,?)');
