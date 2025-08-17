@@ -1,7 +1,7 @@
-// ESM module
+// backend/src/googleCalendar.js (ESM)
 import { google } from "googleapis";
 
-const GCAL_CALENDAR_ID = process.env.GCAL_CALENDAR_ID; // e.g. youraddr@gmail.com
+const GCAL_CALENDAR_ID = process.env.GCAL_CALENDAR_ID; // e.g. youraddress@gmail.com
 const GCAL_TIMEZONE = process.env.GCAL_TIMEZONE || "Europe/London";
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -15,7 +15,7 @@ function getOAuth2Client() {
   const oAuth2Client = new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    "https://developers.google.com/oauthplayground" // redirect used to mint refresh once
+    "https://developers.google.com/oauthplayground" // redirect used to mint refresh token once
   );
   oAuth2Client.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
   return oAuth2Client;
@@ -39,17 +39,15 @@ export async function createCalendarEvent({ service_key, addons, customer, start
     `• Address: ${customer?.address || "-"}`,
   ].join("\n");
 
-  const event = {
-    summary: title,
-    description,
-    start: { dateTime: start_iso, timeZone: GCAL_TIMEZONE },
-    end: { dateTime: end_iso, timeZone: GCAL_TIMEZONE },
-    location: customer?.address || "",
-    reminders: { useDefault: true },
-  };
-
   await calendar.events.insert({
     calendarId: GCAL_CALENDAR_ID,
-    requestBody: event,
+    requestBody: {
+      summary: title,
+      description,
+      start: { dateTime: start_iso, timeZone: GCAL_TIMEZONE },
+      end:   { dateTime: end_iso,   timeZone: GCAL_TIMEZONE },
+      location: customer?.address || "",
+      reminders: { useDefault: true },
+    },
   });
 }
