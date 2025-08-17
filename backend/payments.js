@@ -1,21 +1,13 @@
-// backend/src/payments.js (ESM)
 import Stripe from "stripe";
 import { createCalendarEvent } from "./googleCalendar.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
-
 const CURRENCY = "gbp";
 const FRONTEND_PUBLIC_URL = process.env.FRONTEND_PUBLIC_URL || "http://localhost:5173";
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-// Prices in pence (no need to pre-create Stripe Prices)
-const PRICES = {
-  exterior: 4000,               // £40
-  full: 6000,                   // £60
-  standard_membership: 7000,    // £70
-  premium_membership: 10000,    // £100
-};
-const ADDONS = { wax: 1500, polish: 1500 }; // pence
+const PRICES = { exterior: 4000, full: 6000, standard_membership: 7000, premium_membership: 10000 };
+const ADDONS = { wax: 1500, polish: 1500 };
 
 export async function createCheckoutSession(req, res) {
   try {
@@ -31,12 +23,10 @@ export async function createCheckoutSession(req, res) {
         },
         quantity: 1,
       },
-      ...addons
-        .filter((k) => k in ADDONS)
-        .map((k) => ({
-          price_data: { currency: CURRENCY, product_data: { name: `Addon: ${k}` }, unit_amount: ADDONS[k] },
-          quantity: 1,
-        })),
+      ...addons.filter(k => k in ADDONS).map(k => ({
+        price_data: { currency: CURRENCY, product_data: { name: `Addon: ${k}` }, unit_amount: ADDONS[k] },
+        quantity: 1,
+      })),
     ];
 
     const session = await stripe.checkout.sessions.create({
@@ -62,14 +52,12 @@ export async function createCheckoutSession(req, res) {
 
 export async function stripeWebhook(req, res) {
   try {
-    let event;
     const sig = req.headers["stripe-signature"];
-
+    let event;
     if (WEBHOOK_SECRET) {
       event = stripe.webhooks.constructEvent(req.rawBody, sig, WEBHOOK_SECRET);
     } else {
-      // dev fallback
-      event = req.body;
+      event = req.body; // dev fallback
     }
 
     if (event.type === "checkout.session.completed") {
@@ -80,8 +68,8 @@ export async function stripeWebhook(req, res) {
       const customer = JSON.parse(md.customer || "{}");
       const slot = md.slot ? JSON.parse(md.slot) : null;
       const membershipSlots = md.membershipSlots ? JSON.parse(md.membershipSlots) : [];
-
       const slots = membershipSlots.length ? membershipSlots : (slot ? [slot] : []);
+
       for (const x of slots) {
         try {
           await createCalendarEvent({
