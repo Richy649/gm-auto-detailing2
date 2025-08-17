@@ -1,17 +1,12 @@
 {
-  "name": "gm-booking-backend",
-  "private": true,
+  "name": "gm-api",
   "type": "module",
-  "engines": { "node": "20.x" },
-  "scripts": {
-    "start": "node server.js",
-    "postinstall": "npm rebuild better-sqlite3 || true"
-  },
+  "scripts": { "start": "node src/server.js" },
   "dependencies": {
-    "better-sqlite3": "9.4.3",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "zod": "^3.23.8"
-  }
+    "googleapis": "^132.0.0",
+    "stripe": "^16.0.0"
+  },
+  "engines": { "node": ">=18" }
 }
