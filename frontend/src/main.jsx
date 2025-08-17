@@ -51,7 +51,7 @@ function Header() {
   );
 }
 
-/* ---------------- Details (logo left VERY BIG, content right; input order fixed) ---------------- */
+/* ---------------- Details (logo left VERY BIG, content right; input order) ---------------- */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
@@ -73,7 +73,7 @@ function Details({ onNext, state, setState }) {
             I treat every booking like it’s my own car—if anything isn’t clear, message me and I’ll make it right.
           </p>
 
-          <h2 className="gm h2">Your details</h2>
+          <h2 className="gm h2" style={{textAlign:'center'}}>Your details</h2>
           <div className="gm row">
             <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
             <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
@@ -93,7 +93,7 @@ function Details({ onNext, state, setState }) {
   );
 }
 
-/* ---------------- Services (Wax left, Polish right, descriptions, CTA bottom) ---------------- */
+/* ---------------- Services (Add-on cards with Add/Remove; headings centered) ---------------- */
 function Services({ onNext, onBack, state, setState, config }) {
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
@@ -101,13 +101,70 @@ function Services({ onNext, onBack, state, setState, config }) {
   const firstKey = Object.keys(svc)[0];
   const [service, setService] = useState(state.service_key && svc[state.service_key] ? state.service_key : firstKey);
   const [addons, setAddons] = useState(state.addons || []);
-  useEffect(() => setState((s) => ({ ...s, service_key: service, addons })), [service, addons]);
+
+  // Update addons only when addons change
+  useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
+
+  // When service changes: clear incompatible selections + reset date/slots (fixes your glitch)
+  useEffect(() => {
+    setState((s) => {
+      const isMembership = service.includes("membership");
+      const next = { ...s, service_key: service };
+
+      // Reset date & prefetched times to avoid stale highlights
+      next.selectedDay = null;
+      next.prefetchedDaySlots = [];
+
+      if (isMembership) {
+        // Membership: must not have a single-slot selection
+        next.slot = null;
+      } else {
+        // Standard service: must not keep membership picks
+        next.membershipSlots = [];
+      }
+      return next;
+    });
+  }, [service, setState]);
+
+  function toggleAddon(k) {
+    setAddons((a) => (a.includes(k) ? a.filter((x) => x !== k) : [...a, k]));
+  }
+
+  const AddonCard = ({ k, title, price, desc, align }) => {
+    const on = addons.includes(k);
+    return (
+      <div
+        className={cx("gm benefit", align)}
+        style={{
+          border: on ? "2px solid #86efac" : "1px dashed #e5e7eb",
+          background: on ? "#dcfce7" : "#f9fafb",
+          borderRadius: 14,
+        }}
+      >
+        <div className="benefit-title" style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+          <span>{title}</span>
+          <span>{fmtGBP(price)}</span>
+        </div>
+        <div className="benefit-copy">{desc}</div>
+        <div style={{marginTop:10, display:'flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end'}}>
+          <button
+            type="button"
+            className="gm btn"
+            onClick={() => toggleAddon(k)}
+            style={{ fontWeight: 900 }}
+          >
+            {on ? "Remove" : "Add"}
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="gm page-section">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2">Choose your service</h2>
+        <h2 className="gm h2" style={{ textAlign:'center' }}>Choose your service</h2>
 
         <div className="gm cards">
           {Object.entries(svc).map(([key, val]) => {
@@ -130,38 +187,30 @@ function Services({ onNext, onBack, state, setState, config }) {
 
         <div className="gm section-divider"></div>
 
-        {/* Add-ons chips */}
-        <div>
-          <div className="gm muted" style={{ marginBottom: 6, fontWeight: 800 }}>Add-ons (optional)</div>
-          <div className="gm addon-row">
-            {Object.entries(addonsCfg).map(([k, v]) => {
-              const on = addons.includes(k);
-              return (
-                <button
-                  key={k}
-                  className={cx("gm chip", on && "chip-on")}
-                  onClick={() => setAddons((a) => (on ? a.filter((x) => x !== k) : [...a, k]))}
-                >
-                  {v.name} · {fmtGBP(v.price)}
-                </button>
-              );
-            })}
-          </div>
+        {/* Centered add-ons title */}
+        <div className="gm muted" style={{ marginBottom: 10, fontWeight: 900, textAlign:'center' }}>
+          Add-ons (optional)
         </div>
 
-        {/* Benefits: WAX left, POLISH right, each with own description below */}
-        <div className="gm addon-benefits two-col">
-          <div className="gm benefit left">
-            <div className="benefit-title">Full Body Wax</div>
-            <div className="benefit-copy">Deep gloss and slick feel. Adds a protective layer that helps repel grime and water between washes.</div>
-          </div>
-          <div className="gm benefit right">
-            <div className="benefit-title">Hand Polish</div>
-            <div className="benefit-copy">Reduces haze and light oxidation to refresh tired paintwork, restoring clarity and depth to the finish.</div>
-          </div>
+        {/* WAX left, POLISH right — selectable cards with price + Add button */}
+        <div className="gm addon-benefits two-col" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
+          <AddonCard
+            k="wax"
+            title="Full Body Wax"
+            price={addonsCfg.wax?.price ?? 15}
+            desc="Deep gloss and slick feel. Adds a protective layer that helps repel grime and water between washes."
+            align="left"
+          />
+          <AddonCard
+            k="polish"
+            title="Hand Polish"
+            price={addonsCfg.polish?.price ?? 15}
+            desc="Reduces haze and light oxidation to refresh tired paintwork, restoring clarity and depth to the finish."
+            align="right"
+          />
         </div>
 
-        {/* CTA at the very bottom (below benefits) */}
+        {/* CTA at the very bottom */}
         <div className="gm actions bottom-stick">
           <button className="gm btn" onClick={onBack}>Back</button>
           <button className="gm btn primary" onClick={onNext}>See times</button>
@@ -270,7 +319,7 @@ function MonthGrid({
     );
   }
 
-  // Amber counter style (same yellow family as chosen day)
+  // Amber counter style (same yellow family as chosen day) + centered month title
   const counterStyle = {
     background: "#fff7ed",
     border: "1px solid #f59e0b",
@@ -280,8 +329,11 @@ function MonthGrid({
 
   return (
     <div>
-      <div className="gm monthbar">
-        <div className="gm monthtitle">{monthTitle}</div>
+      <div
+        className="gm monthbar"
+        style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center' }}
+      >
+        <div className="gm monthtitle" style={{ justifySelf:'center' }}>{monthTitle}</div>
         <div className="gm monthtools">
           {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
           <button className="gm btn ghost" disabled={prevDisabled}
@@ -325,7 +377,6 @@ function Calendar({ onNext, onBack, state, setState }) {
       ...st,
       membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey)
     }));
-    // Keep selectedDay as is; user can re-pick if needed
   };
 
   useEffect(() => {
@@ -618,8 +669,27 @@ function App() {
     <div className="gm-site">
       <div className="gm-booking wrap">
         {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
-        {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
-        {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
+        {step === 1 && (
+          <Services
+            onNext={() => setStep(2)}
+            onBack={() => setStep(0)}
+            state={state}
+            setState={setState}
+            config={config}
+          />
+        )}
+        {step === 2 && (
+          <Calendar
+            onNext={() => setStep(3)}
+            onBack={() => {
+              // On leaving Calendar back to Services: reset selections entirely (your request)
+              setState((s)=>({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] }));
+              setStep(1);
+            }}
+            state={state}
+            setState={setState}
+          />
+        )}
         {step === 3 && <Times    onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
         {step === 4 && <Confirm  onBack={() => setStep(3)} state={state} setState={setState} />}
       </div>
