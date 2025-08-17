@@ -9,7 +9,7 @@ const serviceDuration = (key, addons=[]) => {
   return base + extra;
 };
 
-export function getAvailability({ service_key, addons=[], fromDateISO }) {
+export function getAvailability({ service_key, addons = [], fromDateISO, allowedDows }) {
   const now = new Date();
   const startDate = new Date(fromDateISO || now);
   const maxDate = new Date(now.getTime() + MAX_DAYS_AHEAD*24*60*60*1000);
@@ -18,10 +18,18 @@ export function getAvailability({ service_key, addons=[], fromDateISO }) {
   if (!duration) return out;
 
   for (let d = new Date(startDate); d <= maxDate; d = addMinutes(d, 24*60)) {
+    const dow = d.getDay(); // 0=Sun...6=Sat
+    if (allowedDows && !allowedDows.has(dow)) continue;
+
     const cfg = WORKING_HOURS[d.getDay()];
     if (!cfg) continue;
     const { start, end } = clampToWorkingWindow(d, cfg);
-    const rows = db.prepare(`SELECT start_iso,end_iso FROM bookings WHERE start_iso >= ? AND start_iso < ? AND status IN ('scheduled','started')`).all(start.toISOString(), end.toISOString());
+    const rows = db.prepare(`
+      SELECT start_iso,end_iso
+      FROM bookings
+      WHERE start_iso >= ? AND start_iso < ?
+        AND status IN ('scheduled','started')
+    `).all(start.toISOString(), end.toISOString());
     const blocks = rows.map(r=>({ start:new Date(r.start_iso), end:new Date(r.end_iso) }));
     for (let t=new Date(start); addMinutes(t, duration) <= end; t=addMinutes(t,5)) {
       const s = new Date(t), e = addMinutes(s, duration);
