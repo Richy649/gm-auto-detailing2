@@ -4,33 +4,38 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GM Auto Detailing — Book Now</title>
-    <!-- bubbly/modern font -->
+    <!-- Use the same bubbly modern font everywhere -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
       :root{
-        --bg:#f2f3f5;         /* light grey page bg */
-        --panel:#ffffff;      /* white cards/inputs */
+        --bg:#f2f3f5;         /* light grey page background (stands out on white Squarespace) */
+        --panel:#ffffff;      /* white panels/inputs */
         --muted:#e5e7eb;
         --text:#111827;
         --sub:#6b7280;
-        --cta:#d1d5db;        /* confirm button grey you asked for */
+        --cta:#d1d5db;        /* grey Confirm buttons */
         --cta-hover:#cbd5e1;
-        --brand:#111827;
+        --accent:#2563eb;
       }
       *{box-sizing:border-box}
-      body{margin:0;background:var(--bg);color:var(--text);font-family:'Poppins',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
-      .shell{max-width:960px;margin:0 auto;padding:18px}
-      header{display:flex;align-items:center;gap:12px;margin:6px 0 12px}
-      .logo{width:44px;height:44px;border-radius:10px;object-fit:contain;background:#000}
+      html,body{height:100%}
+      body{margin:0;background:var(--bg);color:var(--text);font-family:'Poppins',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+      a{color:#0b57d0}
+      .shell{max-width:980px;margin:0 auto;padding:18px}
+
+      /* Header with centered big logo */
+      .header{display:flex;flex-direction:column;align-items:center;gap:6px;margin:4px 0 12px}
+      .logo-lg{width:140px;height:140px;object-fit:contain}
       .brand{font-weight:700;letter-spacing:.2px}
-      .panel{background:var(--panel);border:1px solid var(--muted);border-radius:14px;padding:16px}
+
+      .panel{background:var(--panel);border:1px solid var(--muted);border-radius:14px;padding:18px}
       .stack{display:flex;flex-direction:column;gap:12px}
       .row{display:flex;gap:12px;flex-wrap:wrap}
-      .row>*{flex:1 1 240px}
+      .row>*{flex:1 1 320px} /* bigger inputs to fill more page */
       input,select,textarea,button{
-        background:var(--panel);color:var(--text);border:1px solid #d1d5db;border-radius:10px;padding:12px;width:100%;
+        background:var(--panel);color:var(--text);border:1px solid #d1d5db;border-radius:12px;padding:14px;width:100%;font-size:16px
       }
       textarea{min-height:120px}
       button{cursor:pointer;transition:.15s ease;font-weight:600}
@@ -40,20 +45,32 @@
       .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
       .card{border:1px solid #e5e7eb;border-radius:12px;background:#fff;padding:14px;cursor:pointer}
       .card.selected{outline:2px solid #9ca3af;border-color:#9ca3af}
-      .slot{display:inline-block;padding:8px 12px;border:1px solid #d1d5db;border-radius:10px;margin:6px 8px 0 0;cursor:pointer;background:#fff}
-      .slot.sel{border-color:#9ca3af;outline:2px solid #9ca3af}
-      .day{padding:10px 12px;border-bottom:1px dashed #e5e7eb;margin-top:6px;background:#fafafa;border-radius:10px}
-      .right{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+
+      .daylist .slot{display:inline-block;padding:8px 12px;border:1px solid #d1d5db;border-radius:10px;margin:6px 8px 0 0;cursor:pointer;background:#fff}
+      .daylist .slot.sel{border-color:#9ca3af;outline:2px solid #9ca3af}
+
       .stickybar{position:sticky;bottom:0;background:#ffffffcc;border:1px solid #e5e7eb;border-radius:14px;padding:10px;backdrop-filter:saturate(1.2) blur(6px);display:flex;align-items:center;justify-content:space-between;margin-top:12px}
       .muted{color:var(--sub);font-size:14px}
+
+      /* Live month calendar */
+      .monthbar{display:flex;align-items:center;justify-content:space-between;margin:8px 0}
+      .monthbar .nav{display:flex;gap:8px}
+      .monthgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+      .dow{font-size:12px;color:var(--sub);text-align:center;margin-bottom:4px}
+      .daycell{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px;text-align:center;cursor:pointer}
+      .daycell.disabled{opacity:.35;cursor:default}
+      .daycell.has{outline:2px solid #9ca3af;border-color:#9ca3af}
+      .daycell.selected{background:#eef2ff;border-color:#93c5fd;outline:2px solid #93c5fd}
     </style>
   </head>
   <body>
     <div class="shell">
-      <header>
-        <img class="logo" src="/logo.png" alt="GM Auto Detailing logo">
+      <!-- Centered header with big logo above the flow -->
+      <div class="header">
+        <img class="logo-lg" src="/logo.png" alt="GM Auto Detailing logo" />
         <div class="brand">GM Auto Detailing</div>
-      </header>
+      </div>
+
       <div id="root"></div>
     </div>
     <script type="module" src="/src/main.jsx"></script>
