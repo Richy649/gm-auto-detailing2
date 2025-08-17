@@ -2,10 +2,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./calendar.css";
 
-const API = import.meta.env.VITE_API || "http://localhost:8787/api";
+/* ===== Config ===== */
+const MAX_DAYS_AHEAD = 30;
+const MIN_LEAD_MIN = 24 * 60;
+const BUFFER_MIN = 30;              // 30-min buffer between jobs
+const SLOT_STEP_MIN = 15;           // 15-min grid for neat times
 
-/* No geolocating for now (show all available days) */
-
+/* ===== Service catalog (fallback if /config is empty) ===== */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -13,10 +16,14 @@ const DEFAULT_SERVICES = {
   premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 220 },
 };
 const DEFAULT_ADDONS = { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } };
-const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
 
+const API = import.meta.env.VITE_API || "http://localhost:8787/api";
+
+/* ===== Utils ===== */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
+const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
+
 const keyLocal = (date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -25,24 +32,104 @@ const keyLocal = (date) => {
 };
 const dstr = (iso) =>
   new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const isWeekend = (d) => [0, 6].includes(d.getDay());
+const addMinutes = (d, mins) => new Date(d.getTime() + mins * 60000);
+const clone = (d) => new Date(d.getTime());
 
-function groupByDayLocal(slots) {
-  const g = {};
-  for (const s of slots || []) {
-    const d = new Date(s.start_iso);
-    const k = keyLocal(d);
-    (g[k] ||= []).push(s);
+function alignUp(date, minutes = SLOT_STEP_MIN) {
+  const d = new Date(date);
+  const ms = minutes * 60000;
+  const rem = d.getTime() % ms;
+  if (rem !== 0) d.setTime(d.getTime() + (ms - rem));
+  return d;
+}
+
+/* ===== Working window (local time) =====
+   Weekdays: 16:00–21:00
+   Weekends: 09:00–19:30
+   We allow the *last* job of the day to end after the window end. */
+function workWindowLocal(day) {
+  const d = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+  let start, end;
+  if (isWeekend(d)) {
+    start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0, 0);
+    end   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 19, 30, 0, 0);
+  } else {
+    start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 16, 0, 0, 0);
+    end   = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 21, 0, 0, 0);
   }
-  for (const k of Object.keys(g)) g[k].sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
-  return g;
-}
-function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
-function sameLocalDay(isoA, isoB) {
-  const a = new Date(isoA), b = new Date(isoB);
-  return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  return { start, end };
 }
 
-/* Header (big centered logo for non-Details steps) — inline size so nothing overrides it */
+/* Resolve service duration, mapping memberships to their visit service duration */
+function serviceDuration(service_key, services) {
+  const svc = services?.[service_key];
+  if (!svc) return 0;
+  if (service_key.includes("membership") && svc.visitService && services[svc.visitService]) {
+    return services[svc.visitService].duration || svc.duration || 0;
+  }
+  return svc.duration || 0;
+}
+
+/* Generate *packed* slots for a day given a duration:
+   - 15-min aligned
+   - 30-min buffer *between* jobs (not before first)
+   - respects 24h lead time
+   - last job may run past the day's end (we still allow its start if it begins before end)
+   - returns [{start_iso, end_iso}]
+*/
+function generateDaySlots(day, durationMin, now = new Date()) {
+  const { start, end } = workWindowLocal(day);
+
+  // Lead-time gate
+  const minStart = addMinutes(now, MIN_LEAD_MIN);
+  const firstStart = alignUp(new Date(Math.max(start.getTime(), minStart.getTime())), SLOT_STEP_MIN);
+
+  if (firstStart > end) return [];
+
+  const slots = [];
+  let cur = firstStart;
+
+  while (true) {
+    // if there's already a slot, we must respect buffer after previous end
+    if (slots.length) {
+      const prevEnd = new Date(slots[slots.length - 1].end_iso);
+      const earliest = addMinutes(prevEnd, BUFFER_MIN);
+      if (cur < earliest) cur = alignUp(earliest, SLOT_STEP_MIN);
+    }
+
+    // normal case: fits inside window
+    const candidateEnd = addMinutes(cur, durationMin);
+    if (candidateEnd <= end) {
+      slots.push({ start_iso: cur.toISOString(), end_iso: candidateEnd.toISOString() });
+      // move to next start by duration+buffer
+      cur = alignUp(addMinutes(candidateEnd, BUFFER_MIN), SLOT_STEP_MIN);
+      if (cur > end && slots.length) break;
+      continue;
+    }
+
+    // overrun case: allow LAST job to start before end even if it ends after
+    if (cur < end) {
+      slots.push({ start_iso: cur.toISOString(), end_iso: candidateEnd.toISOString() });
+    }
+    break;
+  }
+
+  return slots;
+}
+
+/* Build a 30-day availability map keyed by 'YYYY-MM-DD' for the chosen duration */
+function generateAvailability(daysAhead, durationMin, now = new Date()) {
+  const map = {};
+  for (let i = 0; i <= daysAhead; i++) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+    const slots = generateDaySlots(day, durationMin, now);
+    if (slots.length) map[keyLocal(day)] = slots;
+  }
+  return map;
+}
+
+/* ===== Sticky logo header ===== */
 function Header() {
   return (
     <header className="gm header">
@@ -51,7 +138,7 @@ function Header() {
   );
 }
 
-/* ---------------- Details (logo left VERY BIG, content right; input order) ---------------- */
+/* ===== Details (logo big left; order: Name, Address, Email, Phone) ===== */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
@@ -61,12 +148,10 @@ function Details({ onNext, state, setState }) {
   return (
     <div className="gm page-section">
       <div className="gm details-grid">
-        {/* Left: huge logo (forced inline height so nothing caps it) */}
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "320px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "360px" }} />
         </div>
 
-        {/* Right: refined intro + form */}
         <div className="gm details-right">
           <p className="gm hero-note">
             Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right address and can reach you if plans change.
@@ -93,7 +178,7 @@ function Details({ onNext, state, setState }) {
   );
 }
 
-/* ---------------- Services (Add-on cards with Add/Remove; headings centered) ---------------- */
+/* ===== Services (Add-on cards with price + Add/Remove; headings centred) ===== */
 function Services({ onNext, onBack, state, setState, config }) {
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
@@ -102,26 +187,16 @@ function Services({ onNext, onBack, state, setState, config }) {
   const [service, setService] = useState(state.service_key && svc[state.service_key] ? state.service_key : firstKey);
   const [addons, setAddons] = useState(state.addons || []);
 
-  // Update addons only when addons change
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
-  // When service changes: clear incompatible selections + reset date/slots (fixes your glitch)
+  // When service changes: reset incompatible selections + date/slots (prevents carry-over)
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
       const next = { ...s, service_key: service };
-
-      // Reset date & prefetched times to avoid stale highlights
       next.selectedDay = null;
       next.prefetchedDaySlots = [];
-
-      if (isMembership) {
-        // Membership: must not have a single-slot selection
-        next.slot = null;
-      } else {
-        // Standard service: must not keep membership picks
-        next.membershipSlots = [];
-      }
+      if (isMembership) next.slot = null; else next.membershipSlots = [];
       return next;
     });
   }, [service, setState]);
@@ -142,17 +217,11 @@ function Services({ onNext, onBack, state, setState, config }) {
         }}
       >
         <div className="benefit-title" style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
-          <span>{title}</span>
-          <span>{fmtGBP(price)}</span>
+          <span>{title}</span><span>{fmtGBP(price)}</span>
         </div>
         <div className="benefit-copy">{desc}</div>
         <div style={{marginTop:10, display:'flex', justifyContent: align === 'left' ? 'flex-start' : 'flex-end'}}>
-          <button
-            type="button"
-            className="gm btn"
-            onClick={() => toggleAddon(k)}
-            style={{ fontWeight: 900 }}
-          >
+          <button type="button" className="gm btn" onClick={() => toggleAddon(k)} style={{ fontWeight: 900 }}>
             {on ? "Remove" : "Add"}
           </button>
         </div>
@@ -187,12 +256,10 @@ function Services({ onNext, onBack, state, setState, config }) {
 
         <div className="gm section-divider"></div>
 
-        {/* Centered add-ons title */}
         <div className="gm muted" style={{ marginBottom: 10, fontWeight: 900, textAlign:'center' }}>
           Add-ons (optional)
         </div>
 
-        {/* WAX left, POLISH right — selectable cards with price + Add button */}
         <div className="gm addon-benefits two-col" style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:12}}>
           <AddonCard
             k="wax"
@@ -210,7 +277,6 @@ function Services({ onNext, onBack, state, setState, config }) {
           />
         </div>
 
-        {/* CTA at the very bottom */}
         <div className="gm actions bottom-stick">
           <button className="gm btn" onClick={onBack}>Back</button>
           <button className="gm btn primary" onClick={onNext}>See times</button>
@@ -220,24 +286,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* Merge left+right availability so customers can book any day */
-async function fetchAllSlots(service_key, addons) {
-  const body = (area) => ({
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ service_key, addons: addons || [], area })
-  });
-  const [left, right] = await Promise.all([
-    fetch(API + "/availability", body("left")).then(r=>r.json()).catch(()=>({slots:[]})),
-    fetch(API + "/availability", body("right")).then(r=>r.json()).catch(()=>({slots:[]})),
-  ]);
-  const map = new Map();
-  for (const s of (left.slots||[]))  map.set(s.start_iso, s);
-  for (const s of (right.slots||[])) map.set(s.start_iso, s);
-  return Array.from(map.values()).sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
-}
-
-/* Month Grid: starts at FIRST bookable day, ends at LAST bookable day */
+/* ===== Calendar grid (driven by client-generated availability) ===== */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -255,25 +304,22 @@ function MonthGrid({
   const monthTitle = monthStart.toLocaleString([], { month: "long", year: "numeric" });
   const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
 
-  const earliestDate = earliestKey ? new Date(earliestKey + "T00:00:00") : null;
-  const latestDate   = latestKey   ? new Date(latestKey   + "T00:00:00") : null;
-
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
   const curIdx = ym(monthStart);
-  const minIdx = earliestDate ? ym(new Date(earliestDate.getFullYear(), earliestDate.getMonth(), 1)) : curIdx;
-  const maxIdx = latestDate   ? ym(new Date(latestDate.getFullYear(),   latestDate.getMonth(),   1)) : curIdx;
+  const minIdx = earliestKey ? ym(new Date(earliestKey + "T00:00:00")) : curIdx;
+  const maxIdx = latestKey   ? ym(new Date(latestKey   + "T00:00:00")) : curIdx;
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  const inEarliest = earliestDate &&
-    monthStart.getFullYear() === earliestDate.getFullYear() &&
-    monthStart.getMonth()  === earliestDate.getMonth();
-  const inLatest = latestDate &&
-    monthStart.getFullYear() === latestDate.getFullYear() &&
-    monthStart.getMonth()  === latestDate.getMonth();
+  const inEarliest = earliestKey && monthStart.getFullYear() === new Date(earliestKey+"T00:00:00").getFullYear() && monthStart.getMonth() === new Date(earliestKey+"T00:00:00").getMonth();
+  const inLatest   = latestKey   && monthStart.getFullYear() === new Date(latestKey+"T00:00:00").getFullYear()   && monthStart.getMonth() === new Date(latestKey+"T00:00:00").getMonth();
 
-  const startDay = inEarliest ? earliestDate.getDate() : 1;
-  const endDay   = inLatest   ? latestDate.getDate()   : daysInMonth;
+  const startDay = inEarliest ? new Date(earliestKey+"T00:00:00").getDate() : 1;
+  const endDay   = inLatest   ? new Date(latestKey+"T00:00:00").getDate()   : daysInMonth;
+
+  const counterStyle = {
+    background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900,
+  };
 
   const closeBtnStyle = {
     position: "absolute", top: 6, right: 6, width: 22, height: 22,
@@ -290,7 +336,7 @@ function MonthGrid({
     const has = !!slotsByDay[k];
     const selected = selectedDay === k;
     const chosen = bookedDays.includes(k);
-    const label = `${day}${daySuffix(day)}`;
+    const label = `${day}`;
 
     cells.push(
       <div key={k} className="gm daywrap" style={{ position: "relative" }}>
@@ -319,20 +365,9 @@ function MonthGrid({
     );
   }
 
-  // Amber counter style (same yellow family as chosen day) + centered month title
-  const counterStyle = {
-    background: "#fff7ed",
-    border: "1px solid #f59e0b",
-    color: "#b45309",
-    fontWeight: 900,
-  };
-
   return (
     <div>
-      <div
-        className="gm monthbar"
-        style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center' }}
-      >
+      <div className="gm monthbar" style={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'center' }}>
         <div className="gm monthtitle" style={{ justifySelf:'center' }}>{monthTitle}</div>
         <div className="gm monthtools">
           {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
@@ -356,18 +391,43 @@ function MonthGrid({
   );
 }
 
-function Calendar({ onNext, onBack, state, setState }) {
+/* ===== Calendar container ===== */
+function Calendar({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
-  const [slots, setSlots] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const durationMin = serviceDuration(state.service_key, services);
 
+  // Build 30-day availability map for chosen duration
+  const [slotsByDay, setSlotsByDay] = useState({});
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
-  // build helper that ignores clicks on already-booked days (extra safety for very fast clicks)
+  useEffect(() => {
+    const map = generateAvailability(MAX_DAYS_AHEAD, durationMin, new Date());
+    setSlotsByDay(map);
+    const keys = Object.keys(map).sort();
+    if (keys.length && !selectedDay) {
+      setSelectedDay(keys[0]);
+      setState((s)=>({ ...s, selectedDay: keys[0] }));
+      const first = new Date(keys[0] + "T00:00:00");
+      setMonthCursor(new Date(first.getFullYear(), first.getMonth(), 1));
+    } else if (selectedDay) {
+      const d = new Date(selectedDay + "T00:00:00");
+      setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [durationMin]);
+
+  const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
+  const earliestKey = allKeys[0] || null;
+  const latestKey = allKeys[allKeys.length - 1] || null;
+
   const bookedDays = (state.membershipSlots || []).map(s => keyLocal(new Date(s.start_iso)));
+  const selectedIsBooked = bookedDays.includes(selectedDay || "");
+
+  const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
+
   const onPickDay = (k) => {
-    if (bookedDays.includes(k)) return; // ignore choosing a day that’s already used
+    if (bookedDays.includes(k)) return;
     setSelectedDay(k);
     setState((s) => ({ ...s, selectedDay: k }));
   };
@@ -379,43 +439,9 @@ function Calendar({ onNext, onBack, state, setState }) {
     }));
   };
 
-  useEffect(() => {
-    setLoading(true);
-    fetchAllSlots(state.service_key, state.addons)
-      .then((s) => {
-        setSlots(s);
-        const g = groupByDayLocal(s);
-        const keys = Object.keys(g).sort();
-
-        if (!selectedDay) {
-          const firstKey = keys[0] || null;
-          if (firstKey) {
-            const firstDate = new Date(firstKey + "T00:00:00");
-            setMonthCursor(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
-            setSelectedDay(firstKey);
-            setState((st)=>({ ...st, selectedDay: firstKey }));
-          }
-        } else {
-          const d = new Date(selectedDay + "T00:00:00");
-          setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
-        }
-      })
-      .finally(() => setLoading(false));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.service_key, state.addons]);
-
-  const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
-  const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
-  const earliestKey = allKeys[0] || null;
-  const latestKey = allKeys[allKeys.length - 1] || null;
-
-  const selectedIsBooked = bookedDays.includes(selectedDay || "");
-  const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-
   return (
-    <div className={cx("gm page-section", loading && "loading")}>
+    <div className="gm page-section">
       <Header />
-
       <div className="gm panel">
         <h2 className="gm h2" style={{ marginBottom: 12, textAlign: "center" }}>Pick a date</h2>
 
@@ -446,7 +472,7 @@ function Calendar({ onNext, onBack, state, setState }) {
             className="gm btn primary"
             disabled={!selectedDay || selectedIsBooked}
             onClick={() => {
-              // Preload the day’s times to avoid flicker
+              // Preload the day’s times (no flicker)
               setState((s)=>({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
               onNext();
             }}
@@ -459,29 +485,31 @@ function Calendar({ onNext, onBack, state, setState }) {
   );
 }
 
-/* -------- Times (no flicker; swap-on-same-day; removable selection; big boxes) ---------- */
-function Times({ onNext, onBack, state, setState }) {
+/* ===== Times (built from client-generated availability; swap-on-same-day; “×” to remove) ===== */
+function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
+
+  const durationMin = serviceDuration(state.service_key, services);
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
-  const [isLoading, setIsLoading] = useState(daySlots.length === 0);
 
   useEffect(() => {
-    fetchAllSlots(state.service_key, state.addons)
-      .then((s)=>{
-        const filtered = s.filter((sl)=> keyLocal(new Date(sl.start_iso)) === selectedDay);
-        setDaySlots(filtered);
-      })
-      .finally(()=> setIsLoading(false));
-  }, [selectedDay, state.service_key, state.addons]);
+    // Rebuild slots for this day and this duration (instant, no network)
+    const d = new Date(selectedDay + "T00:00:00");
+    setDaySlots(generateDaySlots(d, durationMin, new Date()));
+  }, [selectedDay, durationMin]);
 
-  // current selection on this day
   const selected =
     isMembership
       ? (state.membershipSlots || []).find((s)=> s && keyLocal(new Date(s.start_iso)) === selectedDay)
       : state.slot && keyLocal(new Date(state.slot.start_iso)) === selectedDay
           ? state.slot
           : null;
+
+  function sameLocalDay(isoA, isoB) {
+    const a = new Date(isoA), b = new Date(isoB);
+    return a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  }
 
   // SWAP-on-same-day, prevent dupes, atomic update to resist fast clicks
   function choose(slot) {
@@ -507,7 +535,6 @@ function Times({ onNext, onBack, state, setState }) {
     });
   }
 
-  // remove selection handlers (for the "×" close buttons)
   function removeSelectedSlot(slot) {
     if (!isMembership) {
       setState((st) => ({ ...st, slot: null }));
@@ -536,11 +563,6 @@ function Times({ onNext, onBack, state, setState }) {
         <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 10 }}>
           {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
         </h2>
-
-        {/* No flicker: only show "no times" if not loading */}
-        {!isLoading && daySlots.length === 0 && (
-          <div className="gm note">No times on this day. Go back and pick another date.</div>
-        )}
 
         <div className="gm timegrid">
           {daySlots.map((s)=> {
@@ -588,6 +610,7 @@ function Times({ onNext, onBack, state, setState }) {
   );
 }
 
+/* ===== Confirm (unchanged logic) ===== */
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = React.useMemo(() => {
@@ -648,7 +671,7 @@ function Confirm({ onBack, state, setState }) {
   );
 }
 
-/* ---------------- APP ---------------- */
+/* ===== App (stepper) ===== */
 function App() {
   const [state, setState] = useState({});
   const [step, setStep] = useState(0);
@@ -665,6 +688,8 @@ function App() {
       .catch(() => setConfig({ services: DEFAULT_SERVICES, addons: DEFAULT_ADDONS }));
   }, []);
 
+  const services = hasKeys(config.services) ? config.services : DEFAULT_SERVICES;
+
   return (
     <div className="gm-site">
       <div className="gm-booking wrap">
@@ -680,9 +705,10 @@ function App() {
         )}
         {step === 2 && (
           <Calendar
+            services={services}
             onNext={() => setStep(3)}
             onBack={() => {
-              // On leaving Calendar back to Services: reset selections entirely (your request)
+              // Leaving Calendar back to Services: reset selections entirely
               setState((s)=>({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] }));
               setStep(1);
             }}
@@ -690,8 +716,8 @@ function App() {
             setState={setState}
           />
         )}
-        {step === 3 && <Times    onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
-        {step === 4 && <Confirm  onBack={() => setStep(3)} state={state} setState={setState} />}
+        {step === 3 && <Times services={services} onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
+        {step === 4 && <Confirm onBack={() => setStep(3)} state={state} setState={setState} />}
       </div>
     </div>
   );
