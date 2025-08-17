@@ -1,0 +1,158 @@
+/* Bubbly, modern vibe */
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;800&display=swap');
+
+:root{
+  --bg:#f5f7fb;         /* light grey page background */
+  --panel:#ffffff;      /* cards / inputs */
+  --text:#0f172a;
+  --muted:#6b7280;
+  --brand:#4b5563;      /* your grey primary */
+  --brand-weak:#9ca3af;
+  --ok:#10b981;
+  --shadow: 0 8px 24px rgba(15,23,42,0.06);
+  --radius: 16px;
+}
+
+*{ box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body{
+  margin:0;
+  font-family: 'Nunito', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color:var(--text);
+  background:var(--bg);
+}
+
+/* Layout */
+.wrap{
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+.header{
+  display:flex; align-items:center; justify-content:center;
+  padding: 12px 0 20px;
+}
+.logo{
+  height: 72px;
+  object-fit: contain;
+}
+
+/* Panels / cards */
+.panel{
+  background: var(--panel);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin: 12px 0;
+}
+.panel.elevated{ box-shadow: var(--shadow); }
+.panel.sub{ flex:1 1 320px; }
+
+/* Text */
+h2{ margin: 0 0 10px; font-weight: 800; letter-spacing: 0.2px; }
+h3{ margin: 0 0 8px; font-weight: 800; letter-spacing: 0.2px; }
+.muted{ color: var(--muted); font-weight: 600; }
+
+/* Inputs */
+.row{ display:flex; gap: 10px; flex-wrap: wrap; }
+.input{
+  flex:1 1 240px;
+  background:#fff; border:1px solid #e5e7eb; border-radius: 12px;
+  padding: 12px 14px; font-size: 16px;
+  outline: none;
+}
+.input:focus{ border-color:#cbd5e1; box-shadow: 0 0 0 4px rgba(203,213,225,0.35); }
+
+/* Buttons & chips */
+.btn{
+  appearance:none; border:1px solid #e5e7eb; background:#fff; color:var(--text);
+  padding: 10px 14px; border-radius: 999px; font-weight: 700; cursor:pointer;
+}
+.btn:disabled{ opacity:0.5; cursor: not-allowed; }
+.btn.primary{ background: var(--brand); color:#fff; border-color: var(--brand); }
+.btn.ghost{ background:transparent; border-color:#e5e7eb; }
+
+.actions{ display:flex; gap:10px; justify-content:flex-end; margin-top: 12px; }
+
+.chip{
+  border:1px solid #e5e7eb; background:#fff; border-radius:999px;
+  padding:8px 12px; font-weight:700;
+}
+.chip-on{ background:#eef2ff; border-color:#c7d2fe; }
+
+/* Service cards */
+.cards{
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap:12px;
+}
+.card{
+  text-align:left; padding:14px; border:1px solid #e5e7eb; border-radius:16px;
+  background:#fff; cursor:pointer; transition: transform .05s ease;
+}
+.card:hover{ transform: translateY(-1px); }
+.card.selected{ outline: 3px solid var(--brand-weak); }
+.card-title{ font-weight:800; margin-bottom: 4px; }
+
+/* Notes */
+.note{
+  background:#f8fafc; border:1px dashed #e5e7eb;
+  padding:10px 12px; border-radius:12px; color:var(--muted);
+}
+.note.error{ border-color:#fecaca; color:#b91c1c; background:#fff1f2; }
+
+/* Month Calendar */
+.monthwrap{ }
+.monthbar{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom: 6px;
+}
+.monthtitle{ font-weight:800; font-size: 18px; }
+.monthtools{ display:flex; gap:8px; align-items:center; }
+.counter{
+  background:#ecfeff; color:#0ea5e9; border:1px solid #bae6fd;
+  padding:6px 10px; border-radius: 999px; font-weight:800;
+}
+
+.dowrow{
+  display:grid; grid-template-columns: repeat(7, 1fr);
+  gap:6px; margin-bottom:6px; padding: 0 2px;
+}
+.dow{ text-align:center; color:var(--muted); font-weight:800; font-size:12px; }
+
+.monthgrid{
+  display:grid; grid-template-columns: repeat(7, 1fr);
+  gap:6px; background:#f1f5f9; border-radius:16px; padding:10px;
+}
+
+.daycell{
+  width: 100%; aspect-ratio: 1 / 1;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background:#fff;
+  font-weight:800;
+  display:flex; align-items:center; justify-content:center;
+  cursor:not-allowed; color:#94a3b8;
+}
+.daycell.has{
+  cursor:pointer; color:#0f172a; border-color:#d1d5db;
+}
+.daycell.has:hover{
+  outline: 3px solid rgba(156,163,175,0.45);
+}
+.daycell.selected{
+  outline: 3px solid var(--brand-weak);
+}
+
+/* Time pills */
+.times-heading{ margin-bottom: 8px; }
+.timepills{ display:flex; flex-wrap: wrap; gap:10px; }
+.pill{
+  border:1px solid #e5e7eb; background:#fff; border-radius:999px;
+  padding:10px 14px; font-weight:800; cursor:pointer;
+}
+.pill-on{ background:#dcfce7; border-color:#86efac; }
+
+/* Loading feel */
+.loading{ opacity:0.6; pointer-events:none; }
+.total{ font-size: 32px; font-weight: 900; }
