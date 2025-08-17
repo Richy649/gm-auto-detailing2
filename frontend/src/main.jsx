@@ -128,14 +128,13 @@ function Details({ onNext, state, setState }) {
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "380px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "420px" }} />
         </div>
         <div className="gm details-right">
-          <p className="gm hero-note">
-            Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right address and can reach you if plans change.
-            I treat every booking like it’s my own car—if anything isn’t clear, message me and I’ll make it right.
+          <p className="gm hero-note" style={{ fontSize: 17, lineHeight: 1.5, letterSpacing: ".2px", fontWeight: 500 }}>
+            Welcome to <b>gmautodetailing.uk booking app</b> — we use your details in order to make sure we arrive on time and at the right location.
           </p>
-          <h2 className="gm h2" style={{ textAlign: "center" }}>Your details</h2>
+          <h2 className="gm h2" style={{ textAlign: "center", fontWeight: 900 }}>Your details</h2>
           <div className="gm row">
             <input className="gm input" placeholder="Full name" value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} />
             <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e) => setV({ ...v, address: e.target.value })} />
@@ -208,7 +207,7 @@ function Services({ onNext, onBack, state, setState, config }) {
     <div className="gm page-section">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2" style={{ textAlign: "center" }}>Choose your service</h2>
+        <h2 className="gm h2" style={{ textAlign: "center", fontWeight: 900 }}>Choose your service</h2>
 
         <div className="gm cards">
           {Object.entries(svc).map(([key, val]) => {
@@ -293,6 +292,20 @@ function MonthGrid({
   const endDay = inLatest ? new Date(latestKey + "T00:00:00").getDate() : daysInMonth;
 
   const counterStyle = { background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900 };
+
+  const navBtn = {
+    fontSize: 14,
+    fontWeight: 900,
+    padding: "8px 12px",
+    borderRadius: 10,
+    border: "1px solid #0f172a",
+    background: "#0f172a",
+    color: "#fff",
+    cursor: "pointer",
+    opacity: 1
+  };
+  const navBtnDisabled = { ...navBtn, opacity: 0.4, cursor: "not-allowed" };
+
   const closeBtnStyle = {
     position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 999,
     background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
@@ -337,22 +350,40 @@ function MonthGrid({
 
   return (
     <div>
-      <div className="gm monthbar" style={{ display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center' }}>
-        <div className="gm monthtitle" style={{ justifySelf: 'center' }}>{monthTitle}</div>
-        <div className="gm monthtools">
-          {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
-          <button className="gm btn ghost" disabled={prevDisabled}
+      {/* Centered month bar with clear Previous / Next buttons */}
+      <div className="gm monthbar"
+           style={{ display:'grid', gridTemplateColumns:'auto 1fr auto', alignItems:'center', gap:12, marginBottom:8 }}>
+        <div style={{ display:'flex', gap:8 }}>
+          <button
+            className="gm btn"
+            style={prevDisabled ? navBtnDisabled : navBtn}
+            disabled={prevDisabled}
             onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}
-          >‹</button>
-          <button className="gm btn ghost" disabled={nextDisabled}
+          >
+            Previous
+          </button>
+        </div>
+
+        <div className="gm monthtitle" style={{ justifySelf:'center', textAlign:'center', fontWeight:900, fontSize:22 }}>
+          {monthTitle}
+        </div>
+
+        <div style={{ display:'flex', gap:8, alignItems:'center', justifySelf:'end' }}>
+          {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
+          <button
+            className="gm btn"
+            style={nextDisabled ? navBtnDisabled : navBtn}
+            disabled={nextDisabled}
             onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}
-          >›</button>
+          >
+            Next
+          </button>
         </div>
       </div>
 
       <div className="gm small-note">We hope you can find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
       <div className="gm dowrow">
-        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
+        {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
       </div>
       <div className="gm monthgrid">{cells}</div>
     </div>
@@ -404,7 +435,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
     <div className="gm page-section">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2" style={{ marginBottom: 12, textAlign: "center" }}>Pick a date</h2>
+        <h2 className="gm h2" style={{ marginBottom: 12, textAlign: "center", fontWeight: 900 }}>Pick a date</h2>
 
         <MonthGrid
           slotsByDay={slotsByDay}
@@ -482,7 +513,6 @@ function Times({ onNext, onBack, state, setState, services }) {
         ms[idxSameDay] = slot; // swap to newly clicked time
         return { ...st, membershipSlots: ms };
       }
-      // prevent booking two visits on the same day
       if (ms.some(x => keyLocal(new Date(x.start_iso)) === dayK)) return { ...st, membershipSlots: ms };
       if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
       return { ...st, membershipSlots: [ms[0], slot] };
@@ -517,12 +547,12 @@ function Times({ onNext, onBack, state, setState, services }) {
       <div className="gm details-grid">
         {/* Left: BIG logo */}
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "380px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "420px" }} />
         </div>
 
         {/* Right: Date + big time boxes */}
         <div className="gm details-right">
-          <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 14 }}>
+          <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 16, fontWeight: 900 }}>
             {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
           </h2>
 
@@ -530,8 +560,8 @@ function Times({ onNext, onBack, state, setState, services }) {
             className="gm timegrid"
             style={{
               display: "grid",
-              gap: 12,
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 14,
+              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             }}
           >
             {daySlots.map((s)=> {
@@ -544,11 +574,11 @@ function Times({ onNext, onBack, state, setState, services }) {
                     onClick={()=>choose(s)}
                     type="button"
                     style={{
-                      fontSize: 22,
+                      fontSize: 26,
                       fontWeight: 900,
-                      padding: "22px 18px",
-                      minHeight: 72,
-                      borderRadius: 14,
+                      padding: "26px 22px",
+                      minHeight: 88,
+                      borderRadius: 16,
                     }}
                   >
                     {fmtTime(s.start_iso)}
@@ -569,7 +599,7 @@ function Times({ onNext, onBack, state, setState, services }) {
             })}
           </div>
 
-          <div className="gm actions" style={{ marginTop: 16 }}>
+          <div className="gm actions" style={{ marginTop: 18, display:'flex', justifyContent:'flex-end', gap:8 }}>
             <button className="gm btn" onClick={onBack}>Back to calendar</button>
             <button
               className="gm btn primary"
@@ -591,7 +621,7 @@ function Times({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===== Confirm (totals with your prices; add-ons don't change time) ===== */
+/* ===== Confirm (simple, bold, centered title; clean summary) ===== */
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = React.useMemo(() => {
@@ -626,24 +656,24 @@ function Confirm({ onBack, state, setState }) {
     <div className="gm page-section">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2">Confirm</h2>
+        <h2 className="gm h2" style={{ textAlign:'center', fontWeight: 900, marginBottom: 10 }}>Confirm Booking</h2>
+
         <div className="gm row">
-          <div className="gm panel sub">
-            <div><b>Name:</b> {state.customer?.name}</div>
-            <div><b>Address:</b> {state.customer?.address}</div>
-            <div><b>Email:</b> {state.customer?.email}</div>
-            <div><b>Phone:</b> {state.customer?.phone}</div>
-            <div><b>Service:</b> {state.service_key}</div>
-            <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
-            <div><b>When:</b> {when || "—"}</div>
+          <div className="gm panel sub" style={{ flex: 1 }}>
+            <div style={{ marginBottom: 6 }}><b>Date & time:</b> {when || "—"}</div>
+            <div style={{ marginBottom: 6 }}><b>Name:</b> {state.customer?.name}</div>
+            <div style={{ marginBottom: 6 }}><b>Address:</b> {state.customer?.address}</div>
+            <div style={{ marginBottom: 6 }}><b>Email:</b> {state.customer?.email}</div>
+            <div style={{ marginBottom: 6 }}><b>Phone:</b> {state.customer?.phone}</div>
+            <div style={{ marginBottom: 6 }}><b>Service:</b> {state.service_key}</div>
           </div>
-          <div className="gm panel sub">
-            <div className="gm muted">Total due</div>
-            <div className="gm total">{fmtGBP(total)}</div>
+          <div className="gm panel sub" style={{ width: 280, textAlign:'center' }}>
+            <div className="gm muted" style={{ fontSize: 14 }}>Amount due</div>
+            <div className="gm total" style={{ fontSize: 36, fontWeight: 900 }}>{fmtGBP(total)}</div>
           </div>
         </div>
 
-        <div className="gm actions">
+        <div className="gm actions" style={{ display:'flex', justifyContent:'space-between' }}>
           <button className="gm btn" onClick={onBack}>Back</button>
           <button className="gm btn primary" onClick={confirm}>Confirm & Pay</button>
         </div>
