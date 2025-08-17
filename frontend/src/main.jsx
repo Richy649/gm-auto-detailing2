@@ -7,9 +7,9 @@ const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 /* ===== Booking window / rules ===== */
 const MAX_DAYS_AHEAD = 30;
 const MIN_LEAD_MIN = 24 * 60; // 24 hours
-const BUFFER_MIN = 30;
+const BUFFER_MIN = 30; // kept for reference in templates
 
-/* ===== Catalog (with your prices) ===== */
+/* ===== Catalog (your prices) ===== */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 40 },
   full: { name: "Full Detail", duration: 120, price: 60 },
@@ -18,6 +18,7 @@ const DEFAULT_SERVICES = {
 };
 const DEFAULT_ADDONS = { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } };
 
+/* ===== Small helpers ===== */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
@@ -29,7 +30,7 @@ const keyLocal = (date) => {
   return `${y}-${m}-${d}`;
 };
 const dstr = (iso) =>
-  new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 
 const isWeekend = (d) => [0, 6].includes(d.getDay());
 const addMinutes = (d, mins) => new Date(d.getTime() + mins * 60000);
@@ -37,113 +38,78 @@ const toISO = (day, hm) => {
   const [H, M] = hm.split(":").map(Number);
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), H, M, 0, 0).toISOString();
 };
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
-/* ===== Service duration resolver (memberships map to their visit service) ===== */
+/* ===== Service duration (memberships map to their visit service) ===== */
 function serviceDuration(service_key, services) {
   const svc = services?.[service_key];
   if (!svc) return 0;
-  if (service_key.includes("membership") && svc.visitService && services[svc.visitService]) {
+  if (service_key?.includes("membership") && svc.visitService && services[svc.visitService]) {
     return services[svc.visitService].duration || svc.duration || 0;
   }
   return svc.duration || 0;
 }
 
 /* =========================================================================
-   FAMILY TEMPLATES (capacity-optimised, +45m overrun cap, weekday bans kept)
+   Fixed, buffer-clean templates (no late weekday starts you banned)
    -------------------------------------------------------------------------
-   Weekdays (Mon–Fri) start 16:00. Overrun allowed until 21:45 max.
-   No 19:30 or 21:00 starts.
+   Weekdays (Mon–Fri) start 16:00, overrun ≤ 45 allowed (but we don’t need it
+   in these canonical lists). No 19:30/21:00 starts.
 
-   Families:
-   - W_3x75:         16:00(75), 17:45(75), 19:45(75)
-   - W_2x120:        16:00(120), 18:30(120)
-   - W_MIX_A:        16:00(120), 18:30(75), 20:15(75)
-   - W_MIX_B:        16:00(75), 17:45(120), 20:15(75)
+   - Weekday 75:  16:00, 17:45, 19:45
+   - Weekday 120: 16:00, 18:30
 
-   Weekends (Sat–Sun) start 09:00. Overrun allowed until 20:15 max.
+   Weekends (Sat–Sun) start 09:00, overrun ≤ 45 allowed.
 
-   Families:
-   - WE_6x75:        09:00, 10:45, 12:30, 14:15, 16:00, 17:45 (all 75)
-   - WE_4x120:       09:00, 11:30, 14:00, 16:30 (all 120)
-   - WE_3x120_2x75:  09:00(120), 11:30(120), 14:00(120), 16:30(75), 18:15(75)
-   - WE_1x120_5x75:  09:00(120), 11:30, 13:15, 15:00, 16:45, 18:30 (rest 75)
-   - WE_2x120_3x75:  09:00(120), 11:30(120), 14:00(75), 15:45(75), 17:30(75)
+   - Weekend 75:  09:00, 10:45, 12:30, 14:15, 16:00, 17:45
+   - Weekend 120: 09:00, 11:30, 14:00, 16:30
    ========================================================================= */
-function weekdayFamilies() {
-  return [
-    { id: "W_3x75", slots: [{ t: "16:00", d: 75 }, { t: "17:45", d: 75 }, { t: "19:45", d: 75 }] },
-    { id: "W_2x120", slots: [{ t: "16:00", d: 120 }, { t: "18:30", d: 120 }] },
-    { id: "W_MIX_A", slots: [{ t: "16:00", d: 120 }, { t: "18:30", d: 75 }, { t: "20:15", d: 75 }] },
-    { id: "W_MIX_B", slots: [{ t: "16:00", d: 75 }, { t: "17:45", d: 120 }, { t: "20:15", d: 75 }] },
-  ];
-}
-function weekendFamilies() {
-  return [
-    { id: "WE_6x75", slots: [{ t: "09:00", d: 75 }, { t: "10:45", d: 75 }, { t: "12:30", d: 75 }, { t: "14:15", d: 75 }, { t: "16:00", d: 75 }, { t: "17:45", d: 75 }] },
-    { id: "WE_4x120", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 120 }, { t: "16:30", d: 120 }] },
-    { id: "WE_3x120_2x75", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 120 }, { t: "16:30", d: 75 }, { t: "18:15", d: 75 }] },
-    { id: "WE_1x120_5x75", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 75 }, { t: "13:15", d: 75 }, { t: "15:00", d: 75 }, { t: "16:45", d: 75 }, { t: "18:30", d: 75 }] },
-    { id: "WE_2x120_3x75", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 75 }, { t: "15:45", d: 75 }, { t: "17:30", d: 75 }] },
-  ];
-}
-function familiesForDay(day) { return isWeekend(day) ? weekendFamilies() : weekdayFamilies(); }
-
-/* Pick a compatible family for the first selection */
-function pickFamily(day, timeHHMM, dur) {
-  const fams = familiesForDay(day);
-  const fits = fams.filter(f => f.slots.some(s => s.t === timeHHMM && s.d === dur));
-  if (!fits.length) return null;
-  if (isWeekend(day)) {
-    // Prefer the family that yields more total jobs
-    const score = (f) => f.slots.length;
-    return fits.sort((a, b) => score(b) - score(a))[0];
-  } else {
-    // Weekday priority: mixed > 3x75 > 2x120
-    const order = ["W_MIX_A", "W_MIX_B", "W_3x75", "W_2x120"];
-    return fits.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))[0];
-  }
-}
-
-/* Canonical family BEFORE any pick (prevents 17:45 & 18:30 appearing together) */
 function canonicalFamilyForDuration(day, durationMin) {
   if (isWeekend(day)) return durationMin === 120 ? "WE_4x120" : "WE_6x75";
   return durationMin === 120 ? "W_2x120" : "W_3x75";
 }
-
-/* Build displayable starts for a day:
-   - If a family lock exists → show that family’s starts (for selected duration)
-   - Else → show ONLY canonical family for the selected duration (clean buffer view)
-   - Respect 24h lead
-*/
-function dayStartsForDuration(day, durationMin, familyLockId, now = new Date()) {
+function familiesForDay(day) {
+  return isWeekend(day)
+    ? [
+        { id: "WE_6x75", slots: [{ t: "09:00", d: 75 }, { t: "10:45", d: 75 }, { t: "12:30", d: 75 }, { t: "14:15", d: 75 }, { t: "16:00", d: 75 }, { t: "17:45", d: 75 }] },
+        { id: "WE_4x120", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 120 }, { t: "16:30", d: 120 }] },
+      ]
+    : [
+        { id: "W_3x75", slots: [{ t: "16:00", d: 75 }, { t: "17:45", d: 75 }, { t: "19:45", d: 75 }] },
+        { id: "W_2x120", slots: [{ t: "16:00", d: 120 }, { t: "18:30", d: 120 }] },
+      ];
+}
+function dayStartsCanonical(day, durationMin, now = new Date()) {
   const fams = familiesForDay(day);
-  const famId = familyLockId || canonicalFamilyForDuration(day, durationMin);
-  const fam = fams.find(f => f.id === famId);
+  const famId = canonicalFamilyForDuration(day, durationMin);
+  const fam = fams.find((f) => f.id === famId);
   if (!fam) return [];
   const inLead = addMinutes(now, MIN_LEAD_MIN);
 
   const starts = [];
   for (const s of fam.slots) {
-    if (s.d !== durationMin) continue; // add-ons are zero time; duration = base service only
+    if (s.d !== durationMin) continue; // add-ons = zero time
     const iso = toISO(day, s.t);
-    if (new Date(iso) >= inLead) starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: fam.id, t: s.t, d: s.d });
+    if (new Date(iso) >= inLead) {
+      starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: fam.id, t: s.t, d: s.d });
+    }
   }
   return starts.sort((a, b) => new Date(a.start_iso) - new Date(b.start_iso));
 }
 
-/* Build calendar availability map (days that have at least one start for the chosen duration) */
-function buildCalendarAvailability(durationMin, now = new Date(), dayLocks = {}) {
+/* Calendar availability = days that have at least one canonical start */
+function buildCalendarAvailability(durationMin, now = new Date()) {
   const map = {};
   for (let i = 0; i <= MAX_DAYS_AHEAD; i++) {
     const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
     const k = keyLocal(day);
-    const list = dayStartsForDuration(day, durationMin, dayLocks[k] || null, now);
+    const list = dayStartsCanonical(day, durationMin, now);
     if (list.length) map[k] = list;
   }
   return map;
 }
 
-/* ===== Header ===== */
+/* ===== Header (big logo) ===== */
 function Header() {
   return (
     <header className="gm header">
@@ -152,7 +118,7 @@ function Header() {
   );
 }
 
-/* ===== Details ===== */
+/* ===== Details (logo left, fields right) ===== */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
@@ -169,7 +135,7 @@ function Details({ onNext, state, setState }) {
             Welcome to <b>gmautodetailing.uk</b>. Share your details so we arrive at the right address and can reach you if plans change.
             I treat every booking like it’s my own car—if anything isn’t clear, message me and I’ll make it right.
           </p>
-          <h2 className="gm h2" style={{ textAlign: 'center' }}>Your details</h2>
+          <h2 className="gm h2" style={{ textAlign: "center" }}>Your details</h2>
           <div className="gm row">
             <input className="gm input" placeholder="Full name" value={v.name} onChange={(e) => setV({ ...v, name: e.target.value })} />
             <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e) => setV({ ...v, address: e.target.value })} />
@@ -198,11 +164,11 @@ function Services({ onNext, onBack, state, setState, config }) {
   const [addons, setAddons] = useState(state.addons || []);
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
-  // Switching service clears incompatible selections and any day family locks
+  // Switching service clears any selections
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
-      const next = { ...s, service_key: service, dayLocks: {} };
+      const next = { ...s, service_key: service };
       next.selectedDay = null;
       next.prefetchedDaySlots = [];
       if (isMembership) next.slot = null; else next.membershipSlots = [];
@@ -242,7 +208,7 @@ function Services({ onNext, onBack, state, setState, config }) {
     <div className="gm page-section">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2" style={{ textAlign: 'center' }}>Choose your service</h2>
+        <h2 className="gm h2" style={{ textAlign: "center" }}>Choose your service</h2>
 
         <div className="gm cards">
           {Object.entries(svc).map(([key, val]) => {
@@ -393,18 +359,17 @@ function MonthGrid({
   );
 }
 
-/* ===== Calendar (uses template availability for the chosen service) ===== */
+/* ===== Calendar (built from canonical templates for the chosen service) ===== */
 function Calendar({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const durationMin = serviceDuration(state.service_key, services);
-  const dayLocks = state.dayLocks || {};
 
   const [slotsByDay, setSlotsByDay] = useState({});
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
   useEffect(() => {
-    const map = buildCalendarAvailability(durationMin, new Date(), dayLocks);
+    const map = buildCalendarAvailability(durationMin, new Date());
     setSlotsByDay(map);
     const keys = Object.keys(map).sort();
     if (keys.length && !selectedDay) {
@@ -417,7 +382,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
       setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [durationMin, JSON.stringify(dayLocks)]);
+  }, [durationMin]);
 
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const earliestKey = allKeys[0] || null;
@@ -432,7 +397,6 @@ function Calendar({ onNext, onBack, state, setState, services }) {
     setState((st) => ({
       ...st,
       membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey),
-      dayLocks: { ...(st.dayLocks || {}), [dayKey]: undefined }
     }));
   };
 
@@ -481,21 +445,19 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* -------- Times (logo left, times right; big boxes; family lock stays) ---------- */
+/* -------- Times (stable: no grey-out, no disappearing; logo left/times right) ---------- */
 function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
   const durationMin = serviceDuration(state.service_key, services);
 
   const day = new Date(selectedDay + "T00:00:00");
-  const dayLocks = state.dayLocks || {};
-  const familyLockId = dayLocks[selectedDay] || null;
 
-  // Build starts for this day/duration respecting any lock (no network)
+  // Always show the canonical, buffer-clean starts for this day/duration
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
   useEffect(() => {
-    setDaySlots(dayStartsForDuration(day, durationMin, familyLockId, new Date()));
-  }, [selectedDay, durationMin, familyLockId]);
+    setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
+  }, [selectedDay, durationMin]);
 
   // Current selection on this day (normal or membership)
   const selected =
@@ -505,61 +467,41 @@ function Times({ onNext, onBack, state, setState, services }) {
         ? state.slot
         : null;
 
-  // Choose a slot -> lock family (if not locked), then apply selection (swap-on-same-day for membership)
+  // Choose a slot — no greying/hiding; just set the choice
   function choose(slot) {
-    const t = new Date(slot.start_iso);
-    const hh = String(t.getHours()).padStart(2, "0");
-    const mm = String(t.getMinutes()).padStart(2, "0");
-    const timeHHMM = `${hh}:${mm}`;
-    const dur = durationMin; // add-ons add ZERO time
-
+    if (!isMembership) {
+      setState((st) => ({ ...st, slot }));
+      return;
+    }
+    // Membership: swap time if same day already chosen, else append (max 2 days)
     setState((st) => {
-      // Determine / keep family lock for this day
-      const nextLocks = { ...(st.dayLocks || {}) };
-      if (!nextLocks[selectedDay]) {
-        const fam = pickFamily(day, timeHHMM, dur);
-        if (fam) nextLocks[selectedDay] = fam.id;
-      }
-
-      if (!isMembership) {
-        return { ...st, dayLocks: nextLocks, slot };
-      }
-
-      // Membership: swap on same day, prevent dupes
       const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
       const dayK = keyLocal(new Date(slot.start_iso));
       const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
       if (idxSameDay !== -1) {
-        ms[idxSameDay] = slot; // swap to the newly clicked time
-        return { ...st, dayLocks: nextLocks, membershipSlots: ms };
+        ms[idxSameDay] = slot; // swap to newly clicked time
+        return { ...st, membershipSlots: ms };
       }
-      if (ms.length < 2) return { ...st, dayLocks: nextLocks, membershipSlots: [...ms, slot] };
-      return { ...st, dayLocks: nextLocks, membershipSlots: [ms[0], slot] };
+      // prevent booking two visits on the same day
+      if (ms.some(x => keyLocal(new Date(x.start_iso)) === dayK)) return { ...st, membershipSlots: ms };
+      if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
+      return { ...st, membershipSlots: [ms[0], slot] };
     });
   }
 
-  // Remove selection (also clears family lock if nothing left that day)
+  // Remove selection
   function removeSelectedSlot(slot) {
-    setState((st) => {
-      if (!isMembership) {
-        const next = { ...st, slot: null };
-        const locks = { ...(st.dayLocks || {}) };
-        delete locks[selectedDay];
-        next.dayLocks = locks;
-        return next;
-      }
-      const ms = (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso);
-      const next = { ...st, membershipSlots: ms };
-      if (!ms.find(x => keyLocal(new Date(x.start_iso)) === selectedDay)) {
-        const locks = { ...(st.dayLocks || {}) };
-        delete locks[selectedDay];
-        next.dayLocks = locks;
-      }
-      return next;
-    });
+    if (!isMembership) {
+      setState((st) => ({ ...st, slot: null }));
+    } else {
+      setState((st) => ({
+        ...st,
+        membershipSlots: (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso)
+      }));
+    }
   }
 
-  const canNext = isMembership ? ((state.membershipSlots || []).length > 0) : !!selected;
+  const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
 
   const closeBtnStyle = {
     position: "absolute", top: 10, right: 10, width: 26, height: 26,
@@ -592,14 +534,14 @@ function Times({ onNext, onBack, state, setState, services }) {
               gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             }}
           >
-            {daySlots.map((s) => {
+            {daySlots.map((s)=> {
               const sel = selected?.start_iso === s.start_iso ||
-                (isMembership && (state.membershipSlots || []).some(x => x.start_iso === s.start_iso));
+                          (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
               return (
                 <div key={s.start_iso} className="gm timebox-wrap" style={{ position: "relative" }}>
                   <button
                     className={cx("gm timebox", sel && "timebox-on")}
-                    onClick={() => choose(s)}
+                    onClick={()=>choose(s)}
                     type="button"
                     style={{
                       fontSize: 22,
@@ -609,7 +551,7 @@ function Times({ onNext, onBack, state, setState, services }) {
                       borderRadius: 14,
                     }}
                   >
-                    {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    {fmtTime(s.start_iso)}
                   </button>
                   {sel && (
                     <button
@@ -633,14 +575,14 @@ function Times({ onNext, onBack, state, setState, services }) {
               className="gm btn primary"
               disabled={!canNext}
               onClick={() => {
-                if (isMembership && (state.membershipSlots || []).length === 1) {
+                if (isMembership && (state.membershipSlots||[]).length === 1) {
                   onBack(); // choose second date; first day stays highlighted
                 } else {
                   onNext();
                 }
               }}
             >
-              {isMembership && (state.membershipSlots || []).length === 1 ? "Choose second date" : "Continue"}
+              {isMembership && (state.membershipSlots||[]).length === 1 ? "Choose second date" : "Continue"}
             </button>
           </div>
         </div>
@@ -747,8 +689,8 @@ function App() {
             services={services}
             onNext={() => setStep(3)}
             onBack={() => {
-              // Leaving Calendar resets selections and locks (per your request)
-              setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [], dayLocks: {} }));
+              // Leaving Calendar resets any pending picks
+              setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] }));
               setStep(1);
             }}
             state={state}
