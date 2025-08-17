@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "./calendar.css"; // <- scoped styles only
+import "./calendar.css"; // scoped styles only
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
+const SHOW_LOGO = (import.meta.env.VITE_SHOW_LOGO || "0") === "1"; // set to 1 if you want our logo visible
 
 /* Sheen split (your coords) */
 const SHEEN_SPLIT = {
@@ -15,6 +16,13 @@ function sideOfSplit(A, B, P) {
   const lonOnLine = A.lon + (B.lon - A.lon) * t;
   return P.lon < lonOnLine ? "left" : "right";
 }
+
+/* Allowed days by area — adjusted to avoid adjacent “Sun+Mon” for right side */
+const ALLOWED_DOW = {
+  right: new Set([1, 3, 5]),     // Mon, Wed, Fri
+  left:  new Set([2, 4, 6]),     // Tue, Thu, Sat
+  // (We can re-add Sunday later if you want it.)
+};
 
 /* safe defaults if backend config is empty */
 const DEFAULT_SERVICES = {
@@ -52,8 +60,9 @@ function groupByDayLocal(slots) {
 }
 function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
 
-/* ---------------- Header with single centered logo ---------------- */
+/* ---------------- Header (single logo; toggle via VITE_SHOW_LOGO=1) ------- */
 function Header() {
+  if (!SHOW_LOGO) return null;
   return (
     <header className="gm header">
       <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
@@ -88,7 +97,10 @@ function Details({ onNext, state, setState }) {
   }
 
   return (
-    <div className={cx("gm panel", loading && "loading")}>
+    <div className="gm panel details-panel">
+      {/* space for your “about me” paragraph above the form */}
+      <div className="gm about-space"></div>
+
       <h2 className="gm h2">Your details</h2>
       <div className="gm row">
         <input className="gm input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
@@ -99,6 +111,7 @@ function Details({ onNext, state, setState }) {
         <input className="gm input" placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
       </div>
       {err && <div className="gm note error">{err}</div>}
+
       <div className="gm actions">
         <button className="gm btn" disabled>Back</button>
         <button className="gm btn primary" onClick={next} disabled={!ok || loading}>
@@ -141,8 +154,11 @@ function Services({ onNext, onBack, state, setState, config }) {
         })}
       </div>
 
-      <div style={{ marginTop: 8 }}>
-        <div className="gm muted" style={{ marginBottom: 6 }}>Add-ons (optional)</div>
+      {/* clear separation */}
+      <div className="gm section-divider"></div>
+
+      <div>
+        <div className="gm muted" style={{ marginBottom: 6, fontWeight: 800 }}>Add-ons (optional)</div>
         <div className="gm addon-row">
           {Object.entries(addonsCfg).map(([k, v]) => {
             const on = addons.includes(k);
@@ -159,7 +175,7 @@ function Services({ onNext, onBack, state, setState, config }) {
         </div>
       </div>
 
-      <div className="gm actions">
+      <div className="gm actions bottom-stick">
         <button className="gm btn" onClick={onBack}>Back</button>
         <button className="gm btn primary" onClick={onNext}>See times</button>
       </div>
@@ -167,7 +183,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Strict Month Grid (only current month, hide pre-window days) --- */
+/* ---------- Month Grid (strict; starts at first bookable; no padding) ----- */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -183,7 +199,6 @@ function MonthGrid({
   const monthTitle = monthStart.toLocaleString([], { month: "long", year: "numeric" });
   const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
 
-  const allKeys = Object.keys(slotsByDay).sort();
   const earliestDate = earliestKey ? new Date(earliestKey + "T00:00:00") : null;
   const latestDate   = latestKey   ? new Date(latestKey   + "T00:00:00") : null;
 
@@ -195,23 +210,17 @@ function MonthGrid({
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
+  // Build cells — in the earliest month, start from earliestDate.day (no blank padding).
+  const startDay = (earliestDate &&
+                    earliestDate.getFullYear() === monthStart.getFullYear() &&
+                    earliestDate.getMonth() === monthStart.getMonth())
+                  ? earliestDate.getDate()
+                  : 1;
+
   const cells = [];
-  for (let day = 1; day <= daysInMonth; day++) {
+  for (let day = startDay; day <= daysInMonth; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
-
-    // hide (render blank) anything before the first bookable day if we’re in that earliest month
-    const inEarliestMonth = earliestDate &&
-      d.getFullYear() === earliestDate.getFullYear() &&
-      d.getMonth() === earliestDate.getMonth();
-
-    const beforeWindow = inEarliestMonth && d < earliestDate;
-    if (beforeWindow) {
-      cells.push(<div key={k} className="gm daycell spacer" aria-hidden="true"></div>);
-      continue;
-    }
-
-    // standard rules
     const has = !!slotsByDay[k];          // clickable only if backend returned slots for that exact day
     const selected = selectedDay === k;
     const label = `${day}${daySuffix(day)}`;
@@ -260,9 +269,10 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [loading, setLoading] = useState(true);
 
   const [selectedDay, setSelectedDay] = useState(null);
-  const [selected, setSelected] = useState(state.slot || null);
-  const [selected2, setSelected2] = useState(state.membershipSlots || []);
   const [monthCursor, setMonthCursor] = useState(new Date());
+
+  const area = state.area || "right";
+  const allowedSet = ALLOWED_DOW[area] || new Set();
 
   useEffect(() => {
     setLoading(true);
@@ -272,18 +282,19 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area: state.area || "right",
+        area,
       }),
     })
       .then((r) => r.json())
       .then((d) => {
-        const s = d.slots || [];
-        setSlots(s);
+        // filter slots by allowed DOW so we never show disallowed (no Sun/Mon adjacency on right)
+        const s = (d.slots || []).filter((sl) => allowedSet.has(new Date(sl.start_iso).getDay()));
         const g = groupByDayLocal(s);
         const keys = Object.keys(g).sort();
-        const firstKey = keys[0] || null;
+        setSlots(s);
 
-        // Jump to the month containing the first available day; preselect it
+        // Jump to the month containing the FIRST bookable day & preselect it
+        const firstKey = keys[0] || null;
         if (firstKey) {
           const firstDate = new Date(firstKey + "T00:00:00");
           setMonthCursor(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
@@ -293,37 +304,12 @@ function Calendar({ onNext, onBack, state, setState }) {
         }
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons, state.area]);
+  }, [state.service_key, state.addons, area]);
 
   const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const earliestKey = allKeys[0] || null;
   const latestKey = allKeys[allKeys.length - 1] || null;
-
-  const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-
-  function sameLocalDay(isoA, isoB) {
-    const a = new Date(isoA), b = new Date(isoB);
-    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  }
-  function choose(slot) {
-    if (isMembership) {
-      setSelected2((curr) => {
-        const exists = curr.find((s) => s.start_iso === slot.start_iso);
-        if (exists) return curr.filter((s) => s.start_iso !== slot.start_iso);
-        if (curr.length === 1 && sameLocalDay(curr[0].start_iso, slot.start_iso)) {
-          alert("Membership visits must be on two different days."); return curr;
-        }
-        if (curr.length >= 2) return [curr[1], slot];
-        return [...curr, slot];
-      });
-    } else {
-      setSelected(slot);
-    }
-  }
-
-  const membershipCount = isMembership ? (selected2?.length || 0) : 0;
-  const canNext = isMembership ? membershipCount === 2 : !!selected;
 
   return (
     <div className={cx("gm-booking", loading && "loading")}>
@@ -339,52 +325,125 @@ function Calendar({ onNext, onBack, state, setState }) {
           setMonthCursor={setMonthCursor}
           earliestKey={earliestKey}
           latestKey={latestKey}
-          membershipCount={membershipCount}
+          membershipCount={(state.membershipSlots || []).length}
           isMembership={isMembership}
         />
-      </div>
-
-      <div className="gm panel">
-        <h3 className="gm h3">
-          {selectedDay
-            ? new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
-            : "Select a highlighted date"}
-        </h3>
-
-        {(!selectedDay || daySlots.length === 0) && (
-          <div className="gm note">No times on this day. Pick another highlighted date.</div>
-        )}
-
-        {daySlots.length > 0 && (
-          <div className="gm timepills">
-            {daySlots.map((s) => {
-              const sel = isMembership
-                ? !!selected2.find((x) => x.start_iso === s.start_iso)
-                : selected?.start_iso === s.start_iso;
-              return (
-                <button
-                  key={s.start_iso}
-                  className={cx("gm pill", sel && "pill-on")}
-                  onClick={() => choose(s)}
-                  type="button"
-                >
-                  {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </button>
-              );
-            })}
-          </div>
-        )}
 
         <div className="gm actions">
           <button className="gm btn" onClick={onBack}>Back</button>
-          <button className="gm btn primary" disabled={!canNext}
+          <button
+            className="gm btn primary"
+            disabled={!selectedDay}
             onClick={() => {
-              if (isMembership) setState((s) => ({ ...s, membershipSlots: selected2 }));
-              else setState((s) => ({ ...s, slot: selected }));
+              setState((s)=>({ ...s, selectedDay })); // carry chosen day into next step
               onNext();
             }}
           >
-            Continue
+            See times
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------- Times page (separate step; uses selectedDay from state) ---------- */
+function Times({ onNext, onBack, state, setState }) {
+  const isMembership = state.service_key?.includes("membership");
+  const selectedDay = state.selectedDay;
+  const [daySlots, setDaySlots] = useState([]);
+  const area = state.area || "right";
+  const allowedSet = ALLOWED_DOW[area] || new Set();
+
+  useEffect(() => {
+    if (!selectedDay) return;
+    fetch(API + "/availability", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        service_key: state.service_key,
+        addons: state.addons || [],
+        area,
+      }),
+    })
+      .then((r)=>r.json())
+      .then((d)=>{
+        const s = (d.slots || [])
+          .filter((sl) => {
+            const dt = new Date(sl.start_iso);
+            return allowedSet.has(dt.getDay()) && keyLocal(dt) === selectedDay;
+          })
+          .sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
+        setDaySlots(s);
+      });
+  }, [selectedDay, state.service_key, state.addons, area]);
+
+  const membershipCount = (state.membershipSlots || []).length;
+
+  function choose(slot) {
+    if (isMembership) {
+      // record as visit #1 or #2 (must be different days; enforced by step separation)
+      const current = state.membershipSlots || [];
+      const exists = current.find((s) => s.start_iso === slot.start_iso);
+      if (exists) {
+        setState((st)=>({ ...st, membershipSlots: current.filter((s)=>s.start_iso!==slot.start_iso) }));
+      } else {
+        const next = current.length >= 2 ? [current[1], slot] : [...current, slot];
+        setState((st)=>({ ...st, membershipSlots: next }));
+      }
+    } else {
+      setState((st)=>({ ...st, slot }));
+    }
+  }
+
+  const selected =
+    isMembership
+      ? (state.membershipSlots || []).find((s)=> s && keyLocal(new Date(s.start_iso)) === selectedDay)
+      : state.slot && keyLocal(new Date(state.slot.start_iso)) === selectedDay
+          ? state.slot
+          : null;
+
+  const canNext =
+    isMembership ? membershipCount > 0 : !!selected;
+
+  return (
+    <div className="gm-booking">
+      <Header />
+      <div className="gm panel">
+        <h2 className="gm h2" style={{ marginBottom: 8 }}>
+          {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
+        </h2>
+        {daySlots.length === 0 && <div className="gm note">No times on this day. Go back and pick another date.</div>}
+
+        <div className="gm timepills">
+          {daySlots.map((s)=> {
+            const sel = selected?.start_iso === s.start_iso ||
+                        (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
+            return (
+              <button key={s.start_iso} className={cx("gm pill", sel && "pill-on")} onClick={()=>choose(s)} type="button">
+                {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="gm actions">
+          <button className="gm btn" onClick={onBack}>Back to calendar</button>
+          <button
+            className="gm btn primary"
+            disabled={!canNext}
+            onClick={() => {
+              if (isMembership && (state.membershipSlots||[]).length === 1) {
+                // need second day: return to calendar to pick another (must be different day)
+                setState((s)=>({ ...s, selectedDay: null })); // clear day so they can choose a different one
+                // go back to calendar step
+                onBack();
+              } else {
+                onNext();
+              }
+            }}
+          >
+            {isMembership && (state.membershipSlots||[]).length === 1 ? "Choose second date" : "Continue"}
           </button>
         </div>
       </div>
@@ -419,31 +478,34 @@ function Confirm({ onBack, state, setState }) {
   }
 
   const when = isMembership
-    ? state.membershipSlots?.map((s) => dstr(s.start_iso)).join(" & ")
+    ? (state.membershipSlots||[]).map((s) => dstr(s.start_iso)).join(" & ")
     : state.slot && dstr(state.slot.start_iso);
 
   return (
-    <div className="gm panel">
-      <h2 className="gm h2">Confirm</h2>
-      <div className="gm row">
-        <div className="gm panel sub">
-          <div><b>Name:</b> {state.customer?.name}</div>
-          <div><b>Phone:</b> {state.customer?.phone}</div>
-          <div><b>Address:</b> {state.customer?.address}</div>
-          <div><b>Area:</b> {(state.area || "right").toUpperCase()}</div>
-          <div><b>Service:</b> {state.service_key}</div>
-          <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
-          <div><b>When:</b> {when || "—"}</div>
+    <div className="gm-booking">
+      <Header />
+      <div className="gm panel">
+        <h2 className="gm h2">Confirm</h2>
+        <div className="gm row">
+          <div className="gm panel sub">
+            <div><b>Name:</b> {state.customer?.name}</div>
+            <div><b>Phone:</b> {state.customer?.phone}</div>
+            <div><b>Address:</b> {state.customer?.address}</div>
+            <div><b>Area:</b> {(state.area || "right").toUpperCase()}</div>
+            <div><b>Service:</b> {state.service_key}</div>
+            <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
+            <div><b>When:</b> {when || "—"}</div>
+          </div>
+          <div className="gm panel sub">
+            <div className="gm muted">Total due</div>
+            <div className="gm total">{fmtGBP(total)}</div>
+          </div>
         </div>
-        <div className="gm panel sub">
-          <div className="gm muted">Total due</div>
-          <div className="gm total">{fmtGBP(total)}</div>
-        </div>
-      </div>
 
-      <div className="gm actions">
-        <button className="gm btn" onClick={onBack}>Back</button>
-        <button className="gm btn primary" onClick={confirm}>Confirm & Pay</button>
+        <div className="gm actions">
+          <button className="gm btn" onClick={onBack}>Back</button>
+          <button className="gm btn primary" onClick={confirm}>Confirm & Pay</button>
+        </div>
       </div>
     </div>
   );
@@ -467,14 +529,14 @@ function App() {
   }, []);
 
   return (
-    <div className="gm-booking">
-      {/* Single logo at top */}
+    <div className="gm-booking wrap">
       <Header />
 
       {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
       {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
       {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
-      {step === 3 && <Confirm  onBack={() => setStep(2)} state={state} setState={setState} />}
+      {step === 3 && <Times    onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
+      {step === 4 && <Confirm  onBack={() => setStep(3)} state={state} setState={setState} />}
     </div>
   );
 }
