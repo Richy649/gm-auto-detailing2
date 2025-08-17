@@ -3,7 +3,11 @@ import { createRoot } from "react-dom/client";
 import "./calendar.css";
 
 /* ===================== API base ===================== */
-const API = import.meta.env.VITE_API || "http://localhost:8787/api";
+const API =
+  (typeof window !== "undefined" && window.__API__) ||
+  import.meta.env.VITE_API ||
+  "https://gm-auto-detailing2.onrender.com/api";
+
 
 /* ===================== Booking rules ===================== */
 const MAX_DAYS_AHEAD = 30;
