@@ -3,44 +3,21 @@ import { createRoot } from "react-dom/client";
 import "./calendar.css"; // scoped styles only
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
-const SHOW_LOGO = (import.meta.env.VITE_SHOW_LOGO || "0") === "1"; // set to 1 if you want our logo visible
 
-/* Sheen split (your coords) */
-const SHEEN_SPLIT = {
-  A: { lat: 51.471333, lon: -0.267963 }, // TOP
-  B: { lat: 51.457055, lon: -0.267663 }, // BOTTOM
-};
-const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
-function sideOfSplit(A, B, P) {
-  const t = clamp((P.lat - A.lat) / (B.lat - A.lat), 0, 1);
-  const lonOnLine = A.lon + (B.lon - A.lon) * t;
-  return P.lon < lonOnLine ? "left" : "right";
-}
+/* ---- No geolocating for now (show all days). If you re-enable later, we’ll plug it back. ---- */
 
-/* Allowed days by area — adjusted to avoid adjacent “Sun+Mon” for right side */
-const ALLOWED_DOW = {
-  right: new Set([1, 3, 5]),     // Mon, Wed, Fri
-  left:  new Set([2, 4, 6]),     // Tue, Thu, Sat
-  // (We can re-add Sunday later if you want it.)
-};
-
-/* safe defaults if backend config is empty */
+/* Safe defaults (used only if backend/config is empty) */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
   standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 100 },
   premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 220 },
 };
-const DEFAULT_ADDONS = {
-  wax: { name: "Full Body Wax", price: 15 },
-  polish: { name: "Hand Polish", price: 15 },
-};
+const DEFAULT_ADDONS = { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } };
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
 
-/* utils */
+/* Utils */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
-const dstr = (iso) =>
-  new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 const cx = (...a) => a.filter(Boolean).join(" ");
 const keyLocal = (date) => {
   const y = date.getFullYear();
@@ -48,6 +25,8 @@ const keyLocal = (date) => {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 };
+const dstr = (iso) =>
+  new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 function groupByDayLocal(slots) {
   const g = {};
   for (const s of slots || []) {
@@ -60,9 +39,8 @@ function groupByDayLocal(slots) {
 }
 function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
 
-/* ---------------- Header (single logo; toggle via VITE_SHOW_LOGO=1) ------- */
+/* Single, centered logo (always visible) */
 function Header() {
-  if (!SHOW_LOGO) return null;
   return (
     <header className="gm header">
       <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
@@ -73,33 +51,20 @@ function Header() {
 /* ---------------- Steps ---------------- */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", phone: "", address: "", email: "" });
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
-
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
 
   const ok = v.name.trim().length>1 && v.phone.trim().length>6 && v.address.trim().length>5;
 
-  async function next() {
-    setErr(""); setLoading(true);
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(v.address)}`;
-      const r = await fetch(url, { headers: { Accept: "application/json" } });
-      const arr = r.ok ? await r.json() : [];
-      if (!arr?.length) throw new Error("not found");
-      const P = { lon: parseFloat(arr[0].lon), lat: parseFloat(arr[0].lat) };
-      const area = sideOfSplit(SHEEN_SPLIT.A, SHEEN_SPLIT.B, P);
-      setState((s) => ({ ...s, area }));
-      onNext();
-    } catch {
-      setErr("Could not locate that address. Please check and try again.");
-    } finally { setLoading(false); }
-  }
-
   return (
     <div className="gm panel details-panel">
-      {/* space for your “about me” paragraph above the form */}
-      <div className="gm about-space"></div>
+      <Header />
+
+      {/* Heartfelt intro */}
+      <div className="gm hero-note">
+        Welcome to <b>GM Auto Detailing</b>. Pop your details in below so we arrive at the right place and can reach you if anything
+        changes. I treat every booking like it’s my own car—if you ever need a hand or something isn’t clear, just tell me and
+        I’ll make it right.
+      </div>
 
       <h2 className="gm h2">Your details</h2>
       <div className="gm row">
@@ -110,12 +75,11 @@ function Details({ onNext, state, setState }) {
         <input className="gm input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
         <input className="gm input" placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
       </div>
-      {err && <div className="gm note error">{err}</div>}
 
       <div className="gm actions">
         <button className="gm btn" disabled>Back</button>
-        <button className="gm btn primary" onClick={next} disabled={!ok || loading}>
-          {loading ? "Checking address…" : "Next"}
+        <button className="gm btn primary" onClick={onNext} disabled={!ok}>
+          Next
         </button>
       </div>
     </div>
@@ -133,6 +97,7 @@ function Services({ onNext, onBack, state, setState, config }) {
 
   return (
     <div className="gm panel">
+      <Header />
       <h2 className="gm h2">Choose your service</h2>
 
       <div className="gm cards">
@@ -154,7 +119,6 @@ function Services({ onNext, onBack, state, setState, config }) {
         })}
       </div>
 
-      {/* clear separation */}
       <div className="gm section-divider"></div>
 
       <div>
@@ -183,7 +147,24 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Month Grid (strict; starts at first bookable; no padding) ----- */
+/* Fetch availability from backend and merge left/right days so users can book any day */
+async function fetchAllSlots(service_key, addons) {
+  const body = (area) => ({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ service_key, addons: addons || [], area })
+  });
+  const [left, right] = await Promise.all([
+    fetch(API + "/availability", body("left")).then(r=>r.json()).catch(()=>({slots:[]})),
+    fetch(API + "/availability", body("right")).then(r=>r.json()).catch(()=>({slots:[]})),
+  ]);
+  const map = new Map();
+  for (const s of (left.slots||[]))  map.set(s.start_iso, s);
+  for (const s of (right.slots||[])) map.set(s.start_iso, s);
+  return Array.from(map.values()).sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
+}
+
+/* Strict Month Grid: starts at FIRST bookable day and stops at LAST bookable day */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -202,7 +183,7 @@ function MonthGrid({
   const earliestDate = earliestKey ? new Date(earliestKey + "T00:00:00") : null;
   const latestDate   = latestKey   ? new Date(latestKey   + "T00:00:00") : null;
 
-  // disable nav outside months that actually contain slots
+  // month navigation limits (only months that contain slots)
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
   const curIdx = ym(monthStart);
   const minIdx = earliestDate ? ym(new Date(earliestDate.getFullYear(), earliestDate.getMonth(), 1)) : curIdx;
@@ -210,15 +191,19 @@ function MonthGrid({
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  // Build cells — in the earliest month, start from earliestDate.day (no blank padding).
-  const startDay = (earliestDate &&
-                    earliestDate.getFullYear() === monthStart.getFullYear() &&
-                    earliestDate.getMonth() === monthStart.getMonth())
-                  ? earliestDate.getDate()
-                  : 1;
+  // clip first and last months to the actual window
+  const inEarliest = earliestDate &&
+    monthStart.getFullYear() === earliestDate.getFullYear() &&
+    monthStart.getMonth()  === earliestDate.getMonth();
+  const inLatest = latestDate &&
+    monthStart.getFullYear() === latestDate.getFullYear() &&
+    monthStart.getMonth()  === latestDate.getMonth();
+
+  const startDay = inEarliest ? earliestDate.getDate() : 1;
+  const endDay   = inLatest   ? latestDate.getDate()   : daysInMonth;
 
   const cells = [];
-  for (let day = startDay; day <= daysInMonth; day++) {
+  for (let day = startDay; day <= endDay; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
     const has = !!slotsByDay[k];          // clickable only if backend returned slots for that exact day
@@ -254,6 +239,8 @@ function MonthGrid({
         </div>
       </div>
 
+      <div className="gm small-note">We hope you find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
+
       <div className="gm dowrow">
         {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
       </div>
@@ -271,29 +258,13 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [selectedDay, setSelectedDay] = useState(null);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
-  const area = state.area || "right";
-  const allowedSet = ALLOWED_DOW[area] || new Set();
-
   useEffect(() => {
     setLoading(true);
-    fetch(API + "/availability", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        service_key: state.service_key,
-        addons: state.addons || [],
-        area,
-      }),
-    })
-      .then((r) => r.json())
-      .then((d) => {
-        // filter slots by allowed DOW so we never show disallowed (no Sun/Mon adjacency on right)
-        const s = (d.slots || []).filter((sl) => allowedSet.has(new Date(sl.start_iso).getDay()));
+    fetchAllSlots(state.service_key, state.addons)
+      .then((s) => {
+        setSlots(s);
         const g = groupByDayLocal(s);
         const keys = Object.keys(g).sort();
-        setSlots(s);
-
-        // Jump to the month containing the FIRST bookable day & preselect it
         const firstKey = keys[0] || null;
         if (firstKey) {
           const firstDate = new Date(firstKey + "T00:00:00");
@@ -304,7 +275,7 @@ function Calendar({ onNext, onBack, state, setState }) {
         }
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons, area]);
+  }, [state.service_key, state.addons]);
 
   const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
@@ -316,7 +287,8 @@ function Calendar({ onNext, onBack, state, setState }) {
       <Header />
 
       <div className="gm panel">
-        <h2 className="gm h2" style={{ marginBottom: 12 }}>Pick a date</h2>
+        <h2 className="gm h2" style={{ marginBottom: 12, textAlign: "center" }}>Pick a date</h2>
+
         <MonthGrid
           slotsByDay={slotsByDay}
           selectedDay={selectedDay}
@@ -334,10 +306,7 @@ function Calendar({ onNext, onBack, state, setState }) {
           <button
             className="gm btn primary"
             disabled={!selectedDay}
-            onClick={() => {
-              setState((s)=>({ ...s, selectedDay })); // carry chosen day into next step
-              onNext();
-            }}
+            onClick={() => { setState((s)=>({ ...s, selectedDay })); onNext(); }}
           >
             See times
           </button>
@@ -347,54 +316,20 @@ function Calendar({ onNext, onBack, state, setState }) {
   );
 }
 
-/* -------- Times page (separate step; uses selectedDay from state) ---------- */
+/* -------- Times page (big boxes, date centered) ---------- */
 function Times({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
   const [daySlots, setDaySlots] = useState([]);
-  const area = state.area || "right";
-  const allowedSet = ALLOWED_DOW[area] || new Set();
 
   useEffect(() => {
     if (!selectedDay) return;
-    fetch(API + "/availability", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        service_key: state.service_key,
-        addons: state.addons || [],
-        area,
-      }),
-    })
-      .then((r)=>r.json())
-      .then((d)=>{
-        const s = (d.slots || [])
-          .filter((sl) => {
-            const dt = new Date(sl.start_iso);
-            return allowedSet.has(dt.getDay()) && keyLocal(dt) === selectedDay;
-          })
-          .sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
-        setDaySlots(s);
+    fetchAllSlots(state.service_key, state.addons)
+      .then((s)=>{
+        const filtered = s.filter((sl)=> keyLocal(new Date(sl.start_iso)) === selectedDay);
+        setDaySlots(filtered);
       });
-  }, [selectedDay, state.service_key, state.addons, area]);
-
-  const membershipCount = (state.membershipSlots || []).length;
-
-  function choose(slot) {
-    if (isMembership) {
-      // record as visit #1 or #2 (must be different days; enforced by step separation)
-      const current = state.membershipSlots || [];
-      const exists = current.find((s) => s.start_iso === slot.start_iso);
-      if (exists) {
-        setState((st)=>({ ...st, membershipSlots: current.filter((s)=>s.start_iso!==slot.start_iso) }));
-      } else {
-        const next = current.length >= 2 ? [current[1], slot] : [...current, slot];
-        setState((st)=>({ ...st, membershipSlots: next }));
-      }
-    } else {
-      setState((st)=>({ ...st, slot }));
-    }
-  }
+  }, [selectedDay, state.service_key, state.addons]);
 
   const selected =
     isMembership
@@ -403,24 +338,35 @@ function Times({ onNext, onBack, state, setState }) {
           ? state.slot
           : null;
 
-  const canNext =
-    isMembership ? membershipCount > 0 : !!selected;
+  function choose(slot) {
+    if (isMembership) {
+      const current = state.membershipSlots || [];
+      const exists = current.find((s) => s.start_iso === slot.start_iso);
+      if (exists) setState((st)=>({ ...st, membershipSlots: current.filter((s)=>s.start_iso!==slot.start_iso) }));
+      else setState((st)=>({ ...st, membershipSlots: current.length >= 2 ? [current[1], slot] : [...current, slot] }));
+    } else {
+      setState((st)=>({ ...st, slot }));
+    }
+  }
+
+  const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
 
   return (
     <div className="gm-booking">
       <Header />
       <div className="gm panel">
-        <h2 className="gm h2" style={{ marginBottom: 8 }}>
-          {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}
+        <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 10 }}>
+          {new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
         </h2>
+
         {daySlots.length === 0 && <div className="gm note">No times on this day. Go back and pick another date.</div>}
 
-        <div className="gm timepills">
+        <div className="gm timegrid">
           {daySlots.map((s)=> {
             const sel = selected?.start_iso === s.start_iso ||
                         (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
             return (
-              <button key={s.start_iso} className={cx("gm pill", sel && "pill-on")} onClick={()=>choose(s)} type="button">
+              <button key={s.start_iso} className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
                 {new Date(s.start_iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </button>
             );
@@ -434,9 +380,8 @@ function Times({ onNext, onBack, state, setState }) {
             disabled={!canNext}
             onClick={() => {
               if (isMembership && (state.membershipSlots||[]).length === 1) {
-                // need second day: return to calendar to pick another (must be different day)
-                setState((s)=>({ ...s, selectedDay: null })); // clear day so they can choose a different one
-                // go back to calendar step
+                // need second day
+                setState((s)=>({ ...s, selectedDay: null }));
                 onBack();
               } else {
                 onNext();
@@ -464,11 +409,11 @@ function Confirm({ onBack, state, setState }) {
   async function confirm() {
     const payload = {
       customer: state.customer,
-      area: state.area || "right",
       service_key: state.service_key,
       addons: state.addons || [],
       slot: state.slot,
       membershipSlots: state.membershipSlots,
+      area: "any"
     };
     const res = await fetch(API + "/book", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -491,7 +436,6 @@ function Confirm({ onBack, state, setState }) {
             <div><b>Name:</b> {state.customer?.name}</div>
             <div><b>Phone:</b> {state.customer?.phone}</div>
             <div><b>Address:</b> {state.customer?.address}</div>
-            <div><b>Area:</b> {(state.area || "right").toUpperCase()}</div>
             <div><b>Service:</b> {state.service_key}</div>
             <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
             <div><b>When:</b> {when || "—"}</div>
@@ -530,8 +474,6 @@ function App() {
 
   return (
     <div className="gm-booking wrap">
-      <Header />
-
       {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
       {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
       {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
