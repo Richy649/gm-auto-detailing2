@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import "./styles.css";
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
@@ -16,7 +17,6 @@ function sideOfSplit(A, B, P) {
 }
 
 /* ---- defaults (used if backend returns empty) ---- */
-/* Durations per visit (your real timings) */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -53,9 +53,6 @@ function keyLocal(date) {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 }
-function labelDay(date) {
-  return date.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-}
 function groupByDayLocal(slots) {
   const g = {};
   for (const s of slots || []) {
@@ -63,9 +60,15 @@ function groupByDayLocal(slots) {
     const k = keyLocal(d);
     (g[k] ||= []).push(s);
   }
-  // sort each day's slots by time
   for (const k of Object.keys(g)) g[k].sort((a,b)=> new Date(a.start_iso) - new Date(b.start_iso));
   return g;
+}
+function daySuffix(n) {
+  const j = n % 10, k = n % 100;
+  if (j === 1 && k !== 11) return "st";
+  if (j === 2 && k !== 12) return "nd";
+  if (j === 3 && k !== 13) return "rd";
+  return "th";
 }
 
 /* Geocode via Nominatim (no key; light usage) */
@@ -80,7 +83,15 @@ async function geocodeAddress(address) {
   return { lon: parseFloat(arr[0].lon), lat: parseFloat(arr[0].lat) };
 }
 
-/* ---------------- PAGES ---------------- */
+/* ---------------- UI PIECES ---------------- */
+function Header() {
+  return (
+    <header className="header">
+      <img className="logo" src="/logo.png" alt="GM Auto Detailing" />
+    </header>
+  );
+}
+
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(
     state.customer || { name: "", phone: "", address: "", email: "" }
@@ -111,18 +122,18 @@ function Details({ onNext, state, setState }) {
   }
 
   return (
-    <div className={cx("panel", loading && "loading")}>
-      <h2 style={{ marginTop: 0 }}>Your details</h2>
+    <div className={cx("panel", "elevated", loading && "loading")}>
+      <h2>Your details</h2>
       <div className="row">
-        <input placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
-        <input placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
+        <input className="input" placeholder="Full name" value={v.name} onChange={(e)=>setV({...v, name:e.target.value})}/>
+        <input className="input" placeholder="Phone" value={v.phone} onChange={(e)=>setV({...v, phone:e.target.value})}/>
       </div>
       <div className="row">
-        <input placeholder="Address (full address — we’ll pick your Sheen side automatically)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
-        <input placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
+        <input className="input" placeholder="Address (full address)" value={v.address} onChange={(e)=>setV({...v, address:e.target.value})}/>
+        <input className="input" placeholder="Email (for confirmation)" value={v.email||""} onChange={(e)=>setV({...v, email:e.target.value})}/>
       </div>
-      {err && <div className="muted" style={{ color: "#b91c1c" }}>{err}</div>}
-      <div className="right" style={{ marginTop: 8 }}>
+      {err && <div className="note error">{err}</div>}
+      <div className="actions">
         <button className="btn" disabled>Back</button>
         <button className="btn primary" onClick={next} disabled={!ok || loading}>
           {loading ? "Checking address…" : "Next"}
@@ -142,20 +153,20 @@ function Services({ onNext, onBack, state, setState, config }) {
   useEffect(() => setState((s) => ({ ...s, service_key: service, addons })), [service, addons]);
 
   return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Service</h2>
-      <div className="cards" style={{ marginBottom: 10 }}>
+    <div className="panel elevated">
+      <h2>Choose your service</h2>
+
+      <div className="cards">
         {Object.entries(svc).map(([key, val]) => {
           const isMembership = key.includes("membership") || val.visits >= 2;
           return (
-            <div
+            <button
+              type="button"
               key={key}
               className={cx("card", service === key && "selected")}
               onClick={() => setService(key)}
-              role="button"
-              tabIndex={0}
             >
-              <div style={{ fontWeight: 700 }}>{val.name}</div>
+              <div className="card-title">{val.name}</div>
               {"price" in val && <div className="muted">{fmtGBP(val.price)}</div>}
               {!isMembership && "duration" in val && (
                 <div className="muted">{val.duration} min</div>
@@ -165,32 +176,32 @@ function Services({ onNext, onBack, state, setState, config }) {
                   {val.visits || 2} visits • {val.duration || 0} min each
                 </div>
               )}
-            </div>
+            </button>
           );
         })}
       </div>
 
-      <div style={{ marginTop: 6 }}>
+      <div style={{ marginTop: 8 }}>
         <div className="muted" style={{ marginBottom: 6 }}>Add-ons (optional)</div>
-        <div className="row">
+        <div className="addon-row">
           {Object.entries(addonsCfg).map(([k, v]) => {
             const on = addons.includes(k);
             return (
               <button
                 key={k}
-                className={cx("btn", on && "primary")}
+                className={cx("chip", on && "chip-on")}
                 onClick={() =>
                   setAddons((a) => (on ? a.filter((x) => x !== k) : [...a, k]))
                 }
               >
-                {v.name} {fmtGBP(v.price)}
+                {v.name} · {fmtGBP(v.price)}
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="right" style={{ marginTop: 10 }}>
+      <div className="actions">
         <button className="btn" onClick={onBack}>Back</button>
         <button className="btn primary" onClick={onNext}>See times</button>
       </div>
@@ -198,17 +209,106 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Live day list calendar (next 30 days with availability) -------- */
+/* ---------- Month Grid Calendar -------- */
+function MonthGrid({
+  slotsByDay,
+  selectedDay,
+  setSelectedDay,
+  monthCursor,
+  setMonthCursor,
+  minDate,
+  maxDate,
+  membershipCount,
+  isMembership
+}) {
+  const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+  const monthTitle = monthStart.toLocaleString([], { month: "long", year: "numeric" });
+
+  const minMonthStart = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+  const maxMonthStart = new Date(maxDate.getFullYear(), maxDate.getMonth(), 1);
+
+  const prevDisabled = monthStart <= minMonthStart;
+  const nextDisabled = monthStart >= maxMonthStart;
+
+  // Monday-start 7x6 grid
+  const gridStart = new Date(monthStart);
+  const offset = (gridStart.getDay() + 6) % 7; // Mon=0
+  gridStart.setDate(gridStart.getDate() - offset);
+
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(gridStart);
+    d.setDate(gridStart.getDate() + i);
+    const k = keyLocal(d);
+    const inMonth = d.getMonth() === monthStart.getMonth();
+    const inRange = d >= minDate && d <= maxDate;
+    const has = !!slotsByDay[k];
+    const selected = selectedDay === k;
+    const disabled = !(inMonth && inRange && has);
+
+    const n = d.getDate();
+    const label = `${n}${daySuffix(n)}`;
+
+    cells.push(
+      <button
+        key={k}
+        className={cx("daycell", has && "has", selected && "selected")}
+        disabled={disabled}
+        onClick={() => setSelectedDay(k)}
+        title={d.toDateString()}
+        type="button"
+      >
+        {label}
+      </button>
+    );
+  }
+
+  return (
+    <div className="monthwrap">
+      <div className="monthbar">
+        <div className="monthtitle">{monthTitle}</div>
+        <div className="monthtools">
+          {isMembership && (
+            <span className="counter" title="Membership visits chosen">
+              {membershipCount}/2
+            </span>
+          )}
+          <button className="btn ghost" disabled={prevDisabled}
+            onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}
+          >
+            ‹
+          </button>
+          <button className="btn ghost" disabled={nextDisabled}
+            onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}
+          >
+            ›
+          </button>
+        </div>
+      </div>
+
+      <div className="dowrow">
+        {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="dow">{d}</div>)}
+      </div>
+
+      <div className="monthgrid">{cells}</div>
+    </div>
+  );
+}
+
 function Calendar({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const [selectedDayKey, setSelectedDayKey] = useState(null);
+  const [selectedDay, setSelectedDay] = useState(null);
   const [selected, setSelected] = useState(state.slot || null);
   const [selected2, setSelected2] = useState(state.membershipSlots || []);
+  const [monthCursor, setMonthCursor] = useState(new Date());
 
-  const area = state.area || "right";
+  // booking window: 24h from now through 30 days ahead
+  const now = new Date();
+  const minDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const maxDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 30);
 
   useEffect(() => {
     setLoading(true);
@@ -218,7 +318,7 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area, // left/right controls days on backend
+        area: state.area || "right",
       }),
     })
       .then((r) => r.json())
@@ -226,15 +326,35 @@ function Calendar({ onNext, onBack, state, setState }) {
         const s = d.slots || [];
         setSlots(s);
         const g = groupByDayLocal(s);
-        const keys = Object.keys(g).sort();
-        setSelectedDayKey(keys[0] || null);
+        // preselect first valid day with slots in current month
+        const firstKey = Object.keys(g).sort()[0] || null;
+        setSelectedDay(firstKey);
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons, area]);
+  }, [state.service_key, state.addons, state.area]);
 
   const slotsByDay = useMemo(() => groupByDayLocal(slots), [slots]);
-  const dayKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
-  const daySlots = selectedDayKey ? (slotsByDay[selectedDayKey] || []) : [];
+  const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
+
+  // If selected day falls out of current month view or has no slots, pick the first valid one in view
+  useEffect(() => {
+    const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
+    const sameMonth =
+      selectedDay &&
+      new Date(selectedDay + "T00:00:00").getMonth() === monthStart.getMonth() &&
+      new Date(selectedDay + "T00:00:00").getFullYear() === monthStart.getFullYear();
+    if (!sameMonth || daySlots.length === 0) {
+      const firstInMonth = Object.keys(slotsByDay)
+        .filter((k) => {
+          const d = new Date(k + "T00:00:00");
+          return d.getMonth() === monthStart.getMonth() &&
+                 d.getFullYear() === monthStart.getFullYear() &&
+                 d >= minDate && d <= maxDate;
+        })
+        .sort()[0] || null;
+      setSelectedDay(firstInMonth);
+    }
+  }, [monthCursor, slotsByDay]); // eslint-disable-line
 
   function sameLocalDay(isoA, isoB) {
     const a = new Date(isoA), b = new Date(isoB);
@@ -263,84 +383,62 @@ function Calendar({ onNext, onBack, state, setState }) {
     }
   }
 
-  const canNext = isMembership ? selected2.length === 2 : !!selected;
+  const membershipCount = isMembership ? (selected2?.length || 0) : 0;
+  const canNext = isMembership ? membershipCount === 2 : !!selected;
 
   return (
     <div className={cx(loading && "loading")}>
-      <div className="panel" style={{ marginBottom: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Choose a day</h2>
+      <div className="panel elevated">
+        <h2 style={{ marginBottom: 12 }}>Pick a date</h2>
 
-        {dayKeys.length === 0 && !loading && (
-          <div className="muted">No available days for this service in the next month.</div>
-        )}
-
-        {/* Scrollable day chips */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            overflowX: "auto",
-            paddingBottom: 6,
-            marginTop: 6,
-          }}
-        >
-          {dayKeys.map((key) => {
-            const d = new Date(key + "T00:00:00");
-            const selected = key === selectedDayKey;
-            return (
-              <button
-                key={key}
-                onClick={() => setSelectedDayKey(key)}
-                className="btn"
-                style={{
-                  flex: "0 0 auto",
-                  borderRadius: 999,
-                  padding: "10px 14px",
-                  fontWeight: 600,
-                  outline: selected ? "2px solid #9ca3af" : "none",
-                }}
-              >
-                {labelDay(d)}
-              </button>
-            );
-          })}
-        </div>
+        <MonthGrid
+          slotsByDay={slotsByDay}
+          selectedDay={selectedDay}
+          setSelectedDay={setSelectedDay}
+          monthCursor={monthCursor}
+          setMonthCursor={setMonthCursor}
+          minDate={minDate}
+          maxDate={maxDate}
+          membershipCount={membershipCount}
+          isMembership={isMembership}
+        />
       </div>
 
-      <div className="panel daylist">
-        <h3 style={{ marginTop: 0 }}>
-          {selectedDayKey
-            ? new Date(selectedDayKey).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
-            : "Select a day"}
+      <div className="panel elevated">
+        <h3 className="times-heading">
+          {selectedDay
+            ? new Date(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })
+            : "Select a highlighted date"}
         </h3>
 
-        {(!selectedDayKey || daySlots.length === 0) && (
-          <div className="muted">No times on this day. Pick another day above.</div>
+        {(!selectedDay || daySlots.length === 0) && (
+          <div className="note">No times on this day. Pick another highlighted date.</div>
         )}
 
         {daySlots.length > 0 && (
-          <div>
+          <div className="timepills">
             {daySlots.map((s) => {
               const sel = isMembership
                 ? !!selected2.find((x) => x.start_iso === s.start_iso)
                 : selected?.start_iso === s.start_iso;
               return (
-                <span
+                <button
                   key={s.start_iso}
-                  className={"slot " + (sel ? "sel" : "")}
+                  className={cx("pill", sel && "pill-on")}
                   onClick={() => choose(s)}
+                  type="button"
                 >
                   {new Date(s.start_iso).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
                   })}
-                </span>
+                </button>
               );
             })}
           </div>
         )}
 
-        <div className="right" style={{ marginTop: 12 }}>
+        <div className="actions">
           <button className="btn" onClick={onBack}>Back</button>
           <button
             className="btn primary"
@@ -362,7 +460,6 @@ function Calendar({ onNext, onBack, state, setState }) {
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = useMemo(() => {
-    // Show totals consistent with your pricing
     const map = { exterior: 60, full: 120, standard_membership: 100, premium_membership: 220 };
     const addonsMap = { wax: 15, polish: 15 };
     let t = map[state.service_key] || 0;
@@ -395,10 +492,10 @@ function Confirm({ onBack, state, setState }) {
     : state.slot && dstr(state.slot.start_iso);
 
   return (
-    <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Confirm</h2>
+    <div className="panel elevated">
+      <h2>Confirm</h2>
       <div className="row">
-        <div className="panel" style={{ flex: "1 1 320px" }}>
+        <div className="panel sub">
           <div><b>Name:</b> {state.customer?.name}</div>
           <div><b>Phone:</b> {state.customer?.phone}</div>
           <div><b>Address:</b> {state.customer?.address}</div>
@@ -407,13 +504,13 @@ function Confirm({ onBack, state, setState }) {
           <div><b>Add-ons:</b> {(state.addons || []).join(", ") || "None"}</div>
           <div><b>When:</b> {when || "—"}</div>
         </div>
-        <div className="panel" style={{ flex: "1 1 320px" }}>
+        <div className="panel sub">
           <div className="muted">Total due</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{fmtGBP(total)}</div>
+          <div className="total">{fmtGBP(total)}</div>
         </div>
       </div>
 
-      <div className="right" style={{ marginTop: 12 }}>
+      <div className="actions">
         <button className="btn" onClick={onBack}>Back</button>
         <button className="btn primary" onClick={confirm}>Confirm & Pay</button>
       </div>
@@ -439,13 +536,15 @@ function App() {
   }, []);
 
   return (
-    <>
+    <div className="wrap">
+      <Header />
       {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
       {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
       {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
       {step === 3 && <Confirm  onBack={() => setStep(2)} state={state} setState={setState} />}
-    </>
+    </div>
   );
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
