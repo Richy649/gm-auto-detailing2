@@ -15,12 +15,19 @@ function sideOfSplit(A, B, P) {
   return P.lon < lonOnLine ? "left" : "right"; // west=left, east=right
 }
 
-/* defaults if backend /config is empty (safety) */
+/* ---- defaults (used if backend returns empty) ---- */
+/* Durations per visit (your real timings) */
 const DEFAULT_SERVICES = {
-  exterior: { name: "Exterior Detail", duration: 60, price: 60 },
+  exterior: { name: "Exterior Detail", duration: 75, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
-  standard_membership: { name: "Standard Membership", includes: ["exterior","exterior"], price: 100 },
-  premium_membership: { name: "Premium Membership", includes: ["full","full"], price: 220 },
+  standard_membership: {
+    name: "Standard Membership (2 Exterior visits)",
+    duration: 75, visits: 2, visitService: "exterior", price: 100
+  },
+  premium_membership: {
+    name: "Premium Membership (2 Full visits)",
+    duration: 120, visits: 2, visitService: "full", price: 220
+  },
 };
 const DEFAULT_ADDONS = {
   wax: { name: "Full Body Wax", price: 15 },
@@ -138,20 +145,29 @@ function Services({ onNext, onBack, state, setState, config }) {
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Service</h2>
       <div className="cards" style={{ marginBottom: 10 }}>
-        {Object.entries(svc).map(([key, val]) => (
-          <div
-            key={key}
-            className={cx("card", service === key && "selected")}
-            onClick={() => setService(key)}
-            role="button"
-            tabIndex={0}
-          >
-            <div style={{ fontWeight: 700 }}>{val.name}</div>
-            {"price" in val && <div className="muted">{fmtGBP(val.price)}</div>}
-            {"duration" in val && <div className="muted">{val.duration} min</div>}
-            {"includes" in val && <div className="muted">Includes: {val.includes.join(" + ")}</div>}
-          </div>
-        ))}
+        {Object.entries(svc).map(([key, val]) => {
+          const isMembership = key.includes("membership") || val.visits >= 2;
+          return (
+            <div
+              key={key}
+              className={cx("card", service === key && "selected")}
+              onClick={() => setService(key)}
+              role="button"
+              tabIndex={0}
+            >
+              <div style={{ fontWeight: 700 }}>{val.name}</div>
+              {"price" in val && <div className="muted">{fmtGBP(val.price)}</div>}
+              {!isMembership && "duration" in val && (
+                <div className="muted">{val.duration} min</div>
+              )}
+              {isMembership && (
+                <div className="muted">
+                  {val.visits || 2} visits • {val.duration || 0} min each
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ marginTop: 6 }}>
@@ -220,11 +236,25 @@ function Calendar({ onNext, onBack, state, setState }) {
   const dayKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const daySlots = selectedDayKey ? (slotsByDay[selectedDayKey] || []) : [];
 
+  function sameLocalDay(isoA, isoB) {
+    const a = new Date(isoA), b = new Date(isoB);
+    return a.getFullYear() === b.getFullYear()
+      && a.getMonth() === b.getMonth()
+      && a.getDate() === b.getDate();
+  }
+
   function choose(slot) {
     if (isMembership) {
       setSelected2((curr) => {
         const exists = curr.find((s) => s.start_iso === slot.start_iso);
         if (exists) return curr.filter((s) => s.start_iso !== slot.start_iso);
+
+        // Membership = two separate days
+        if (curr.length === 1 && sameLocalDay(curr[0].start_iso, slot.start_iso)) {
+          alert("Membership visits must be on two different days.");
+          return curr;
+        }
+
         if (curr.length >= 2) return [curr[1], slot];
         return [...curr, slot];
       });
@@ -332,6 +362,7 @@ function Calendar({ onNext, onBack, state, setState }) {
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const total = useMemo(() => {
+    // Show totals consistent with your pricing
     const map = { exterior: 60, full: 120, standard_membership: 100, premium_membership: 220 };
     const addonsMap = { wax: 15, polish: 15 };
     let t = map[state.service_key] || 0;
