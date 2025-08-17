@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import "./calendar.css"; // scoped styles ONLY
+import "./calendar.css"; // <- scoped styles only
 
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
-/* ==== Sheen split line (your exact coords) ================================= */
+/* Sheen split (your coords) */
 const SHEEN_SPLIT = {
   A: { lat: 51.471333, lon: -0.267963 }, // TOP
   B: { lat: 51.457055, lon: -0.267663 }, // BOTTOM
@@ -13,10 +13,10 @@ const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
 function sideOfSplit(A, B, P) {
   const t = clamp((P.lat - A.lat) / (B.lat - A.lat), 0, 1);
   const lonOnLine = A.lon + (B.lon - A.lon) * t;
-  return P.lon < lonOnLine ? "left" : "right"; // west=left, east=right
+  return P.lon < lonOnLine ? "left" : "right";
 }
 
-/* Defaults used only if backend/config is empty (non-breaking) */
+/* safe defaults if backend config is empty */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -32,13 +32,7 @@ const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
 /* utils */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const dstr = (iso) =>
-  new Date(iso).toLocaleString([], {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 const cx = (...a) => a.filter(Boolean).join(" ");
 const keyLocal = (date) => {
   const y = date.getFullYear();
@@ -58,8 +52,16 @@ function groupByDayLocal(slots) {
 }
 function daySuffix(n){const j=n%10,k=n%100; if(j===1&&k!==11)return"st"; if(j===2&&k!==12)return"nd"; if(j===3&&k!==13)return"rd"; return"th";}
 
-/* ---------------- UI: NO global header to avoid double logos ---------------- */
+/* ---------------- Header with single centered logo ---------------- */
+function Header() {
+  return (
+    <header className="gm header">
+      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
+    </header>
+  );
+}
 
+/* ---------------- Steps ---------------- */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", phone: "", address: "", email: "" });
   const [loading, setLoading] = useState(false);
@@ -82,9 +84,7 @@ function Details({ onNext, state, setState }) {
       onNext();
     } catch {
       setErr("Could not locate that address. Please check and try again.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   return (
@@ -167,7 +167,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Strict Month Grid (only current month’s days) -------- */
+/* ---------- Strict Month Grid (only current month, hide pre-window days) --- */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -183,22 +183,39 @@ function MonthGrid({
   const monthTitle = monthStart.toLocaleString([], { month: "long", year: "numeric" });
   const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
 
+  const allKeys = Object.keys(slotsByDay).sort();
+  const earliestDate = earliestKey ? new Date(earliestKey + "T00:00:00") : null;
+  const latestDate   = latestKey   ? new Date(latestKey   + "T00:00:00") : null;
+
+  // disable nav outside months that actually contain slots
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
-  const curIndex = ym(monthStart);
-  const earliestMonth = earliestKey ? new Date(earliestKey + "T00:00:00") : monthStart;
-  const latestMonth = latestKey ? new Date(latestKey + "T00:00:00") : monthStart;
-  const minIndex = ym(new Date(earliestMonth.getFullYear(), earliestMonth.getMonth(), 1));
-  const maxIndex = ym(new Date(latestMonth.getFullYear(), latestMonth.getMonth(), 1));
-  const prevDisabled = curIndex <= minIndex;
-  const nextDisabled = curIndex >= maxIndex;
+  const curIdx = ym(monthStart);
+  const minIdx = earliestDate ? ym(new Date(earliestDate.getFullYear(), earliestDate.getMonth(), 1)) : curIdx;
+  const maxIdx = latestDate   ? ym(new Date(latestDate.getFullYear(),   latestDate.getMonth(),   1)) : curIdx;
+  const prevDisabled = curIdx <= minIdx;
+  const nextDisabled = curIdx >= maxIdx;
 
   const cells = [];
   for (let day = 1; day <= daysInMonth; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
-    const has = !!slotsByDay[k];
+
+    // hide (render blank) anything before the first bookable day if we’re in that earliest month
+    const inEarliestMonth = earliestDate &&
+      d.getFullYear() === earliestDate.getFullYear() &&
+      d.getMonth() === earliestDate.getMonth();
+
+    const beforeWindow = inEarliestMonth && d < earliestDate;
+    if (beforeWindow) {
+      cells.push(<div key={k} className="gm daycell spacer" aria-hidden="true"></div>);
+      continue;
+    }
+
+    // standard rules
+    const has = !!slotsByDay[k];          // clickable only if backend returned slots for that exact day
     const selected = selectedDay === k;
     const label = `${day}${daySuffix(day)}`;
+
     cells.push(
       <button
         key={k}
@@ -265,6 +282,8 @@ function Calendar({ onNext, onBack, state, setState }) {
         const g = groupByDayLocal(s);
         const keys = Object.keys(g).sort();
         const firstKey = keys[0] || null;
+
+        // Jump to the month containing the first available day; preselect it
         if (firstKey) {
           const firstDate = new Date(firstKey + "T00:00:00");
           setMonthCursor(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
@@ -280,6 +299,7 @@ function Calendar({ onNext, onBack, state, setState }) {
   const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
   const earliestKey = allKeys[0] || null;
   const latestKey = allKeys[allKeys.length - 1] || null;
+
   const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
 
   function sameLocalDay(isoA, isoB) {
@@ -307,6 +327,8 @@ function Calendar({ onNext, onBack, state, setState }) {
 
   return (
     <div className={cx("gm-booking", loading && "loading")}>
+      <Header />
+
       <div className="gm panel">
         <h2 className="gm h2" style={{ marginBottom: 12 }}>Pick a date</h2>
         <MonthGrid
@@ -446,6 +468,9 @@ function App() {
 
   return (
     <div className="gm-booking">
+      {/* Single logo at top */}
+      <Header />
+
       {step === 0 && <Details  onNext={() => setStep(1)} state={state} setState={setState} />}
       {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
       {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => setStep(1)} state={state} setState={setState} />}
