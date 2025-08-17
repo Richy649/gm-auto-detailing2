@@ -2,23 +2,27 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./calendar.css";
 
+/* ===================== API base ===================== */
 const API = import.meta.env.VITE_API || "http://localhost:8787/api";
 
-/* ===== Booking window / rules ===== */
+/* ===================== Booking rules ===================== */
 const MAX_DAYS_AHEAD = 30;
-const MIN_LEAD_MIN = 24 * 60; // 24 hours
-const BUFFER_MIN = 30; // kept for reference in templates
+const MIN_LEAD_MIN = 24 * 60; // 24 hours lead
+const BUFFER_MIN = 30; // (for reference – add-ons don't add time)
 
-/* ===== Catalog (your prices) ===== */
+/* ===================== Catalog / Prices ===================== */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 40 },
   full: { name: "Full Detail", duration: 120, price: 60 },
   standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 70 },
   premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 100 },
 };
-const DEFAULT_ADDONS = { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } };
+const DEFAULT_ADDONS = {
+  wax: { name: "Full Body Wax", price: 15 },
+  polish: { name: "Hand Polish", price: 15 },
+};
 
-/* ===== Small helpers ===== */
+/* ===================== Helpers ===================== */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
@@ -40,7 +44,7 @@ const toISO = (day, hm) => {
 };
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
-/* ===== Service duration (memberships map to their visit service) ===== */
+/* Members map to their visit service duration */
 function serviceDuration(service_key, services) {
   const svc = services?.[service_key];
   if (!svc) return 0;
@@ -50,20 +54,18 @@ function serviceDuration(service_key, services) {
   return svc.duration || 0;
 }
 
-/* =========================================================================
-   Fixed, buffer-clean templates (no late weekday starts you banned)
-   -------------------------------------------------------------------------
-   Weekdays (Mon–Fri) start 16:00, overrun ≤ 45 allowed (but we don’t need it
-   in these canonical lists). No 19:30/21:00 starts.
+/* ===================== Canonical schedules =====================
 
-   - Weekday 75:  16:00, 17:45, 19:45
-   - Weekday 120: 16:00, 18:30
+Weekdays (Mon–Fri): start 16:00
+ - 75 min starts:  16:00, 17:45, 19:45
+ - 120 min starts: 16:00, 18:30
 
-   Weekends (Sat–Sun) start 09:00, overrun ≤ 45 allowed.
+Weekends (Sat–Sun): start 09:00
+ - 75 min starts:  09:00, 10:45, 12:30, 14:15, 16:00, 17:45
+ - 120 min starts: 09:00, 11:30, 14:00, 16:30
 
-   - Weekend 75:  09:00, 10:45, 12:30, 14:15, 16:00, 17:45
-   - Weekend 120: 09:00, 11:30, 14:00, 16:30
-   ========================================================================= */
+(24h lead applies; add-ons don't affect time)
+=============================================================== */
 function canonicalFamilyForDuration(day, durationMin) {
   if (isWeekend(day)) return durationMin === 120 ? "WE_4x120" : "WE_6x75";
   return durationMin === 120 ? "W_2x120" : "W_3x75";
@@ -96,8 +98,6 @@ function dayStartsCanonical(day, durationMin, now = new Date()) {
   }
   return starts.sort((a, b) => new Date(a.start_iso) - new Date(b.start_iso));
 }
-
-/* Calendar availability = days that have at least one canonical start */
 function buildCalendarAvailability(durationMin, now = new Date()) {
   const map = {};
   for (let i = 0; i <= MAX_DAYS_AHEAD; i++) {
@@ -109,16 +109,17 @@ function buildCalendarAvailability(durationMin, now = new Date()) {
   return map;
 }
 
-/* ===== Header (big logo) ===== */
+/* ===================== Header ===================== */
 function Header() {
   return (
     <header className="gm header">
+      {/* Put your logo file at /public/logo.png (Vercel) */}
       <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" style={{ height: "220px" }} />
     </header>
   );
 }
 
-/* ===== Details (logo left, fields right) ===== */
+/* ===================== Details ===================== */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
   useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
@@ -128,11 +129,11 @@ function Details({ onNext, state, setState }) {
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "420px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "440px" }} />
         </div>
         <div className="gm details-right">
-          <p className="gm hero-note" style={{ fontSize: 17, lineHeight: 1.5, letterSpacing: ".2px", fontWeight: 500 }}>
-            Welcome to <b>gmautodetailing.uk booking app</b> — we use your details in order to make sure we arrive on time and at the right location.
+          <p className="gm hero-note" style={{ fontSize: 17, lineHeight: 1.55, letterSpacing: ".2px", fontWeight: 600 }}>
+            Welcome to <b>gmautodetailing.uk booking app</b> — we use your details to make sure we arrive on time and at the right location.
           </p>
           <h2 className="gm h2" style={{ textAlign: "center", fontWeight: 900 }}>Your details</h2>
           <div className="gm row">
@@ -153,7 +154,7 @@ function Details({ onNext, state, setState }) {
   );
 }
 
-/* ===== Services (add-ons are time-free) ===== */
+/* ===================== Services ===================== */
 function Services({ onNext, onBack, state, setState, config }) {
   const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
   const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
@@ -163,7 +164,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   const [addons, setAddons] = useState(state.addons || []);
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
-  // Switching service clears any selections
+  // Switching service clears selections & pending locks
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
@@ -260,7 +261,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ===== Month grid ===== */
+/* ===================== Month grid ===================== */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -294,15 +295,9 @@ function MonthGrid({
   const counterStyle = { background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900 };
 
   const navBtn = {
-    fontSize: 14,
-    fontWeight: 900,
-    padding: "8px 12px",
-    borderRadius: 10,
-    border: "1px solid #0f172a",
-    background: "#0f172a",
-    color: "#fff",
-    cursor: "pointer",
-    opacity: 1
+    fontSize: 14, fontWeight: 900, padding: "8px 12px",
+    borderRadius: 10, border: "1px solid #0f172a", background: "#0f172a", color: "#fff",
+    cursor: "pointer", opacity: 1
   };
   const navBtnDisabled = { ...navBtn, opacity: 0.4, cursor: "not-allowed" };
 
@@ -350,7 +345,7 @@ function MonthGrid({
 
   return (
     <div>
-      {/* Centered month bar with clear Previous / Next buttons */}
+      {/* Centered month bar with big Previous / Next buttons */}
       <div className="gm monthbar"
            style={{ display:'grid', gridTemplateColumns:'auto 1fr auto', alignItems:'center', gap:12, marginBottom:8 }}>
         <div style={{ display:'flex', gap:8 }}>
@@ -390,7 +385,7 @@ function MonthGrid({
   );
 }
 
-/* ===== Calendar (built from canonical templates for the chosen service) ===== */
+/* ===================== Calendar ===================== */
 function Calendar({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const durationMin = serviceDuration(state.service_key, services);
@@ -476,21 +471,19 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* -------- Times (stable: no grey-out, no disappearing; logo left/times right) ---------- */
+/* ===================== Times (stable list; logo left, times right) ===================== */
 function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
   const durationMin = serviceDuration(state.service_key, services);
 
   const day = new Date(selectedDay + "T00:00:00");
-
-  // Always show the canonical, buffer-clean starts for this day/duration
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
   useEffect(() => {
     setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
   }, [selectedDay, durationMin]);
 
-  // Current selection on this day (normal or membership)
+  // Current selection on this day
   const selected =
     isMembership
       ? (state.membershipSlots || []).find((s) => s && keyLocal(new Date(s.start_iso)) === selectedDay)
@@ -498,19 +491,18 @@ function Times({ onNext, onBack, state, setState, services }) {
         ? state.slot
         : null;
 
-  // Choose a slot — no greying/hiding; just set the choice
   function choose(slot) {
     if (!isMembership) {
       setState((st) => ({ ...st, slot }));
       return;
     }
-    // Membership: swap time if same day already chosen, else append (max 2 days)
+    // Membership: swap time if same day already chosen, else add (max 2 days, not the same day twice)
     setState((st) => {
       const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
       const dayK = keyLocal(new Date(slot.start_iso));
       const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
       if (idxSameDay !== -1) {
-        ms[idxSameDay] = slot; // swap to newly clicked time
+        ms[idxSameDay] = slot;
         return { ...st, membershipSlots: ms };
       }
       if (ms.some(x => keyLocal(new Date(x.start_iso)) === dayK)) return { ...st, membershipSlots: ms };
@@ -519,7 +511,6 @@ function Times({ onNext, onBack, state, setState, services }) {
     });
   }
 
-  // Remove selection
   function removeSelectedSlot(slot) {
     if (!isMembership) {
       setState((st) => ({ ...st, slot: null }));
@@ -543,11 +534,10 @@ function Times({ onNext, onBack, state, setState, services }) {
 
   return (
     <div className="gm page-section">
-      {/* Split layout like Details */}
       <div className="gm details-grid">
         {/* Left: BIG logo */}
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "420px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "440px" }} />
         </div>
 
         {/* Right: Date + big time boxes */}
@@ -558,11 +548,7 @@ function Times({ onNext, onBack, state, setState, services }) {
 
           <div
             className="gm timegrid"
-            style={{
-              display: "grid",
-              gap: 14,
-              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            }}
+            style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}
           >
             {daySlots.map((s)=> {
               const sel = selected?.start_iso === s.start_iso ||
@@ -573,13 +559,7 @@ function Times({ onNext, onBack, state, setState, services }) {
                     className={cx("gm timebox", sel && "timebox-on")}
                     onClick={()=>choose(s)}
                     type="button"
-                    style={{
-                      fontSize: 26,
-                      fontWeight: 900,
-                      padding: "26px 22px",
-                      minHeight: 88,
-                      borderRadius: 16,
-                    }}
+                    style={{ fontSize: 26, fontWeight: 900, padding: "26px 22px", minHeight: 88, borderRadius: 16 }}
                   >
                     {fmtTime(s.start_iso)}
                   </button>
@@ -606,7 +586,7 @@ function Times({ onNext, onBack, state, setState, services }) {
               disabled={!canNext}
               onClick={() => {
                 if (isMembership && (state.membershipSlots||[]).length === 1) {
-                  onBack(); // choose second date; first day stays highlighted
+                  onBack(); // pick second date
                 } else {
                   onNext();
                 }
@@ -621,35 +601,60 @@ function Times({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===== Confirm (simple, bold, centered title; clean summary) ===== */
+/* ===================== Confirm (Stripe) ===================== */
 function Confirm({ onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
+  const [loading, setLoading] = useState(false);
+
+  // Totals (must match backend)
   const total = React.useMemo(() => {
     const map = { exterior: 40, full: 60, standard_membership: 70, premium_membership: 100 };
-    const addonsMap = { wax: 10, polish: 22.50 };
-    let t = map[state.service_key] || 0; // base price
-    t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0); // add-ons always included
+    const addonsMap = { wax: 15, polish: 15 };
+    let t = map[state.service_key] || 0;
+    // Add-ons are charged for all services (including memberships)
+    t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
     return t;
-  }, [state.service_key, state.addons, isMembership]);
-
+  }, [state.service_key, state.addons]);
 
   async function confirm() {
-    const payload = {
-      customer: state.customer,
-      service_key: state.service_key,
-      addons: state.addons || [],
-      slot: state.slot,
-      membershipSlots: state.membershipSlots,
-      area: "any"
-    };
-    const res = await fetch(API + "/book", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    }).then((r) => r.json());
-    if (res.ok) { alert("Booking confirmed. Check your email."); setState({}); location.href = "/"; }
-    else { alert("Error: " + (res.error || "Unknown")); }
+    if (loading) return;
+    setLoading(true);
+    try {
+      const payload = {
+        customer: state.customer,
+        service_key: state.service_key,
+        addons: state.addons || [],
+        slot: state.slot,
+        membershipSlots: state.membershipSlots,
+      };
+
+      const resp = await fetch(`${API}/pay/create-checkout-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const raw = await resp.text();
+      let data;
+      try { data = JSON.parse(raw); } catch { data = { ok: false, error: `Invalid JSON from API: ${raw.slice(0,200)}` }; }
+
+      if (!resp.ok || !data?.ok || !data?.url) {
+        throw new Error(data?.error || `HTTP ${resp.status} — ${raw.slice(0,200)}`);
+      }
+
+      window.location.href = data.url; // Stripe Checkout
+    } catch (err) {
+      alert(
+        `Checkout failed:\n${String(err.message || err)}\n\n` +
+        `API base: ${API}\n` +
+        `Make sure Vercel VITE_API points to your Render API /api`
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
-  const when = state.service_key?.includes("membership")
+  const when = isMembership
     ? (state.membershipSlots || []).map((s) => dstr(s.start_iso)).join(" & ")
     : state.slot && dstr(state.slot.start_iso);
 
@@ -667,6 +672,7 @@ function Confirm({ onBack, state, setState }) {
             <div style={{ marginBottom: 6 }}><b>Email:</b> {state.customer?.email}</div>
             <div style={{ marginBottom: 6 }}><b>Phone:</b> {state.customer?.phone}</div>
             <div style={{ marginBottom: 6 }}><b>Service:</b> {state.service_key}</div>
+            <div style={{ marginBottom: 6 }}><b>Add-ons:</b> {(state.addons||[]).join(", ") || "None"}</div>
           </div>
           <div className="gm panel sub" style={{ width: 280, textAlign:'center' }}>
             <div className="gm muted" style={{ fontSize: 14 }}>Amount due</div>
@@ -675,15 +681,17 @@ function Confirm({ onBack, state, setState }) {
         </div>
 
         <div className="gm actions" style={{ display:'flex', justifyContent:'space-between' }}>
-          <button className="gm btn" onClick={onBack}>Back</button>
-          <button className="gm btn primary" onClick={confirm}>Confirm & Pay</button>
+          <button className="gm btn" onClick={onBack} disabled={loading}>Back</button>
+          <button className="gm btn primary" onClick={confirm} disabled={loading}>
+            {loading ? "Starting checkout…" : "Confirm & Pay"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ===== App ===== */
+/* ===================== App ===================== */
 function App() {
   const [state, setState] = useState({});
   const [step, setStep] = useState(0);
