@@ -15,7 +15,7 @@ function sideOfSplit(A, B, P) {
   return P.lon < lonOnLine ? "left" : "right"; // west=left, east=right
 }
 
-/* ---- defaults (used if backend returns empty) ---- */
+/* defaults if backend /config is empty (safety) */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 60, price: 60 },
   full: { name: "Full Detail", duration: 120, price: 120 },
@@ -59,6 +59,11 @@ async function geocodeAddress(address) {
   const arr = await r.json();
   if (!arr?.length) throw new Error("address not found");
   return { lon: parseFloat(arr[0].lon), lat: parseFloat(arr[0].lat) };
+}
+
+function allowedDowsForArea(area) {
+  // 0=Sun..6=Sat
+  return new Set(area === "left" ? [2, 4, 6] : [1, 3, 5, 0]);
 }
 
 /* ---------------- PAGES ---------------- */
@@ -170,8 +175,12 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ---------- Live month calendar: pick day -> show times for that day ---------- */
-function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMonthCursor }) {
+/* ---------- Live month calendar ---------- */
+function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMonthCursor, allowedDows }) {
+  const now = new Date();
+  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // start of today
+  const cutoffKey = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0,10); // 24h rule → earliest day key
+
   const firstOfMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
   const start = new Date(firstOfMonth);
   // Start week on Monday
@@ -184,18 +193,25 @@ function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMo
     d.setDate(start.getDate() + i);
     const key = d.toISOString().slice(0, 10);
     const isCurrentMonth = d.getMonth() === monthCursor.getMonth();
+    const isAllowedDow = allowedDows.has(d.getDay());
+    const isAfterCutoffDay = key >= cutoffKey; // simple day-level 24h check
     const has = !!slotsByDay[key];
     const selected = selectedDay === key;
+
+    const disabled = !isCurrentMonth || !isAllowedDow || !isAfterCutoffDay;
+
     cells.push(
       <div
         key={key}
         className={
           "daycell " +
           (has ? "has " : "") +
-          (!isCurrentMonth ? "disabled " : "") +
+          (disabled ? "disabled " : "") +
           (selected ? "selected " : "")
         }
-        onClick={() => isCurrentMonth && has && setSelectedDay(key)}
+        onClick={() => {
+          if (!disabled && has) setSelectedDay(key);
+        }}
       >
         {d.getDate()}
       </div>
@@ -207,22 +223,8 @@ function MonthGrid({ slotsByDay, selectedDay, setSelectedDay, monthCursor, setMo
       <div className="monthbar">
         <div style={{ fontWeight: 700 }}>{monthName}</div>
         <div className="nav">
-          <button
-            className="btn"
-            onClick={() =>
-              setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))
-            }
-          >
-            ‹
-          </button>
-          <button
-            className="btn"
-            onClick={() =>
-              setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))
-            }
-          >
-            ›
-          </button>
+          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() - 1, 1))}>‹</button>
+          <button className="btn" onClick={() => setMonthCursor(new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 1))}>›</button>
         </div>
       </div>
       <div className="monthgrid">
@@ -242,6 +244,9 @@ function Calendar({ onNext, onBack, state, setState }) {
   const [selected2, setSelected2] = useState(state.membershipSlots || []);
   const [monthCursor, setMonthCursor] = useState(new Date());
 
+  const area = state.area || "right";
+  const allowedDows = useMemo(() => allowedDowsForArea(area), [area]);
+
   useEffect(() => {
     setLoading(true);
     fetch(API + "/availability", {
@@ -250,19 +255,20 @@ function Calendar({ onNext, onBack, state, setState }) {
       body: JSON.stringify({
         service_key: state.service_key,
         addons: state.addons || [],
-        area: state.area || "right", // LEFT/RIGHT computed on Details → controls days returned
+        area, // LEFT/RIGHT controls which days backend returns
       }),
     })
       .then((r) => r.json())
       .then((d) => {
         const s = d.slots || [];
         setSlots(s);
+        // preselect first valid day that actually has slots
         const g = groupByDay(s);
         const firstKey = Object.keys(g).sort()[0] || null;
         setSelectedDay(firstKey);
       })
       .finally(() => setLoading(false));
-  }, [state.service_key, state.addons, state.area]);
+  }, [state.service_key, state.addons, area]);
 
   const slotsByDay = useMemo(() => groupByDay(slots), [slots]);
   const daySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
@@ -290,6 +296,7 @@ function Calendar({ onNext, onBack, state, setState }) {
         setSelectedDay={setSelectedDay}
         monthCursor={monthCursor}
         setMonthCursor={setMonthCursor}
+        allowedDows={allowedDows}
       />
 
       <div className="panel daylist">
@@ -325,28 +332,19 @@ function Calendar({ onNext, onBack, state, setState }) {
           </div>
         )}
 
-        <div className="stickybar" style={{ marginTop: 12 }}>
-          <div className="muted">
-            {isMembership
-              ? `${selected2.length}/2 times selected`
-              : selected
-              ? dstr(selected.start_iso)
-              : "Select a time"}
-          </div>
-          <div className="right">
-            <button className="btn" onClick={onBack}>Back</button>
-            <button
-              className="btn primary"
-              disabled={!canNext}
-              onClick={() => {
-                if (isMembership) setState((s) => ({ ...s, membershipSlots: selected2 }));
-                else setState((s) => ({ ...s, slot: selected }));
-                onNext();
-              }}
-            >
-              Continue
-            </button>
-          </div>
+        <div className="right" style={{ marginTop: 12 }}>
+          <button className="btn" onClick={onBack}>Back</button>
+          <button
+            className="btn primary"
+            disabled={!canNext}
+            onClick={() => {
+              if (isMembership) setState((s) => ({ ...s, membershipSlots: selected2 }));
+              else setState((s) => ({ ...s, slot: selected }));
+              onNext();
+            }}
+          >
+            Continue
+          </button>
         </div>
       </div>
     </div>
@@ -366,7 +364,7 @@ function Confirm({ onBack, state, setState }) {
   async function confirm() {
     const payload = {
       customer: state.customer,
-      area: state.area || "right", // already decided on Details
+      area: state.area || "right",
       service_key: state.service_key,
       addons: state.addons || [],
       slot: state.slot,
@@ -406,12 +404,9 @@ function Confirm({ onBack, state, setState }) {
         </div>
       </div>
 
-      <div className="stickybar">
-        <div className="muted">You’ll be charged in full upfront.</div>
-        <div className="right">
-          <button className="btn" onClick={onBack}>Back</button>
-          <button className="btn primary" onClick={confirm}>Confirm & Pay</button>
-        </div>
+      <div className="right" style={{ marginTop: 12 }}>
+        <button className="btn" onClick={onBack}>Back</button>
+        <button className="btn primary" onClick={confirm}>Confirm & Pay</button>
       </div>
     </div>
   );
