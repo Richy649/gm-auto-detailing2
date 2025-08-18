@@ -2,44 +2,67 @@
 import { DateTime } from "luxon";
 import { randomUUID } from "crypto";
 
-// Optional Postgres (enabled only if DATABASE_URL starts with postgres:// or postgresql://)
 let Pool = null;
-try { ({ Pool } = await import("pg")); } catch { /* pg not installed? fine, use memory */ }
+try { ({ Pool } = await import("pg")); } catch { /* ok: no pg installed */ }
 
 const TZ = "Europe/London";
 const HOLD_MINUTES = 15;
 
-// Decide whether to use Postgres
 const RAW_DB_URL = (process.env.DATABASE_URL || "").trim();
 const IS_PG_URL = /^postgres(ql)?:\/\//i.test(RAW_DB_URL);
 
-// Shared state
 let pool = null;
+let schemaReady = false;
 
-// Try to init Pool only for valid Postgres URLs
 if (Pool && IS_PG_URL) {
-  pool = new Pool({
-    connectionString: RAW_DB_URL,
-    ssl: { rejectUnauthorized: false }
-  });
+  pool = new Pool({ connectionString: RAW_DB_URL, ssl: { rejectUnauthorized: false } });
 }
 
-// ----- helpers -----
 function nowUtc() { return DateTime.utc(); }
 function toISO(dt) { return dt.toUTC().toISO(); }
 
-// In-memory fallback
 const mem = {
-  bookings: [], // [{session_id, service_key, addons_json, customer_json, start_iso, end_iso, created_at}]
-  holds: []     // [{hold_key, session_id, service_key, customer_json, start_iso, end_iso, expires_at, created_at}]
+  bookings: [],
+  holds: []
 };
 
-// Expose mode for health
-export function dbMode() {
-  return pool ? "postgres" : "memory";
+export function dbMode() { return pool ? "postgres" : "memory"; }
+
+async function initPg() {
+  if (!pool || schemaReady) return;
+  await pool.query(`
+    create table if not exists bookings (
+      id serial primary key,
+      session_id text unique,
+      service_key text not null,
+      addons_json jsonb default '[]',
+      customer_json jsonb default '{}',
+      start_iso timestamptz not null,
+      end_iso   timestamptz not null,
+      created_at timestamptz not null default now()
+    );
+    create unique index if not exists bookings_slot_unique
+      on bookings (start_iso, end_iso);
+
+    create table if not exists holds (
+      id serial primary key,
+      hold_key uuid not null,
+      session_id text,
+      service_key text not null,
+      customer_json jsonb default '{}',
+      start_iso timestamptz not null,
+      end_iso   timestamptz not null,
+      expires_at timestamptz not null,
+      created_at timestamptz not null default now()
+    );
+    create unique index if not exists holds_slot_unique
+      on holds (start_iso, end_iso);
+    create index if not exists holds_expires_idx
+      on holds (expires_at);
+  `);
+  schemaReady = true;
 }
 
-// Boot PG schema if available
 export async function initStore() {
   if (!pool) {
     if (RAW_DB_URL && !IS_PG_URL) {
@@ -48,50 +71,36 @@ export async function initStore() {
     return;
   }
   try {
-    await pool.query(`
-      create table if not exists bookings (
-        id serial primary key,
-        session_id text unique,
-        service_key text not null,
-        addons_json jsonb default '[]',
-        customer_json jsonb default '{}',
-        start_iso timestamptz not null,
-        end_iso   timestamptz not null,
-        created_at timestamptz not null default now()
-      );
-      create unique index if not exists bookings_slot_unique
-        on bookings (start_iso, end_iso);
-
-      create table if not exists holds (
-        id serial primary key,
-        hold_key uuid not null,
-        session_id text,
-        service_key text not null,
-        customer_json jsonb default '{}',
-        start_iso timestamptz not null,
-        end_iso   timestamptz not null,
-        expires_at timestamptz not null,
-        created_at timestamptz not null default now()
-      );
-      create unique index if not exists holds_slot_unique
-        on holds (start_iso, end_iso);
-      create index if not exists holds_expires_idx
-        on holds (expires_at);
-    `);
+    await initPg();
   } catch (e) {
-    console.warn("[store] Postgres init failed, falling back to memory:", e?.message || e);
-    pool = null; // disable pg so we use memory for all ops
+    console.warn("[store] Postgres init failed; falling back to memory:", e?.message || e);
+    pool = null;
   }
 }
 
+async function ensureReady() {
+  if (pool && !schemaReady) {
+    try { await initPg(); } catch (e) {
+      console.warn("[store] ensureReady init failed; fallback to memory:", e?.message || e);
+      pool = null;
+    }
+  }
+}
+
+function isUndefinedTable(err) {
+  return err?.code === "42P01" || /relation .* does not exist/i.test(err?.message || "");
+}
+
 export async function cleanupExpiredHolds() {
+  await ensureReady();
   const now = nowUtc().toISO();
   if (pool) {
     try {
       await pool.query("delete from holds where expires_at < $1", [now]);
       return;
     } catch (e) {
-      console.warn("[store] cleanupExpiredHolds PG error, fallback to memory:", e?.message || e);
+      if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return; }
+      console.warn("[store] cleanupExpiredHolds PG error; fallback to memory:", e?.message || e);
       pool = null;
     }
   }
@@ -102,6 +111,7 @@ export async function cleanupExpiredHolds() {
 export function newHoldKey() { return randomUUID(); }
 
 export async function addHold({ hold_key, service_key, start_iso, end_iso, customer, session_id = null }) {
+  await ensureReady();
   const expires_at = toISO(nowUtc().plus({ minutes: HOLD_MINUTES }));
   if (pool) {
     try {
@@ -112,15 +122,13 @@ export async function addHold({ hold_key, service_key, start_iso, end_iso, custo
       );
       return { ok: true };
     } catch (e) {
-      if (String(e.message || "").includes("holds_slot_unique")) {
-        return { ok: false, conflict: true };
-      }
-      console.warn("[store] addHold PG error, fallback to memory:", e?.message || e);
-      pool = null; // fallback to memory
-      // continue into memory path below
+      if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return addHold({ hold_key, service_key, start_iso, end_iso, customer, session_id }); }
+      if (String(e.message || "").includes("holds_slot_unique")) return { ok: false, conflict: true };
+      console.warn("[store] addHold PG error; fallback to memory:", e?.message || e);
+      pool = null;
     }
   }
-  // Memory path
+  // memory path
   const now = nowUtc();
   const hasHold = mem.holds.some(h =>
     h.start_iso === start_iso && h.end_iso === end_iso &&
@@ -139,32 +147,27 @@ export async function addHold({ hold_key, service_key, start_iso, end_iso, custo
 }
 
 export async function attachSessionToHolds(hold_key, session_id) {
+  await ensureReady();
   if (pool) {
-    try {
-      await pool.query("update holds set session_id=$1 where hold_key=$2", [session_id, hold_key]);
-      return;
-    } catch (e) {
-      console.warn("[store] attachSessionToHolds PG error, fallback to memory:", e?.message || e);
-      pool = null;
-    }
+    try { await pool.query("update holds set session_id=$1 where hold_key=$2", [session_id, hold_key]); return; }
+    catch (e) { if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return attachSessionToHolds(hold_key, session_id); }
+      console.warn("[store] attachSessionToHolds PG error; fallback to memory:", e?.message || e); pool = null; }
   }
   mem.holds.forEach(h => { if (h.hold_key === hold_key) h.session_id = session_id; });
 }
 
 export async function releaseHoldsByKey(hold_key) {
+  await ensureReady();
   if (pool) {
-    try {
-      await pool.query("delete from holds where hold_key=$1", [hold_key]);
-      return;
-    } catch (e) {
-      console.warn("[store] releaseHoldsByKey PG error, fallback to memory:", e?.message || e);
-      pool = null;
-    }
+    try { await pool.query("delete from holds where hold_key=$1", [hold_key]); return; }
+    catch (e) { if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return; }
+      console.warn("[store] releaseHoldsByKey PG error; fallback to memory:", e?.message || e); pool = null; }
   }
   mem.holds = mem.holds.filter(h => h.hold_key !== hold_key);
 }
 
 export async function isSlotFree(start_iso, end_iso) {
+  await ensureReady();
   await cleanupExpiredHolds();
   if (pool) {
     try {
@@ -179,11 +182,11 @@ export async function isSlotFree(start_iso, end_iso) {
       );
       return rh.rowCount === 0;
     } catch (e) {
-      console.warn("[store] isSlotFree PG error, fallback to memory:", e?.message || e);
+      if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return isSlotFree(start_iso, end_iso); }
+      console.warn("[store] isSlotFree PG error; fallback to memory:", e?.message || e);
       pool = null;
     }
   }
-  // Memory path
   const now = nowUtc();
   const hasBooking = mem.bookings.some(b => b.start_iso === start_iso && b.end_iso === end_iso);
   if (hasBooking) return false;
@@ -195,6 +198,7 @@ export async function isSlotFree(start_iso, end_iso) {
 }
 
 export async function getBusyIntervals(startISO, endISO) {
+  await ensureReady();
   await cleanupExpiredHolds();
   if (pool) {
     try {
@@ -208,11 +212,11 @@ export async function getBusyIntervals(startISO, endISO) {
       );
       return [...rb.rows, ...rh.rows];
     } catch (e) {
-      console.warn("[store] getBusyIntervals PG error, fallback to memory:", e?.message || e);
+      if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return getBusyIntervals(startISO, endISO); }
+      console.warn("[store] getBusyIntervals PG error; fallback to memory:", e?.message || e);
       pool = null;
     }
   }
-  // Memory path
   const start = DateTime.fromISO(startISO);
   const end = DateTime.fromISO(endISO);
   const fromArr = (arr) => arr.filter(x => {
@@ -225,6 +229,7 @@ export async function getBusyIntervals(startISO, endISO) {
 }
 
 export async function promoteHoldsToBookingsBySession(session_id, metadata) {
+  await ensureReady();
   if (pool) {
     try {
       const client = await pool.connect();
@@ -249,11 +254,11 @@ export async function promoteHoldsToBookingsBySession(session_id, metadata) {
       }
       return;
     } catch (e) {
-      console.warn("[store] promoteHoldsToBookingsBySession PG error, fallback to memory:", e?.message || e);
+      if (isUndefinedTable(e)) { schemaReady = false; await ensureReady(); return promoteHoldsToBookingsBySession(session_id, metadata); }
+      console.warn("[store] promoteHoldsToBookingsBySession PG error; fallback to memory:", e?.message || e);
       pool = null;
     }
   }
-  // Memory path
   const holds = mem.holds.filter(h => h.session_id === session_id);
   for (const h of holds) {
     if (!mem.bookings.some(b => b.start_iso === h.start_iso && b.end_iso === h.end_iso)) {
