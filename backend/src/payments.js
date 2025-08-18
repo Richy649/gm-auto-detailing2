@@ -15,7 +15,15 @@ function stripe() {
   _stripe = new Stripe(key, { apiVersion: "2024-06-20" });
   return _stripe;
 }
-const frontendURL = () => (process.env.FRONTEND_PUBLIC_URL || "").replace(/\/+$/, "");
+
+function frontendURLFrom(req) {
+  const env = (process.env.FRONTEND_PUBLIC_URL || "").replace(/\/+$/, "");
+  if (env) return env;
+  const fromBody = ((req.body && req.body.origin) || "").replace(/\/+$/, "");
+  if (fromBody && /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(fromBody)) return fromBody;
+  return null;
+}
+
 const HOLD_MINUTES = 15;
 
 export async function createCheckoutSession(req, res) {
@@ -38,27 +46,14 @@ export async function createCheckoutSession(req, res) {
       if (days.size !== slots.length) return res.status(400).json({ ok:false, error: "Membership visits must be on different days" });
     }
 
-    // 1) Try to place holds first (atomic enough via unique constraint)
     const hold_key = newHoldKey();
     for (const s of slots) {
-      // quick check then attempt to insert the hold
       const free = await isSlotFree(s.start_iso, s.end_iso);
-      if (!free) {
-        return res.status(409).json({ ok:false, error: "Sorry, that time was just taken. Please choose another slot." });
-      }
-      const r = await addHold({
-        hold_key,
-        service_key,
-        start_iso: s.start_iso,
-        end_iso: s.end_iso,
-        customer
-      });
-      if (!r.ok) {
-        return res.status(409).json({ ok:false, error: "Another user just reserved that time. Pick a different slot." });
-      }
+      if (!free) return res.status(409).json({ ok:false, error: "Sorry, that time was just taken. Please choose another slot." });
+      const r = await addHold({ hold_key, service_key, start_iso: s.start_iso, end_iso: s.end_iso, customer });
+      if (!r.ok) return res.status(409).json({ ok:false, error: "Another user just reserved that time. Pick a different slot." });
     }
 
-    // 2) Create Stripe session
     const currency = cfg.currency || "gbp";
     const basePrice = cfg.services[service_key].price;
     const line_items = [
@@ -82,11 +77,10 @@ export async function createCheckoutSession(req, res) {
         })),
     ];
 
-    const origin = frontendURL();
+    const origin = frontendURLFrom(req);
     if (!origin) {
-      // release holds if misconfigured
       await releaseHoldsByKey(hold_key);
-      return res.status(500).json({ ok:false, error: "FRONTEND_PUBLIC_URL not set" });
+      return res.status(500).json({ ok:false, error: "Frontend URL not configured" });
     }
 
     const session = await stripe().checkout.sessions.create({
@@ -103,9 +97,7 @@ export async function createCheckoutSession(req, res) {
       cancel_url: `${origin}/?cancelled=1`,
     });
 
-    // 3) Attach Stripe session id to holds (so webhook can promote → bookings)
     await attachSessionToHolds(hold_key, session.id);
-
     res.json({ ok: true, url: session.url });
   } catch (e) {
     console.error("[createCheckoutSession] error:", e);
@@ -135,8 +127,6 @@ export async function stripeWebhook(req, res) {
         addons: JSON.parse(md.addons || "[]"),
         customer: JSON.parse(md.customer || "{}")
       };
-
-      // Move holds → bookings for that session id
       await promoteHoldsToBookingsBySession(session.id, metadata);
       console.log("[stripeWebhook] bookings inserted for session", session.id);
     }
