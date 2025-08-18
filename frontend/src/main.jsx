@@ -194,30 +194,41 @@ function Services({ onNext, onBack, state, setState, config, cfgLoading, reloadC
 function MonthGrid({
   slotsByDay, selectedDay, setSelectedDay,
   monthCursor, setMonthCursor,
-  earliestKey, latestKey, // still used to start at first available day in month
+  earliestKey, latestKey,
   membershipCount, isMembership, bookedDays, onRemoveDay
 }) {
   const monthStart = DateTime.fromObject({ year: monthCursor.year, month: monthCursor.month, day: 1 }, { zone: TZ });
   const monthTitle = monthStart.toFormat("LLLL yyyy");
   const daysInMonth = monthStart.daysInMonth;
 
-  // Limit navigation: current month ↔ next month
+  // Nav: allow current month and the month that contains (today + 1 month)
   const now = DateTime.now().setZone(TZ).startOf("month");
-  const nextMax = now.plus({ months: 1 }).startOf("month");
+  const horizon = DateTime.now().setZone(TZ).plus({ months: 1 }); // exact day one month ahead
+  const horizonMonthStart = horizon.startOf("month");
+
   const ym = (d) => d.year * 12 + d.month;
   const prevDisabled = ym(monthStart) <= ym(now);
-  const nextDisabled = ym(monthStart) >= ym(nextMax);
+  const nextDisabled = ym(monthStart) >= ym(horizonMonthStart);
 
-  // Determine visible day range for this month (start from first bookable day if it’s this month)
-  const inEarliest = earliestKey && monthStart.hasSame(dateFromKeyLocal(earliestKey), "month");
-  const inLatest = latestKey && monthStart.hasSame(dateFromKeyLocal(latestKey), "month");
-  const startDay = inEarliest ? dateFromKeyLocal(earliestKey).day : 1;
-  const endDay = inLatest ? dateFromKeyLocal(latestKey).day : daysInMonth;
+  // Visible range in this grid
+  const inEarliest = earliestKey && monthStart.hasSame(DateTime.fromFormat(earliestKey, "yyyy-LL-dd", { zone: TZ }), "month");
+  const inLatest = latestKey && monthStart.hasSame(DateTime.fromFormat(latestKey, "yyyy-LL-dd", { zone: TZ }), "month");
+
+  const startDay = inEarliest ? DateTime.fromFormat(earliestKey, "yyyy-LL-dd", { zone: TZ }).day : 1;
+
+  // endDay is min(month end, last available day, and horizon day if this is the horizon month)
+  let endDay = inLatest
+    ? DateTime.fromFormat(latestKey, "yyyy-LL-dd", { zone: TZ }).day
+    : daysInMonth;
+
+  if (monthStart.hasSame(horizon, "month")) {
+    endDay = Math.min(endDay, horizon.day);
+  }
 
   const cells = [];
   for (let day = startDay; day <= endDay; day++) {
     const d = monthStart.set({ day });
-    const k = keyLocal(d);
+    const k = d.setZone(TZ).toFormat("yyyy-LL-dd");
     const has = !!slotsByDay[k];
     const selected = selectedDay === k;
     const chosen = bookedDays.includes(k);
@@ -274,6 +285,7 @@ function MonthGrid({
     </div>
   );
 }
+
 
 /* ===================== Calendar (fetches backend availability) ===================== */
 function Calendar({ onNext, onBack, state, setState, services }) {
