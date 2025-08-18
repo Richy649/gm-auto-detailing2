@@ -1,5 +1,4 @@
-// backend/config.js (ESM)
-// Single source of truth for your services/addons and schedule families.
+// backend/config.js
 export function getConfig() {
   return {
     currency: "gbp",
@@ -22,11 +21,11 @@ export function getConfig() {
       premium_membership: {
         name: "Premium Membership (2 Full visits)",
         duration: 120, visits: 2, visitService: "full", price: 100
-      },
+      }
     },
     addons: {
       wax:   { name: "Full Body Wax", price: 15 },
-      polish:{ name: "Hand Polish",   price: 15 },
+      polish:{ name: "Hand Polish",   price: 15 }
     }
   };
 }
