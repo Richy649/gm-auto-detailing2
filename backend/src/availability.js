@@ -1,7 +1,7 @@
 // backend/src/availability.js
 import { DateTime, Interval } from "luxon";
 import { getConfig } from "./config.js";
-import { getBusyIntervals, cleanupExpiredHolds } from "./store.js";
+import { getBusyIntervals, cleanupExpiredHolds, initStore } from "./store.js";
 
 const TZ = "Europe/London";
 
@@ -27,7 +27,8 @@ function removeClashes(candidates, busy) {
 
 export async function getAvailability(req, res) {
   try {
-    await cleanupExpiredHolds();
+    await initStore();            // ✅ make sure schema exists
+    await cleanupExpiredHolds();  // ✅ safe to cleanup
 
     const cfg = getConfig();
     const { service_key, month, lead_minutes } = req.query || {};
@@ -43,7 +44,6 @@ export async function getAvailability(req, res) {
     const lead = Number.isFinite(+lead_minutes) ? +lead_minutes : (cfg.lead_minutes || 1440);
     const leadCutoff = DateTime.now().setZone(TZ).plus({ minutes: lead });
 
-    // Build canonical candidates for the month
     let candidates = [];
     for (let d = monthStart; d <= monthEnd; d = d.plus({ days: 1 })) {
       const starts = familiesFor(durationMin, d, cfg.families);
@@ -53,7 +53,6 @@ export async function getAvailability(req, res) {
       }
     }
 
-    // Remove booked + active holds
     const busy = await getBusyIntervals(monthStart.toUTC().toISO(), monthEnd.toUTC().toISO());
     const free = removeClashes(candidates, busy);
 
