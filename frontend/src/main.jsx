@@ -65,18 +65,38 @@ function Details({ onNext, state, setState }) {
 }
 
 /* ===================== Services ===================== */
-function Services({ onNext, onBack, state, setState, config }) {
-  const services = config.services;
-  const addonsCfg = config.addons;
-  const firstKey = Object.keys(services)[0];
+function Services({ onNext, onBack, state, setState, config, cfgLoading, reloadConfig }) {
+  const services = config.services || {};
+  const addonsCfg = config.addons || {};
 
+  // ⚠️ If config hasn't loaded yet, show a small loader + retry
+  if (!hasKeys(services)) {
+    return (
+      <div className="gm page-section">
+        <Header />
+        <div className="gm panel" style={{ textAlign: "center" }}>
+          <h2 className="gm h2" style={{ fontWeight: 900, marginBottom: 8 }}>Loading services…</h2>
+          <p className="gm muted" style={{ marginBottom: 12 }}>
+            {cfgLoading ? "Fetching config from the server." : "Could not load config. Please try again."}
+          </p>
+          <button className="gm btn" onClick={reloadConfig}>Retry</button>
+          <div style={{ marginTop: 16 }}>
+            <button className="gm btn" onClick={onBack}>Back</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const firstKey = Object.keys(services)[0];
   const [service, setService] = useState(state.service_key && services[state.service_key] ? state.service_key : firstKey);
   const [addons, setAddons] = useState(state.addons || []);
 
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
+
   useEffect(() => {
     setState((s) => {
-      const isMembership = service.includes("membership");
+      const isMembership = service?.includes("membership");
       const next = { ...s, service_key: service };
       next.selectedDay = null;
       next.prefetchedDaySlots = [];
@@ -173,31 +193,26 @@ function Services({ onNext, onBack, state, setState, config }) {
 /* ===================== Month grid (no weekday row) ===================== */
 function MonthGrid({
   slotsByDay, selectedDay, setSelectedDay,
-  monthCursor, setMonthCursor, earliestKey, latestKey,
+  monthCursor, setMonthCursor,
+  earliestKey, latestKey, // still used to start at first available day in month
   membershipCount, isMembership, bookedDays, onRemoveDay
 }) {
   const monthStart = DateTime.fromObject({ year: monthCursor.year, month: monthCursor.month, day: 1 }, { zone: TZ });
   const monthTitle = monthStart.toFormat("LLLL yyyy");
   const daysInMonth = monthStart.daysInMonth;
 
+  // Limit navigation: current month ↔ next month
+  const now = DateTime.now().setZone(TZ).startOf("month");
+  const nextMax = now.plus({ months: 1 }).startOf("month");
   const ym = (d) => d.year * 12 + d.month;
-  const curIdx = ym(monthStart);
-  const minIdx = earliestKey ? ym(dateFromKeyLocal(earliestKey)) : curIdx;
-  const maxIdx = latestKey ? ym(dateFromKeyLocal(latestKey)) : curIdx;
-  const prevDisabled = curIdx <= minIdx;
-  const nextDisabled = curIdx >= maxIdx;
+  const prevDisabled = ym(monthStart) <= ym(now);
+  const nextDisabled = ym(monthStart) >= ym(nextMax);
 
-  const inEarliest =
-    earliestKey &&
-    monthStart.hasSame(dateFromKeyLocal(earliestKey), "month");
-  const inLatest =
-    latestKey &&
-    monthStart.hasSame(dateFromKeyLocal(latestKey), "month");
-
+  // Determine visible day range for this month (start from first bookable day if it’s this month)
+  const inEarliest = earliestKey && monthStart.hasSame(dateFromKeyLocal(earliestKey), "month");
+  const inLatest = latestKey && monthStart.hasSame(dateFromKeyLocal(latestKey), "month");
   const startDay = inEarliest ? dateFromKeyLocal(earliestKey).day : 1;
   const endDay = inLatest ? dateFromKeyLocal(latestKey).day : daysInMonth;
-
-  const counterClass = (membershipCount >= 2) ? "ok" : "warn";
 
   const cells = [];
   for (let day = startDay; day <= endDay; day++) {
@@ -243,7 +258,11 @@ function MonthGrid({
         <div className="gm monthtitle">{monthTitle}</div>
 
         <div className="gm monthnav-right">
-          {isMembership && <span className={cx("gm counter", counterClass)}>{membershipCount}/2</span>}
+          {isMembership && (
+            <span className={cx("gm counter", (membershipCount >= 2) ? "ok" : "warn")}>
+              {membershipCount}/2
+            </span>
+          )}
           <button className="gm btn nav" disabled={nextDisabled}
             onClick={() => !nextDisabled && setMonthCursor(monthStart.plus({ months: 1 }))}>
             Next
@@ -264,9 +283,6 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
   const [monthCursor, setMonthCursor] = useState(DateTime.now().setZone(TZ));
   const [rangeKeys, setRangeKeys] = useState({ earliest_key: null, latest_key: null });
-  const durationMin = services[state.service_key]?.visitService
-    ? services[services[state.service_key].visitService].duration
-    : services[state.service_key]?.duration;
 
   async function loadMonth(dt) {
     const monthStr = dt.toFormat("yyyy-LL");
@@ -276,7 +292,6 @@ function Calendar({ onNext, onBack, state, setState, services }) {
     setSlotsByDay(data.days || {});
     setRangeKeys({ earliest_key: data.earliest_key || null, latest_key: data.latest_key || null });
 
-    // Auto-select first available day if none
     const keys = Object.keys(data.days || {}).sort();
     if (!selectedDay && keys.length) {
       setSelectedDay(keys[0]);
@@ -284,7 +299,6 @@ function Calendar({ onNext, onBack, state, setState, services }) {
     } else if (selectedDay && data.days[selectedDay]) {
       setState((s) => ({ ...s, prefetchedDaySlots: data.days[selectedDay] }));
     } else if (selectedDay && !data.days[selectedDay]) {
-      // If previously selected day disappears (month changed), clear
       setState((s) => ({ ...s, selectedDay: null, prefetchedDaySlots: [] }));
       setSelectedDay(null);
     }
@@ -533,6 +547,24 @@ function App() {
   });
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState({ services: {}, addons: {} });
+  const [cfgLoading, setCfgLoading] = useState(true);
+
+  const fetchConfig = async (attempt = 1) => {
+    try {
+      setCfgLoading(true);
+      const r = await fetch(API + "/config", { cache: "no-store" });
+      const d = await r.json();
+      setConfig(d || {});
+      sessionStorage.setItem("gm_cfg", JSON.stringify(d || {}));
+      setCfgLoading(false);
+    } catch (e) {
+      if (attempt < 3) {
+        setTimeout(() => fetchConfig(attempt + 1), 400 * attempt); // simple retry
+      } else {
+        setCfgLoading(false);
+      }
+    }
+  };
 
   useEffect(() => {
     const qp = new URLSearchParams(window.location.search);
@@ -541,10 +573,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    fetch(API + "/config")
-      .then((r) => r.json())
-      .then((d) => { setConfig(d); sessionStorage.setItem("gm_cfg", JSON.stringify(d)); })
-      .catch(() => {});
+    fetchConfig();
+    // eslint-disable-next-line
   }, []);
 
   const services = hasKeys(config.services) ? config.services : {};
@@ -553,7 +583,7 @@ function App() {
     <div className="gm-site">
       <div className="gm-booking wrap">
         {step === 0 && <Details onNext={() => setStep(1)} state={state} setState={setState} />}
-        {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
+        {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} cfgLoading={cfgLoading} reloadConfig={fetchConfig} />}
         {step === 2 && <Calendar services={services} onNext={() => setStep(3)} onBack={() => { setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] })); setStep(1); }} state={state} setState={setState} />}
         {step === 3 && <Times services={services} onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
         {step === 4 && <Confirm onBack={() => setStep(3)} state={state} setState={setState} />}
