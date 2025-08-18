@@ -1,17 +1,16 @@
 {
-  "name": "gm-api",
-  "type": "module",
-  "scripts": { "start": "node server.js" },
-  "dependencies": {
-  "name": "your-app",
+  "name": "gm-auto-detailing-api",
   "version": "1.0.0",
-  "private": true,
-  "dependencies": {
-    "luxon": "^3.5.0"
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "googleapis": "^132.0.0",
-    "stripe": "^16.0.0"
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
   },
-  "engines": { "node": ">=18" }
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "morgan": "^1.10.0",
+    "luxon": "^3.5.0",
+    "stripe": "^14.0.0"
+  }
 }
