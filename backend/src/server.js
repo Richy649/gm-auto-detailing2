@@ -40,14 +40,16 @@ app.get("/api/config", (_req, res) => res.json(getConfig()));
 app.get("/api/availability", getAvailability);
 app.post("/api/pay/create-checkout-session", createCheckoutSession);
 
-app.get("/api/health", (_req, res) => {
+app.get("/api/health", async (_req, res) => {
+  const { dbMode } = await import("./store.js");
   res.json({
     ok: true,
     stripe: !!process.env.STRIPE_SECRET_KEY,
     frontend_url: process.env.FRONTEND_PUBLIC_URL || null,
-    db: !!process.env.DATABASE_URL
+    db_mode: dbMode()
   });
 });
+
 
 app.get("/", (_req, res) => res.status(200).send("GM Auto Detailing API OK"));
 
