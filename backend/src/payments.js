@@ -2,7 +2,6 @@
 import Stripe from "stripe";
 import { getConfig } from "./config.js";
 import { isSlotFree } from "./availability.js";
-import { createCalendarEvent } from "./gcal.js"; // your file
 
 let _stripe = null;
 function stripe() {
@@ -19,7 +18,6 @@ export async function createCheckoutSession(req, res) {
     const cfg = getConfig();
     const { customer, service_key, addons = [], slot, membershipSlots = [] } = req.body || {};
     if (!customer || !service_key) return res.status(400).json({ ok: false, error: "Missing customer or service_key" });
-
     const svc = cfg.services?.[service_key];
     if (!svc) return res.status(400).json({ ok: false, error: "Unknown service_key" });
 
@@ -85,6 +83,7 @@ export async function createCheckoutSession(req, res) {
   }
 }
 
+/* Webhook: NO Google Calendar insert — it's a no-op right now */
 export async function stripeWebhook(req, res) {
   try {
     const sig = req.headers["stripe-signature"];
@@ -94,30 +93,14 @@ export async function stripeWebhook(req, res) {
     if (whSecret && req.rawBody) {
       event = stripe().webhooks.constructEvent(req.rawBody, sig, whSecret);
     } else {
-      event = req.body; // fallback
+      event = req.body; // fallback (not verified)
       console.warn("[stripeWebhook] Missing STRIPE_WEBHOOK_SECRET or rawBody; not verifying signature.");
     }
 
     if (event.type === "checkout.session.completed") {
+      // You can email or log here if you want. We are NOT creating calendar events.
       const session = event.data.object;
-      const md = session.metadata || {};
-      const service_key = md.service_key;
-      const addons = JSON.parse(md.addons || "[]");
-      const customer = JSON.parse(md.customer || "{}");
-      const slot = md.slot ? JSON.parse(md.slot) : null;
-      const membershipSlots = md.membershipSlots ? JSON.parse(md.membershipSlots) : [];
-      const finalSlots = membershipSlots.length ? membershipSlots : (slot ? [slot] : []);
-
-      for (const s of finalSlots) {
-        try {
-          await createCalendarEvent({
-            service_key, addons, customer,
-            start_iso: s.start_iso, end_iso: s.end_iso
-          });
-        } catch (err) {
-          console.error("[stripeWebhook] calendar insert failed:", err);
-        }
-      }
+      console.log("[stripeWebhook] payment completed for session", session.id);
     }
 
     res.json({ received: true });
