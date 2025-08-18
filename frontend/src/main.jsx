@@ -11,14 +11,29 @@ const API =
 /* ===================== Booking rules ===================== */
 const MAX_DAYS_AHEAD = 30;
 const MIN_LEAD_MIN = 24 * 60; // 24 hours lead
-const BUFFER_MIN = 30; // (for reference – add-ons don't add time)
+const BUFFER_MIN = 30; // reserved if you later need it
+
+/* ===================== Timezone (fix iPhone / DST issues) ===================== */
+const TZ = "Europe/London";
 
 /* ===================== Catalog / Prices ===================== */
 const DEFAULT_SERVICES = {
   exterior: { name: "Exterior Detail", duration: 75, price: 40 },
   full: { name: "Full Detail", duration: 120, price: 60 },
-  standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 70 },
-  premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 100 },
+  standard_membership: {
+    name: "Standard Membership (2 Exterior visits)",
+    duration: 75,
+    visits: 2,
+    visitService: "exterior",
+    price: 70,
+  },
+  premium_membership: {
+    name: "Premium Membership (2 Full visits)",
+    duration: 120,
+    visits: 2,
+    visitService: "full",
+    price: 100,
+  },
 };
 const DEFAULT_ADDONS = {
   wax: { name: "Full Body Wax", price: 15 },
@@ -44,7 +59,23 @@ const dateFromKeyLocal = (key) => {
 };
 
 const dstr = (iso) =>
-  new Date(iso).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+  new Date(iso).toLocaleString("en-GB", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: TZ,
+  });
+
+const fmtTime = (iso) =>
+  new Date(iso).toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: TZ,
+  });
 
 const isWeekend = (d) => [0, 6].includes(d.getDay());
 const addMinutes = (d, mins) => new Date(d.getTime() + mins * 60000);
@@ -52,7 +83,6 @@ const toISO = (day, hm) => {
   const [H, M] = hm.split(":").map(Number);
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), H, M, 0, 0).toISOString();
 };
-const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
 /* Members map to their visit service duration */
 function serviceDuration(service_key, services) {
@@ -123,7 +153,8 @@ function buildCalendarAvailability(durationMin, now = new Date()) {
 function Header() {
   return (
     <header className="gm header">
-      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" style={{ height: "220px" }} />
+      {/* Put your logo at /public/logo.png */}
+      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
     </header>
   );
 }
@@ -138,7 +169,7 @@ function Details({ onNext, state, setState }) {
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "440px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
         <div className="gm details-right">
           <p className="gm hero-note" style={{ fontSize: 17, lineHeight: 1.55, letterSpacing: ".2px", fontWeight: 600 }}>
@@ -173,7 +204,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   const [addons, setAddons] = useState(state.addons || []);
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
-  // Switching service clears selections & pending locks
+  // Switching service clears selections
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
@@ -249,14 +280,14 @@ function Services({ onNext, onBack, state, setState, config }) {
             k="wax"
             title="Full Body Wax"
             price={addonsCfg.wax?.price ?? 15}
-            desc="Deep gloss and slick feel. Adds a protective layer that helps repel grime and water between washes."
+            desc="Durable gloss and water beading. Protects the paint between washes."
             align="left"
           />
           <AddonCard
             k="polish"
             title="Hand Polish"
             price={addonsCfg.polish?.price ?? 15}
-            desc="Reduces haze and light oxidation to refresh tired paintwork, restoring clarity and depth to the finish."
+            desc="Hand-finished clarity. Reduces light haze and brings back shine."
             align="right"
           />
         </div>
@@ -295,20 +326,16 @@ function MonthGrid({
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  const inEarliest = earliestKey && monthStart.getFullYear() === dateFromKeyLocal(earliestKey).getFullYear() && monthStart.getMonth() === dateFromKeyLocal(earliestKey).getMonth();
-  const inLatest = latestKey && monthStart.getFullYear() === dateFromKeyLocal(latestKey).getFullYear() && monthStart.getMonth() === dateFromKeyLocal(latestKey).getMonth();
+  const inEarliest = earliestKey &&
+    monthStart.getFullYear() === dateFromKeyLocal(earliestKey).getFullYear() &&
+    monthStart.getMonth() === dateFromKeyLocal(earliestKey).getMonth();
+
+  const inLatest = latestKey &&
+    monthStart.getFullYear() === dateFromKeyLocal(latestKey).getFullYear() &&
+    monthStart.getMonth() === dateFromKeyLocal(latestKey).getMonth();
 
   const startDay = inEarliest ? dateFromKeyLocal(earliestKey).getDate() : 1;
   const endDay = inLatest ? dateFromKeyLocal(latestKey).getDate() : daysInMonth;
-
-  const counterStyle = { background: "#fff7ed", border: "1px solid #f59e0b", color: "#b45309", fontWeight: 900 };
-
-  const navBtn = {
-    fontSize: 14, fontWeight: 900, padding: "8px 12px",
-    borderRadius: 10, border: "1px solid #0f172a", background: "#0f172a", color: "#fff",
-    cursor: "pointer", opacity: 1
-  };
-  const navBtnDisabled = { ...navBtn, opacity: 0.4, cursor: "not-allowed" };
 
   const closeBtnStyle = {
     position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 999,
@@ -354,13 +381,10 @@ function MonthGrid({
 
   return (
     <div>
-      {/* Centered month bar with big Previous / Next buttons */}
-      <div className="gm monthbar"
-           style={{ display:'grid', gridTemplateColumns:'auto 1fr auto', alignItems:'center', gap:12, marginBottom:8 }}>
-        <div style={{ display:'flex', gap:8 }}>
+      <div className="gm monthbar">
+        <div className="gm monthnav-left">
           <button
             className="gm btn"
-            style={prevDisabled ? navBtnDisabled : navBtn}
             disabled={prevDisabled}
             onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}
           >
@@ -368,15 +392,16 @@ function MonthGrid({
           </button>
         </div>
 
-        <div className="gm monthtitle" style={{ justifySelf:'center', textAlign:'center', fontWeight:900, fontSize:22 }}>
-          {monthTitle}
-        </div>
+        <div className="gm monthtitle">{monthTitle}</div>
 
-        <div style={{ display:'flex', gap:8, alignItems:'center', justifySelf:'end' }}>
-          {isMembership && <span className="gm counter" style={counterStyle}>{membershipCount}/2</span>}
+        <div className="gm monthnav-right">
+          {isMembership && (
+            <span className="gm counter" style={{ background:"#fff7ed", border:"1px solid #f59e0b", color:"#b45309", fontWeight:900, padding:"4px 8px", borderRadius:8 }}>
+              {membershipCount}/2
+            </span>
+          )}
           <button
             className="gm btn"
-            style={nextDisabled ? navBtnDisabled : navBtn}
             disabled={nextDisabled}
             onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}
           >
@@ -457,7 +482,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
 
         {isMembership && selectedIsBooked && (
           <div className="gm note" style={{ marginTop: 10 }}>
-            You’ve already booked <b>{dateFromKeyLocal(selectedDay).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}</b>.
+            You’ve already booked <b>{dateFromKeyLocal(selectedDay).toLocaleDateString("en-GB", { weekday: "long", month: "short", day: "numeric", timeZone: TZ })}</b>.
             Please pick a <b>different day</b> for your second visit.
           </div>
         )}
@@ -486,7 +511,7 @@ function Times({ onNext, onBack, state, setState, services }) {
   const selectedDay = state.selectedDay;
   const durationMin = serviceDuration(state.service_key, services);
 
-  const day = dateFromKeyLocal(selectedDay); // <-- local date (fixes Mon/Tue shift)
+  const day = dateFromKeyLocal(selectedDay); // local date (fixes Mon→Tue drift)
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
   useEffect(() => {
     setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
@@ -502,7 +527,7 @@ function Times({ onNext, onBack, state, setState, services }) {
 
   function choose(slot) {
     if (!isMembership) {
-      setState((st) => ({ ...st, slot: slot }));
+      setState((st) => ({ ...st, slot }));
       return;
     }
     // Membership: swap time if same day already chosen, else add (max 2 days, not the same day twice)
@@ -533,6 +558,8 @@ function Times({ onNext, onBack, state, setState, services }) {
 
   const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
 
+  const headerDateObj = selected ? new Date(selected.start_iso) : dateFromKeyLocal(selectedDay);
+
   const closeBtnStyle = {
     position: "absolute", top: 10, right: 10, width: 26, height: 26,
     borderRadius: 999, background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
@@ -546,13 +573,13 @@ function Times({ onNext, onBack, state, setState, services }) {
       <div className="gm details-grid">
         {/* Left: BIG logo */}
         <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ height: "440px" }} />
+          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
 
         {/* Right: Date + big time boxes */}
         <div className="gm details-right">
           <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 16, fontWeight: 900 }}>
-            {dateFromKeyLocal(selectedDay).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
+            {headerDateObj.toLocaleDateString("en-GB", { weekday: "long", month: "long", day: "numeric", timeZone: TZ })}
           </h2>
 
           <div
@@ -568,7 +595,6 @@ function Times({ onNext, onBack, state, setState, services }) {
                     className={cx("gm timebox", sel && "timebox-on")}
                     onClick={()=>choose(s)}
                     type="button"
-                    style={{ fontSize: 26, fontWeight: 900, padding: "26px 22px", minHeight: 88, borderRadius: 16 }}
                   >
                     {fmtTime(s.start_iso)}
                   </button>
@@ -733,7 +759,7 @@ function App() {
   useEffect(() => {
     const qp = new URLSearchParams(window.location.search);
     if (qp.get("paid") === "1") {
-      setStep(5); // show Thank You
+      setStep(5); // Thank You
     } else if (qp.get("cancelled") === "1") {
       alert("Payment cancelled. Your booking wasn’t completed.");
     }
