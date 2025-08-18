@@ -10,10 +10,10 @@ const API =
 
 /* ===================== Booking rules ===================== */
 const MAX_DAYS_AHEAD = 30;
-const MIN_LEAD_MIN = 24 * 60; // 24 hours
-const BUFFER_MIN = 30;
+const MIN_LEAD_MIN = 24 * 60; // 24 hours lead
+const BUFFER_MIN = 30; // reserved if needed later
 
-/* ===================== Timezone (fix iPhone / DST) ===================== */
+/* ===================== Timezone (fix DST/iPhone) ===================== */
 const TZ = "Europe/London";
 
 /* ===================== Catalog / Prices ===================== */
@@ -22,17 +22,11 @@ const DEFAULT_SERVICES = {
   full: { name: "Full Detail", duration: 120, price: 60 },
   standard_membership: {
     name: "Standard Membership (2 Exterior visits)",
-    duration: 75,
-    visits: 2,
-    visitService: "exterior",
-    price: 70,
+    duration: 75, visits: 2, visitService: "exterior", price: 70
   },
   premium_membership: {
     name: "Premium Membership (2 Full visits)",
-    duration: 120,
-    visits: 2,
-    visitService: "full",
-    price: 100,
+    duration: 120, visits: 2, visitService: "full", price: 100
   },
 };
 const DEFAULT_ADDONS = {
@@ -60,21 +54,13 @@ const dateFromKeyLocal = (key) => {
 
 const dstr = (iso) =>
   new Date(iso).toLocaleString("en-GB", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: TZ,
+    weekday: "short", month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: TZ,
   });
 
 const fmtTime = (iso) =>
   new Date(iso).toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: TZ,
+    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: TZ,
   });
 
 const isWeekend = (d) => [0, 6].includes(d.getDay());
@@ -97,12 +83,12 @@ function serviceDuration(service_key, services) {
 /* ===================== Canonical schedules =====================
 
 Weekdays (Mon–Fri): start 16:00
- - 75 min starts:  16:00, 17:45, 19:45
- - 120 min starts: 16:00, 18:30
+ - 75 min:  16:00, 17:45, 19:45
+ - 120 min: 16:00, 18:30
 
 Weekends (Sat–Sun): start 09:00
- - 75 min starts:  09:00, 10:45, 12:30, 14:15, 16:00, 17:45
- - 120 min starts: 09:00, 11:30, 14:00, 16:30
+ - 75 min:  09:00, 10:45, 12:30, 14:15, 16:00, 17:45
+ - 120 min: 09:00, 11:30, 14:00, 16:30
 
 (24h lead applies; add-ons don't affect time)
 =============================================================== */
@@ -168,7 +154,6 @@ function Details({ onNext, state, setState }) {
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
-          {/* Bigger logo that fills its box without changing layout height */}
           <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
         <div className="gm details-right">
@@ -300,7 +285,7 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ===================== Month grid ===================== */
+/* ===================== Month grid (NO weekday row) ===================== */
 function MonthGrid({
   slotsByDay,
   selectedDay,
@@ -338,20 +323,9 @@ function MonthGrid({
   const startDay = inEarliest ? dateFromKeyLocal(earliestKey).getDate() : 1;
   const endDay = inLatest ? dateFromKeyLocal(latestKey).getDate() : daysInMonth;
 
-  // ---- Fillers so first visible day appears under correct weekday (Mon=0..Sun=6)
-  const firstVisibleDate = new Date(monthStart.getFullYear(), monthStart.getMonth(), startDay);
-  const monBased = (d) => (d.getDay() + 6) % 7; // 0=Mon..6=Sun
-  const leadPlaceholders = monBased(firstVisibleDate); // number of empty cells before firstVisibleDate
-
   const counterClass = membershipCount >= 2 ? "ok" : "warn";
 
   const cells = [];
-
-  // Leading placeholders for alignment
-  for (let i = 0; i < leadPlaceholders; i++) {
-    cells.push(<div key={`ph-${i}`} className="gm daywrap"><div className="gm daycell placeholder" /></div>);
-  }
-
   for (let day = startDay; day <= endDay; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
@@ -418,10 +392,7 @@ function MonthGrid({
         </div>
       </div>
 
-      <div className="gm small-note">We hope you can find a slot that works. If not, message me and I’ll do my best to sort it out.</div>
-      <div className="gm dowrow">
-        {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => <div key={d} className="gm dow">{d}</div>)}
-      </div>
+      {/* No weekday row here */}
       <div className="gm monthgrid">{cells}</div>
     </div>
   );
@@ -519,7 +490,7 @@ function Times({ onNext, onBack, state, setState, services }) {
   const selectedDay = state.selectedDay;
   const durationMin = serviceDuration(state.service_key, services);
 
-  const day = dateFromKeyLocal(selectedDay); // local date (fixes Mon→Tue drift)
+  const day = dateFromKeyLocal(selectedDay); // local date
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
   useEffect(() => {
     setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
@@ -541,10 +512,7 @@ function Times({ onNext, onBack, state, setState, services }) {
       const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
       const dayK = keyLocal(new Date(slot.start_iso));
       const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
-      if (idxSameDay !== -1) {
-        ms[idxSameDay] = slot;
-        return { ...st, membershipSlots: ms };
-      }
+      if (idxSameDay !== -1) { ms[idxSameDay] = slot; return { ...st, membershipSlots: ms }; }
       if (ms.some(x => keyLocal(new Date(x.start_iso)) === dayK)) return { ...st, membershipSlots: ms };
       if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
       return { ...st, membershipSlots: [ms[0], slot] };
@@ -552,25 +520,17 @@ function Times({ onNext, onBack, state, setState, services }) {
   }
 
   function removeSelectedSlot(slot) {
-    if (!isMembership) {
-      setState((st) => ({ ...st, slot: null }));
-    } else {
-      setState((st) => ({
-        ...st,
-        membershipSlots: (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso)
-      }));
-    }
+    if (!isMembership) setState((st) => ({ ...st, slot: null }));
+    else setState((st) => ({ ...st, membershipSlots: (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso) }));
   }
 
   const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
-
   const headerDateObj = selected ? new Date(selected.start_iso) : dateFromKeyLocal(selectedDay);
 
   return (
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
-          {/* Bigger, non-stretching logo */}
           <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
 
@@ -585,23 +545,12 @@ function Times({ onNext, onBack, state, setState, services }) {
                           (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
               return (
                 <div key={s.start_iso} className="gm timebox-wrap" style={{ position: "relative" }}>
-                  <button
-                    className={cx("gm timebox", sel && "timebox-on")}
-                    onClick={()=>choose(s)}
-                    type="button"
-                  >
+                  <button className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
                     {fmtTime(s.start_iso)}
                   </button>
                   {sel && (
-                    <button
-                      type="button"
-                      aria-label="Remove this booking"
-                      className="gm closebtn"
-                      onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }}
-                      title="Remove this booking"
-                    >
-                      ×
-                    </button>
+                    <button type="button" aria-label="Remove this booking" className="gm closebtn"
+                      onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }} title="Remove this booking">×</button>
                   )}
                 </div>
               );
@@ -610,17 +559,8 @@ function Times({ onNext, onBack, state, setState, services }) {
 
           <div className="gm actions" style={{ marginTop: 18, display:'flex', justifyContent:'flex-end', gap:8 }}>
             <button className="gm btn" onClick={onBack}>Back to calendar</button>
-            <button
-              className="gm btn primary"
-              disabled={!canNext}
-              onClick={() => {
-                if (isMembership && (state.membershipSlots||[]).length === 1) {
-                  onBack(); // pick second date
-                } else {
-                  onNext();
-                }
-              }}
-            >
+            <button className="gm btn primary" disabled={!canNext}
+              onClick={() => { if (isMembership && (state.membershipSlots||[]).length === 1) onBack(); else onNext(); }}>
               {isMembership && (state.membershipSlots||[]).length === 1 ? "Choose second date" : "Continue"}
             </button>
           </div>
@@ -659,17 +599,12 @@ function Confirm({ onBack, state, setState }) {
         body: JSON.stringify(payload),
       });
       const raw = await resp.text();
-      let data;
-      try { data = JSON.parse(raw); } catch { data = { ok: false, error: `Invalid JSON from API: ${raw.slice(0,200)}` }; }
-      if (!resp.ok || !data?.ok || !data?.url) {
-        throw new Error(data?.error || `HTTP ${resp.status} — ${raw.slice(0,200)}`);
-      }
+      let data; try { data = JSON.parse(raw); } catch { data = { ok: false, error: `Invalid JSON from API: ${raw.slice(0,200)}` }; }
+      if (!resp.ok || !data?.ok || !data?.url) throw new Error(data?.error || `HTTP ${resp.status} — ${raw.slice(0,200)}`);
       window.location.href = data.url; // Stripe Checkout
     } catch (err) {
       alert(`Checkout failed:\n${String(err.message || err)}\n\nAPI base: ${API}`);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   const when = state.service_key?.includes("membership")
@@ -682,7 +617,6 @@ function Confirm({ onBack, state, setState }) {
       <div className="gm panel">
         <h2 className="gm h2" style={{ textAlign:'center', fontWeight: 900, marginBottom: 10 }}>Confirm Booking</h2>
 
-        {/* Equal width columns on desktop; stack on mobile */}
         <div className="gm twocol">
           <div className="gm panel sub">
             <div style={{ marginBottom: 6 }}><b>Date & time:</b> {when || "—"}</div>
@@ -722,10 +656,7 @@ function ThankYou() {
         </p>
         <button
           className="gm btn primary"
-          onClick={() => {
-            window.history.replaceState({}, "", "/");
-            window.location.reload();
-          }}
+          onClick={() => { window.history.replaceState({}, "", "/"); window.location.reload(); }}
         >
           Back to start
         </button>
