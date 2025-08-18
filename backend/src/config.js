@@ -2,12 +2,10 @@
 export function getConfig() {
   return {
     currency: "gbp",
-    lead_minutes: 24 * 60, // 24h lead
+    lead_minutes: 24 * 60, // 24h
     families: {
-      // Weekdays (Mon–Fri)
       weekday_75:  ["16:00","17:45","19:45"],
       weekday_120: ["16:00","18:30"],
-      // Weekends (Sat–Sun)
       weekend_75:  ["09:00","10:45","12:30","14:15","16:00","17:45"],
       weekend_120: ["09:00","11:30","14:00","16:30"]
     },
@@ -24,8 +22,8 @@ export function getConfig() {
       }
     },
     addons: {
-      wax:   { name: "Full Body Wax", price: 15 },
-      polish:{ name: "Hand Polish",   price: 15 }
+      wax:   { name: "Full Body Wax", price: 10 },
+      polish:{ name: "Hand Polish",   price: 22.5 }
     }
   };
 }
