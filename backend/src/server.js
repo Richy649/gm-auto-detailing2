@@ -9,18 +9,17 @@ import { createCheckoutSession, stripeWebhook } from "./payments.js";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-/* ===== CORS: allow prod + any Vercel preview for this project + localhost ===== */
+/* ===== CORS: allow prod + ANY *.vercel.app preview + localhost ===== */
 const ALLOW_ORIGINS = [
   "https://gm-auto-detailing2.vercel.app",
   "http://localhost:5173"
 ];
-// matches any preview like gm-auto-detailing2-xxxx.vercel.app
-const VERCEL_PREVIEW_RE = /^https:\/\/gm-auto-detailing2-[a-z0-9-]+\.vercel\.app$/i;
+const VERCEL_ANY_RE = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i;
 
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true); // health/curl
-    if (ALLOW_ORIGINS.includes(origin) || VERCEL_PREVIEW_RE.test(origin)) {
+    if (ALLOW_ORIGINS.includes(origin) || VERCEL_ANY_RE.test(origin)) {
       return cb(null, true);
     }
     cb(new Error(`CORS blocked: ${origin}`));
@@ -45,7 +44,8 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     stripe: !!process.env.STRIPE_SECRET_KEY,
-    frontend_url: process.env.FRONTEND_PUBLIC_URL || null
+    frontend_url: process.env.FRONTEND_PUBLIC_URL || null,
+    db: !!process.env.DATABASE_URL
   });
 });
 
