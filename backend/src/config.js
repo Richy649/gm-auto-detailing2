@@ -1,4 +1,4 @@
-// backend/config.js
+// backend/src/config.js
 export function getConfig() {
   return {
     currency: "gbp",
