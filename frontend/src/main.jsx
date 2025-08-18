@@ -10,10 +10,10 @@ const API =
 
 /* ===================== Booking rules ===================== */
 const MAX_DAYS_AHEAD = 30;
-const MIN_LEAD_MIN = 24 * 60; // 24 hours lead
-const BUFFER_MIN = 30; // reserved if you later need it
+const MIN_LEAD_MIN = 24 * 60; // 24 hours
+const BUFFER_MIN = 30;
 
-/* ===================== Timezone (fix iPhone / DST issues) ===================== */
+/* ===================== Timezone (fix iPhone / DST) ===================== */
 const TZ = "Europe/London";
 
 /* ===================== Catalog / Prices ===================== */
@@ -45,7 +45,7 @@ const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
 
-/* IMPORTANT: never use new Date("YYYY-MM-DD") (UTC parse). */
+/* Never use new Date("YYYY-MM-DD") (UTC parse). */
 const keyLocal = (date) => {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, "0");
@@ -130,7 +130,7 @@ function dayStartsCanonical(day, durationMin, now = new Date()) {
 
   const starts = [];
   for (const s of fam.slots) {
-    if (s.d !== durationMin) continue; // add-ons = zero time
+    if (s.d !== durationMin) continue;
     const iso = toISO(day, s.t);
     if (new Date(iso) >= inLead) {
       starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: fam.id, t: s.t, d: s.d });
@@ -150,11 +150,10 @@ function buildCalendarAvailability(durationMin, now = new Date()) {
 }
 
 /* ===================== Header ===================== */
-function Header() {
+function Header({ size = "md" }) {
   return (
-    <header className="gm header">
-      {/* Put your logo at /public/logo.png */}
-      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
+    <header className={cx("gm header", size === "lg" && "lg")}>
+      <img className={cx("gm logo", size === "lg" && "logo-hero")} src="/logo.png" alt="GM Auto Detailing" />
     </header>
   );
 }
@@ -169,6 +168,7 @@ function Details({ onNext, state, setState }) {
     <div className="gm page-section">
       <div className="gm details-grid">
         <div className="gm details-left">
+          {/* Bigger logo that fills its box without changing layout height */}
           <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
         <div className="gm details-right">
@@ -204,7 +204,6 @@ function Services({ onNext, onBack, state, setState, config }) {
   const [addons, setAddons] = useState(state.addons || []);
   useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
-  // Switching service clears selections
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
@@ -316,7 +315,7 @@ function MonthGrid({
   onRemoveDay = () => {}
 }) {
   const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
-  const monthTitle = monthStart.toLocaleString([], { month: "long", year: "numeric" });
+  const monthTitle = monthStart.toLocaleString("en-GB", { month: "long", year: "numeric", timeZone: TZ });
   const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
 
   const ym = (d) => d.getFullYear() * 12 + d.getMonth();
@@ -326,25 +325,33 @@ function MonthGrid({
   const prevDisabled = curIdx <= minIdx;
   const nextDisabled = curIdx >= maxIdx;
 
-  const inEarliest = earliestKey &&
+  const inEarliest =
+    earliestKey &&
     monthStart.getFullYear() === dateFromKeyLocal(earliestKey).getFullYear() &&
     monthStart.getMonth() === dateFromKeyLocal(earliestKey).getMonth();
 
-  const inLatest = latestKey &&
+  const inLatest =
+    latestKey &&
     monthStart.getFullYear() === dateFromKeyLocal(latestKey).getFullYear() &&
     monthStart.getMonth() === dateFromKeyLocal(latestKey).getMonth();
 
   const startDay = inEarliest ? dateFromKeyLocal(earliestKey).getDate() : 1;
   const endDay = inLatest ? dateFromKeyLocal(latestKey).getDate() : daysInMonth;
 
-  const closeBtnStyle = {
-    position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: 999,
-    background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
-    fontWeight: 900, lineHeight: "20px", fontSize: 14, display: "inline-flex",
-    alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,.12)"
-  };
+  // ---- Fillers so first visible day appears under correct weekday (Mon=0..Sun=6)
+  const firstVisibleDate = new Date(monthStart.getFullYear(), monthStart.getMonth(), startDay);
+  const monBased = (d) => (d.getDay() + 6) % 7; // 0=Mon..6=Sun
+  const leadPlaceholders = monBased(firstVisibleDate); // number of empty cells before firstVisibleDate
+
+  const counterClass = membershipCount >= 2 ? "ok" : "warn";
 
   const cells = [];
+
+  // Leading placeholders for alignment
+  for (let i = 0; i < leadPlaceholders; i++) {
+    cells.push(<div key={`ph-${i}`} className="gm daywrap"><div className="gm daycell placeholder" /></div>);
+  }
+
   for (let day = startDay; day <= endDay; day++) {
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
     const k = keyLocal(d);
@@ -368,7 +375,7 @@ function MonthGrid({
           <button
             type="button"
             aria-label="Remove this booked day"
-            style={closeBtnStyle}
+            className="gm closebtn"
             onClick={(e) => { e.stopPropagation(); onRemoveDay(k); }}
             title="Remove this booking"
           >
@@ -381,10 +388,11 @@ function MonthGrid({
 
   return (
     <div>
+      {/* Centered month bar with equal-width nav buttons */}
       <div className="gm monthbar">
         <div className="gm monthnav-left">
           <button
-            className="gm btn"
+            className="gm btn nav"
             disabled={prevDisabled}
             onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}
           >
@@ -396,12 +404,12 @@ function MonthGrid({
 
         <div className="gm monthnav-right">
           {isMembership && (
-            <span className="gm counter" style={{ background:"#fff7ed", border:"1px solid #f59e0b", color:"#b45309", fontWeight:900, padding:"4px 8px", borderRadius:8 }}>
+            <span className={cx("gm counter", counterClass)}>
               {membershipCount}/2
             </span>
           )}
           <button
-            className="gm btn"
+            className="gm btn nav"
             disabled={nextDisabled}
             onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}
           >
@@ -517,7 +525,6 @@ function Times({ onNext, onBack, state, setState, services }) {
     setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
   }, [selectedDay, durationMin]);
 
-  // Current selection on this day
   const selected =
     isMembership
       ? (state.membershipSlots || []).find((s) => s && keyLocal(new Date(s.start_iso)) === selectedDay)
@@ -530,7 +537,6 @@ function Times({ onNext, onBack, state, setState, services }) {
       setState((st) => ({ ...st, slot }));
       return;
     }
-    // Membership: swap time if same day already chosen, else add (max 2 days, not the same day twice)
     setState((st) => {
       const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
       const dayK = keyLocal(new Date(slot.start_iso));
@@ -560,32 +566,20 @@ function Times({ onNext, onBack, state, setState, services }) {
 
   const headerDateObj = selected ? new Date(selected.start_iso) : dateFromKeyLocal(selectedDay);
 
-  const closeBtnStyle = {
-    position: "absolute", top: 10, right: 10, width: 26, height: 26,
-    borderRadius: 999, background: "#0f172a", color: "#fff", border: "1px solid #e5e7eb",
-    fontWeight: 900, lineHeight: "24px", fontSize: 16, display: "inline-flex",
-    alignItems: "center", justifyContent: "center", cursor: "pointer",
-    boxShadow: "0 1px 2px rgba(0,0,0,.12)"
-  };
-
   return (
     <div className="gm page-section">
       <div className="gm details-grid">
-        {/* Left: BIG logo */}
         <div className="gm details-left">
+          {/* Bigger, non-stretching logo */}
           <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
         </div>
 
-        {/* Right: Date + big time boxes */}
         <div className="gm details-right">
           <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 16, fontWeight: 900 }}>
             {headerDateObj.toLocaleDateString("en-GB", { weekday: "long", month: "long", day: "numeric", timeZone: TZ })}
           </h2>
 
-          <div
-            className="gm timegrid"
-            style={{ display: "grid", gap: 14, gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}
-          >
+          <div className="gm timegrid">
             {daySlots.map((s)=> {
               const sel = selected?.start_iso === s.start_iso ||
                           (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
@@ -602,7 +596,7 @@ function Times({ onNext, onBack, state, setState, services }) {
                     <button
                       type="button"
                       aria-label="Remove this booking"
-                      style={closeBtnStyle}
+                      className="gm closebtn"
                       onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }}
                       title="Remove this booking"
                     >
@@ -640,7 +634,6 @@ function Times({ onNext, onBack, state, setState, services }) {
 function Confirm({ onBack, state, setState }) {
   const [loading, setLoading] = useState(false);
 
-  // Totals (must match backend)
   const total = useMemo(() => {
     const map = { exterior: 40, full: 60, standard_membership: 70, premium_membership: 100 };
     const addonsMap = { wax: 15, polish: 15 };
@@ -660,28 +653,20 @@ function Confirm({ onBack, state, setState }) {
         slot: state.slot,
         membershipSlots: state.membershipSlots,
       };
-
       const resp = await fetch(`${API}/pay/create-checkout-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
       const raw = await resp.text();
       let data;
       try { data = JSON.parse(raw); } catch { data = { ok: false, error: `Invalid JSON from API: ${raw.slice(0,200)}` }; }
-
       if (!resp.ok || !data?.ok || !data?.url) {
         throw new Error(data?.error || `HTTP ${resp.status} — ${raw.slice(0,200)}`);
       }
-
       window.location.href = data.url; // Stripe Checkout
     } catch (err) {
-      alert(
-        `Checkout failed:\n${String(err.message || err)}\n\n` +
-        `API base: ${API}\n` +
-        `Make sure Vercel VITE_API points to your Render API /api`
-      );
+      alert(`Checkout failed:\n${String(err.message || err)}\n\nAPI base: ${API}`);
     } finally {
       setLoading(false);
     }
@@ -693,12 +678,13 @@ function Confirm({ onBack, state, setState }) {
 
   return (
     <div className="gm page-section">
-      <Header />
+      <Header size="lg" />
       <div className="gm panel">
         <h2 className="gm h2" style={{ textAlign:'center', fontWeight: 900, marginBottom: 10 }}>Confirm Booking</h2>
 
-        <div className="gm row">
-          <div className="gm panel sub" style={{ flex: 1 }}>
+        {/* Equal width columns on desktop; stack on mobile */}
+        <div className="gm twocol">
+          <div className="gm panel sub">
             <div style={{ marginBottom: 6 }}><b>Date & time:</b> {when || "—"}</div>
             <div style={{ marginBottom: 6 }}><b>Name:</b> {state.customer?.name}</div>
             <div style={{ marginBottom: 6 }}><b>Address:</b> {state.customer?.address}</div>
@@ -707,7 +693,7 @@ function Confirm({ onBack, state, setState }) {
             <div style={{ marginBottom: 6 }}><b>Service:</b> {state.service_key}</div>
             <div style={{ marginBottom: 6 }}><b>Add-ons:</b> {(state.addons||[]).join(", ") || "None"}</div>
           </div>
-          <div className="gm panel sub" style={{ width: 280, textAlign:'center' }}>
+          <div className="gm panel sub" style={{ textAlign:'center' }}>
             <div className="gm muted" style={{ fontSize: 14 }}>Amount due</div>
             <div className="gm total" style={{ fontSize: 36, fontWeight: 900 }}>{fmtGBP(total)}</div>
           </div>
@@ -737,7 +723,6 @@ function ThankYou() {
         <button
           className="gm btn primary"
           onClick={() => {
-            // clear query params and go back to start
             window.history.replaceState({}, "", "/");
             window.location.reload();
           }}
@@ -755,14 +740,10 @@ function App() {
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState({ services: {}, addons: {} });
 
-  // Detect Stripe return (?paid=1 / ?cancelled=1)
   useEffect(() => {
     const qp = new URLSearchParams(window.location.search);
-    if (qp.get("paid") === "1") {
-      setStep(5); // Thank You
-    } else if (qp.get("cancelled") === "1") {
-      alert("Payment cancelled. Your booking wasn’t completed.");
-    }
+    if (qp.get("paid") === "1") setStep(5);
+    else if (qp.get("cancelled") === "1") alert("Payment cancelled. Your booking wasn’t completed.");
   }, []);
 
   useEffect(() => {
@@ -782,24 +763,12 @@ function App() {
     <div className="gm-site">
       <div className="gm-booking wrap">
         {step === 0 && <Details onNext={() => setStep(1)} state={state} setState={setState} />}
-        {step === 1 && (
-          <Services
-            onNext={() => setStep(2)}
-            onBack={() => setStep(0)}
-            state={state}
-            setState={setState}
-            config={config}
-          />
-        )}
+        {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
         {step === 2 && (
           <Calendar
             services={services}
             onNext={() => setStep(3)}
-            onBack={() => {
-              // Leaving Calendar resets any pending picks
-              setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] }));
-              setStep(1);
-            }}
+            onBack={() => { setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] })); setStep(1); }}
             state={state}
             setState={setState}
           />
