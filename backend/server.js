@@ -1,42 +1,57 @@
-// backend/server.js
+// backend/server.js (ESM)
 import express from "express";
 import cors from "cors";
+import morgan from "morgan";
+import { getConfig } from "./config.js";
+import { getAvailability } from "./availability.js";
 import { createCheckoutSession, stripeWebhook } from "./payments.js";
 
 const app = express();
+const PORT = process.env.PORT || 3001;
 
-/* CORS (allow all during setup) */
-app.use(cors());
+/* --------- CORS allowlist --------- */
+const allowCSV = (process.env.CORS_ALLOW_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
+const allow = new Set(allowCSV);
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // curl / health
+    if (allow.size === 0 || allow.has(origin)) return cb(null, true);
+    cb(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: false,
+};
 
-/* Stripe webhook BEFORE json parser, using raw body */
-app.post(
-  "/api/webhooks/stripe",
-  express.raw({ type: "application/json" }),
-  (req, _res, next) => { req.rawBody = req.body; next(); },
-  stripeWebhook
-);
+/* --------- Stripe webhook must use raw body --------- */
+app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), stripeWebhook);
 
-/* JSON for normal routes */
-app.use(express.json());
+/* --------- Normal middleware --------- */
+app.use(cors(corsOptions));
+app.use(morgan("tiny"));
+app.use(express.json()); // after webhook raw
 
-/* Config for frontend */
-app.get("/api/config", (_req, res) => {
+/* --------- Config (single source of truth) --------- */
+app.get("/api/config", (req, res) => {
+  res.json(getConfig());
+});
+
+/* --------- Availability --------- */
+app.get("/api/availability", getAvailability);
+
+/* --------- Payments --------- */
+app.post("/api/pay/create-checkout-session", createCheckoutSession);
+
+/* --------- Health --------- */
+app.get("/api/health", (req, res) => {
   res.json({
-    services: {
-      exterior: { name: "Exterior Detail", duration: 75, price: 40 },
-      full: { name: "Full Detail", duration: 120, price: 60 },
-      standard_membership: { name: "Standard Membership (2 Exterior visits)", duration: 75, visits: 2, visitService: "exterior", price: 70 },
-      premium_membership: { name: "Premium Membership (2 Full visits)", duration: 120, visits: 2, visitService: "full", price: 100 },
-    },
-    addons: { wax: { name: "Full Body Wax", price: 15 }, polish: { name: "Hand Polish", price: 15 } },
+    ok: true,
+    stripe: !!process.env.STRIPE_SECRET_KEY,
+    frontend_url: process.env.FRONTEND_PUBLIC_URL || null,
+    cors_allow_origins: allowCSV,
   });
 });
 
-/* Stripe: create checkout session */
-app.post("/api/pay/create-checkout-session", createCheckoutSession);
+app.get("/", (_req, res) => res.status(200).send("GM Auto Detailing API OK"));
 
-/* Health */
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
-
-const PORT = process.env.PORT || 8787;
-app.listen(PORT, () => console.log(`[api] listening on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`API listening on :${PORT}`);
+});
