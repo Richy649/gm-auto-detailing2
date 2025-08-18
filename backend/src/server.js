@@ -1,3 +1,4 @@
+
 // backend/src/server.js
 import express from "express";
 import cors from "cors";
@@ -5,6 +6,7 @@ import morgan from "morgan";
 import { getConfig } from "./config.js";
 import { getAvailability } from "./availability.js";
 import { createCheckoutSession, stripeWebhook } from "./payments.js";
+import { initStore } from "./store.js"; // ⬅️ add this
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -18,10 +20,8 @@ const VERCEL_ANY_RE = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i;
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // health/curl
-    if (ALLOW_ORIGINS.includes(origin) || VERCEL_ANY_RE.test(origin)) {
-      return cb(null, true);
-    }
+    if (!origin) return cb(null, true);
+    if (ALLOW_ORIGINS.includes(origin) || VERCEL_ANY_RE.test(origin)) return cb(null, true);
     cb(new Error(`CORS blocked: ${origin}`));
   },
   credentials: false,
@@ -50,7 +50,9 @@ app.get("/api/health", async (_req, res) => {
   });
 });
 
-
 app.get("/", (_req, res) => res.status(200).send("GM Auto Detailing API OK"));
+
+/* ✅ Ensure DB schema exists BEFORE serving requests */
+await initStore();
 
 app.listen(PORT, () => console.log(`API listening on :${PORT}`));
