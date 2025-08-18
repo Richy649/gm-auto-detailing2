@@ -1,14 +1,13 @@
 // backend/src/availability.js
 import { DateTime, Interval } from "luxon";
 import { getConfig } from "./config.js";
-import { listBusyIntervals } from "./gcal.js"; // your file
 
 const TZ = "Europe/London";
 
-function isWeekend(dt) {
-  const dow = dt.setZone(TZ).weekday; // 1..7
-  return dow === 6 || dow === 7;
-}
+/* NO GOOGLE CALENDAR: busy list is empty */
+async function listBusyIntervals(_startISO, _endISO) { return []; }
+
+function isWeekend(dt) { const w = dt.setZone(TZ).weekday; return w === 6 || w === 7; }
 function familiesFor(durationMin, dt, fam) {
   if (isWeekend(dt)) return durationMin === 120 ? fam.weekend_120 : fam.weekend_75;
   return durationMin === 120 ? fam.weekday_120 : fam.weekday_75;
@@ -49,14 +48,11 @@ export async function getAvailability(req, res) {
       const starts = familiesFor(durationMin, d, cfg.families);
       for (const hm of starts) {
         const slot = makeSlotISO(d, hm, durationMin);
-        if (DateTime.fromISO(slot.start_iso) >= leadCutoff.toUTC()) {
-          candidates.push(slot);
-        }
+        if (DateTime.fromISO(slot.start_iso) >= leadCutoff.toUTC()) candidates.push(slot);
       }
     }
 
-    // Busy from Google Calendar (your gcal.js). If not wired, just return [].
-    const busy = await listBusyIntervals(monthStart.toUTC().toISO(), monthEnd.toUTC().toISO());
+    const busy = await listBusyIntervals(monthStart.toUTC().toISO(), monthEnd.toUTC().toISO()); // []
     const free = removeClashes(candidates, busy);
 
     const byDay = {};
@@ -77,12 +73,7 @@ export async function getAvailability(req, res) {
   }
 }
 
-export async function isSlotFree(_service_key, startISO, endISO) {
-  try {
-    const busy = await listBusyIntervals(startISO, endISO);
-    const slot = Interval.fromDateTimes(DateTime.fromISO(startISO), DateTime.fromISO(endISO));
-    return !busy?.some(b => slot.overlaps(Interval.fromDateTimes(DateTime.fromISO(b.start), DateTime.fromISO(b.end))));
-  } catch {
-    return true; // if calendar not configured, allow
-  }
+/* Used by payments revalidation; with no calendar, everything is free */
+export async function isSlotFree(_service_key, _startISO, _endISO) {
+  return true;
 }
