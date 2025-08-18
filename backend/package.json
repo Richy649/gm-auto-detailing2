@@ -3,6 +3,11 @@
   "type": "module",
   "scripts": { "start": "node server.js" },
   "dependencies": {
+  "name": "your-app",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "luxon": "^3.5.0"
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "googleapis": "^132.0.0",
