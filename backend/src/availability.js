@@ -1,11 +1,9 @@
 // backend/src/availability.js
 import { DateTime, Interval } from "luxon";
 import { getConfig } from "./config.js";
+import { getBusyIntervals, cleanupExpiredHolds } from "./store.js";
 
 const TZ = "Europe/London";
-
-/* NO GOOGLE CALENDAR: busy list is empty */
-async function listBusyIntervals(_startISO, _endISO) { return []; }
 
 function isWeekend(dt) { const w = dt.setZone(TZ).weekday; return w === 6 || w === 7; }
 function familiesFor(durationMin, dt, fam) {
@@ -29,6 +27,8 @@ function removeClashes(candidates, busy) {
 
 export async function getAvailability(req, res) {
   try {
+    await cleanupExpiredHolds();
+
     const cfg = getConfig();
     const { service_key, month, lead_minutes } = req.query || {};
     const svc = cfg.services?.[service_key];
@@ -43,6 +43,7 @@ export async function getAvailability(req, res) {
     const lead = Number.isFinite(+lead_minutes) ? +lead_minutes : (cfg.lead_minutes || 1440);
     const leadCutoff = DateTime.now().setZone(TZ).plus({ minutes: lead });
 
+    // Build canonical candidates for the month
     let candidates = [];
     for (let d = monthStart; d <= monthEnd; d = d.plus({ days: 1 })) {
       const starts = familiesFor(durationMin, d, cfg.families);
@@ -52,7 +53,8 @@ export async function getAvailability(req, res) {
       }
     }
 
-    const busy = await listBusyIntervals(monthStart.toUTC().toISO(), monthEnd.toUTC().toISO()); // []
+    // Remove booked + active holds
+    const busy = await getBusyIntervals(monthStart.toUTC().toISO(), monthEnd.toUTC().toISO());
     const free = removeClashes(candidates, busy);
 
     const byDay = {};
@@ -71,9 +73,4 @@ export async function getAvailability(req, res) {
     console.error("[getAvailability] error", e);
     res.status(500).json({ ok: false, error: "Failed to build availability" });
   }
-}
-
-/* Used by payments revalidation; with no calendar, everything is free */
-export async function isSlotFree(_service_key, _startISO, _endISO) {
-  return true;
 }
