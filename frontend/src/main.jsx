@@ -1,139 +1,18 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { DateTime } from "luxon";
 import "./calendar.css";
 
-/* ===================== API base (with safe fallback) ===================== */
-const API =
-  (typeof window !== "undefined" && window.__API__) ||
-  import.meta.env.VITE_API ||
-  "https://gm-auto-detailing2.onrender.com/api";
-
-/* ===================== Booking rules ===================== */
-const MAX_DAYS_AHEAD = 30;
-const MIN_LEAD_MIN = 24 * 60; // 24 hours lead
-const BUFFER_MIN = 30; // reserved if needed later
-
-/* ===================== Timezone (fix DST/iPhone) ===================== */
+/* ===================== API base ===================== */
+const API = import.meta.env.VITE_API || "https://gm-auto-detailing2.onrender.com/api";
 const TZ = "Europe/London";
 
-/* ===================== Catalog / Prices ===================== */
-const DEFAULT_SERVICES = {
-  exterior: { name: "Exterior Detail", duration: 75, price: 40 },
-  full: { name: "Full Detail", duration: 120, price: 60 },
-  standard_membership: {
-    name: "Standard Membership (2 Exterior visits)",
-    duration: 75, visits: 2, visitService: "exterior", price: 70
-  },
-  premium_membership: {
-    name: "Premium Membership (2 Full visits)",
-    duration: 120, visits: 2, visitService: "full", price: 100
-  },
-};
-const DEFAULT_ADDONS = {
-  wax: { name: "Full Body Wax", price: 15 },
-  polish: { name: "Hand Polish", price: 15 },
-};
-
-/* ===================== Helpers ===================== */
+/* ===================== helpers ===================== */
 const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
 const cx = (...a) => a.filter(Boolean).join(" ");
 const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
-
-/* Never use new Date("YYYY-MM-DD") (UTC parse). */
-const keyLocal = (date) => {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-};
-const dateFromKeyLocal = (key) => {
-  if (!key) return new Date();
-  const [y, m, d] = key.split("-").map(Number);
-  return new Date(y, (m || 1) - 1, d || 1); // local midnight
-};
-
-const dstr = (iso) =>
-  new Date(iso).toLocaleString("en-GB", {
-    weekday: "short", month: "short", day: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: TZ,
-  });
-
-const fmtTime = (iso) =>
-  new Date(iso).toLocaleTimeString("en-GB", {
-    hour: "2-digit", minute: "2-digit", hour12: false, timeZone: TZ,
-  });
-
-const isWeekend = (d) => [0, 6].includes(d.getDay());
-const addMinutes = (d, mins) => new Date(d.getTime() + mins * 60000);
-const toISO = (day, hm) => {
-  const [H, M] = hm.split(":").map(Number);
-  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), H, M, 0, 0).toISOString();
-};
-
-/* Members map to their visit service duration */
-function serviceDuration(service_key, services) {
-  const svc = services?.[service_key];
-  if (!svc) return 0;
-  if (service_key?.includes("membership") && svc.visitService && services[svc.visitService]) {
-    return services[svc.visitService].duration || svc.duration || 0;
-  }
-  return svc.duration || 0;
-}
-
-/* ===================== Canonical schedules =====================
-
-Weekdays (Mon–Fri): start 16:00
- - 75 min:  16:00, 17:45, 19:45
- - 120 min: 16:00, 18:30
-
-Weekends (Sat–Sun): start 09:00
- - 75 min:  09:00, 10:45, 12:30, 14:15, 16:00, 17:45
- - 120 min: 09:00, 11:30, 14:00, 16:30
-
-(24h lead applies; add-ons don't affect time)
-=============================================================== */
-function canonicalFamilyForDuration(day, durationMin) {
-  if (isWeekend(day)) return durationMin === 120 ? "WE_4x120" : "WE_6x75";
-  return durationMin === 120 ? "W_2x120" : "W_3x75";
-}
-function familiesForDay(day) {
-  return isWeekend(day)
-    ? [
-        { id: "WE_6x75", slots: [{ t: "09:00", d: 75 }, { t: "10:45", d: 75 }, { t: "12:30", d: 75 }, { t: "14:15", d: 75 }, { t: "16:00", d: 75 }, { t: "17:45", d: 75 }] },
-        { id: "WE_4x120", slots: [{ t: "09:00", d: 120 }, { t: "11:30", d: 120 }, { t: "14:00", d: 120 }, { t: "16:30", d: 120 }] },
-      ]
-    : [
-        { id: "W_3x75", slots: [{ t: "16:00", d: 75 }, { t: "17:45", d: 75 }, { t: "19:45", d: 75 }] },
-        { id: "W_2x120", slots: [{ t: "16:00", d: 120 }, { t: "18:30", d: 120 }] },
-      ];
-}
-function dayStartsCanonical(day, durationMin, now = new Date()) {
-  const fams = familiesForDay(day);
-  const famId = canonicalFamilyForDuration(day, durationMin);
-  const fam = fams.find((f) => f.id === famId);
-  if (!fam) return [];
-  const inLead = addMinutes(now, MIN_LEAD_MIN);
-
-  const starts = [];
-  for (const s of fam.slots) {
-    if (s.d !== durationMin) continue;
-    const iso = toISO(day, s.t);
-    if (new Date(iso) >= inLead) {
-      starts.push({ start_iso: iso, end_iso: addMinutes(new Date(iso), durationMin).toISOString(), fam: fam.id, t: s.t, d: s.d });
-    }
-  }
-  return starts.sort((a, b) => new Date(a.start_iso) - new Date(b.start_iso));
-}
-function buildCalendarAvailability(durationMin, now = new Date()) {
-  const map = {};
-  for (let i = 0; i <= MAX_DAYS_AHEAD; i++) {
-    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
-    const k = keyLocal(day);
-    const list = dayStartsCanonical(day, durationMin, now);
-    if (list.length) map[k] = list;
-  }
-  return map;
-}
+const keyLocal = (dt) => dt.setZone(TZ).toFormat("yyyy-LL-dd");
+const dateFromKeyLocal = (key) => DateTime.fromFormat(key, "yyyy-LL-dd", { zone: TZ });
 
 /* ===================== Header ===================== */
 function Header({ size = "md" }) {
@@ -147,7 +26,13 @@ function Header({ size = "md" }) {
 /* ===================== Details ===================== */
 function Details({ onNext, state, setState }) {
   const [v, setV] = useState(state.customer || { name: "", address: "", email: "", phone: "" });
-  useEffect(() => setState((s) => ({ ...s, customer: v })), [v]);
+
+  useEffect(() => {
+    setState((s) => ({ ...s, customer: v }));
+    sessionStorage.setItem("gm_state", JSON.stringify({ ...state, customer: v }));
+    // eslint-disable-next-line
+  }, [v]);
+
   const ok = v.name.trim().length > 1 && v.phone.trim().length > 6 && v.address.trim().length > 5;
 
   return (
@@ -181,14 +66,14 @@ function Details({ onNext, state, setState }) {
 
 /* ===================== Services ===================== */
 function Services({ onNext, onBack, state, setState, config }) {
-  const svc = hasKeys(config?.services) ? config.services : DEFAULT_SERVICES;
-  const addonsCfg = hasKeys(config?.addons) ? config.addons : DEFAULT_ADDONS;
-  const firstKey = Object.keys(svc)[0];
+  const services = config.services;
+  const addonsCfg = config.addons;
+  const firstKey = Object.keys(services)[0];
 
-  const [service, setService] = useState(state.service_key && svc[state.service_key] ? state.service_key : firstKey);
+  const [service, setService] = useState(state.service_key && services[state.service_key] ? state.service_key : firstKey);
   const [addons, setAddons] = useState(state.addons || []);
-  useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
 
+  useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
   useEffect(() => {
     setState((s) => {
       const isMembership = service.includes("membership");
@@ -196,9 +81,11 @@ function Services({ onNext, onBack, state, setState, config }) {
       next.selectedDay = null;
       next.prefetchedDaySlots = [];
       if (isMembership) next.slot = null; else next.membershipSlots = [];
+      sessionStorage.setItem("gm_state", JSON.stringify(next));
       return next;
     });
-  }, [service]); // eslint-disable-line
+    // eslint-disable-next-line
+  }, [service]);
 
   function toggleAddon(k) {
     setAddons((a) => (a.includes(k) ? a.filter((x) => x !== k) : [...a, k]));
@@ -208,7 +95,7 @@ function Services({ onNext, onBack, state, setState, config }) {
     const on = addons.includes(k);
     return (
       <div
-        className={cx("gm benefit", align)}
+        className="gm benefit"
         style={{
           border: on ? "2px solid #86efac" : "1px dashed #e5e7eb",
           background: on ? "#dcfce7" : "#f9fafb",
@@ -235,7 +122,7 @@ function Services({ onNext, onBack, state, setState, config }) {
         <h2 className="gm h2" style={{ textAlign: "center", fontWeight: 900 }}>Choose your service</h2>
 
         <div className="gm cards">
-          {Object.entries(svc).map(([key, val]) => {
+          {Object.entries(services).map(([key, val]) => {
             const isMembership = key.includes("membership") || val.visits >= 2;
             return (
               <button
@@ -252,8 +139,6 @@ function Services({ onNext, onBack, state, setState, config }) {
             );
           })}
         </div>
-
-        <div className="gm section-divider"></div>
 
         <div className="gm muted" style={{ marginBottom: 10, fontWeight: 900, textAlign: 'center' }}>
           Add-ons (optional)
@@ -285,25 +170,17 @@ function Services({ onNext, onBack, state, setState, config }) {
   );
 }
 
-/* ===================== Month grid (NO weekday row) ===================== */
+/* ===================== Month grid (no weekday row) ===================== */
 function MonthGrid({
-  slotsByDay,
-  selectedDay,
-  setSelectedDay,
-  monthCursor,
-  setMonthCursor,
-  earliestKey,
-  latestKey,
-  bookedDays = [],
-  membershipCount,
-  isMembership,
-  onRemoveDay = () => {}
+  slotsByDay, selectedDay, setSelectedDay,
+  monthCursor, setMonthCursor, earliestKey, latestKey,
+  membershipCount, isMembership, bookedDays, onRemoveDay
 }) {
-  const monthStart = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), 1);
-  const monthTitle = monthStart.toLocaleString("en-GB", { month: "long", year: "numeric", timeZone: TZ });
-  const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0).getDate();
+  const monthStart = DateTime.fromObject({ year: monthCursor.year, month: monthCursor.month, day: 1 }, { zone: TZ });
+  const monthTitle = monthStart.toFormat("LLLL yyyy");
+  const daysInMonth = monthStart.daysInMonth;
 
-  const ym = (d) => d.getFullYear() * 12 + d.getMonth();
+  const ym = (d) => d.year * 12 + d.month;
   const curIdx = ym(monthStart);
   const minIdx = earliestKey ? ym(dateFromKeyLocal(earliestKey)) : curIdx;
   const maxIdx = latestKey ? ym(dateFromKeyLocal(latestKey)) : curIdx;
@@ -312,22 +189,19 @@ function MonthGrid({
 
   const inEarliest =
     earliestKey &&
-    monthStart.getFullYear() === dateFromKeyLocal(earliestKey).getFullYear() &&
-    monthStart.getMonth() === dateFromKeyLocal(earliestKey).getMonth();
-
+    monthStart.hasSame(dateFromKeyLocal(earliestKey), "month");
   const inLatest =
     latestKey &&
-    monthStart.getFullYear() === dateFromKeyLocal(latestKey).getFullYear() &&
-    monthStart.getMonth() === dateFromKeyLocal(latestKey).getMonth();
+    monthStart.hasSame(dateFromKeyLocal(latestKey), "month");
 
-  const startDay = inEarliest ? dateFromKeyLocal(earliestKey).getDate() : 1;
-  const endDay = inLatest ? dateFromKeyLocal(latestKey).getDate() : daysInMonth;
+  const startDay = inEarliest ? dateFromKeyLocal(earliestKey).day : 1;
+  const endDay = inLatest ? dateFromKeyLocal(latestKey).day : daysInMonth;
 
-  const counterClass = membershipCount >= 2 ? "ok" : "warn";
+  const counterClass = (membershipCount >= 2) ? "ok" : "warn";
 
   const cells = [];
   for (let day = startDay; day <= endDay; day++) {
-    const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
+    const d = monthStart.set({ day });
     const k = keyLocal(d);
     const has = !!slotsByDay[k];
     const selected = selectedDay === k;
@@ -339,7 +213,7 @@ function MonthGrid({
           className={cx("gm daycell", has && "has", selected && "selected", chosen && "chosen")}
           disabled={!has || chosen}
           onClick={() => setSelectedDay(k)}
-          title={d.toDateString()}
+          title={d.toLocaleString(DateTime.DATE_FULL)}
           type="button"
           style={{ width: "100%" }}
         >
@@ -347,14 +221,10 @@ function MonthGrid({
         </button>
         {isMembership && chosen && (
           <button
-            type="button"
-            aria-label="Remove this booked day"
-            className="gm closebtn"
+            type="button" aria-label="Remove this booked day" className="gm closebtn"
             onClick={(e) => { e.stopPropagation(); onRemoveDay(k); }}
             title="Remove this booking"
-          >
-            ×
-          </button>
+          >×</button>
         )}
       </div>
     );
@@ -362,14 +232,10 @@ function MonthGrid({
 
   return (
     <div>
-      {/* Centered month bar with equal-width nav buttons */}
       <div className="gm monthbar">
         <div className="gm monthnav-left">
-          <button
-            className="gm btn nav"
-            disabled={prevDisabled}
-            onClick={() => !prevDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() - 1, 1))}
-          >
+          <button className="gm btn nav" disabled={prevDisabled}
+            onClick={() => !prevDisabled && setMonthCursor(monthStart.minus({ months: 1 }))}>
             Previous
           </button>
         </div>
@@ -377,65 +243,69 @@ function MonthGrid({
         <div className="gm monthtitle">{monthTitle}</div>
 
         <div className="gm monthnav-right">
-          {isMembership && (
-            <span className={cx("gm counter", counterClass)}>
-              {membershipCount}/2
-            </span>
-          )}
-          <button
-            className="gm btn nav"
-            disabled={nextDisabled}
-            onClick={() => !nextDisabled && setMonthCursor(new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1))}
-          >
+          {isMembership && <span className={cx("gm counter", counterClass)}>{membershipCount}/2</span>}
+          <button className="gm btn nav" disabled={nextDisabled}
+            onClick={() => !nextDisabled && setMonthCursor(monthStart.plus({ months: 1 }))}>
             Next
           </button>
         </div>
       </div>
 
-      {/* No weekday row here */}
       <div className="gm monthgrid">{cells}</div>
     </div>
   );
 }
 
-/* ===================== Calendar ===================== */
+/* ===================== Calendar (fetches backend availability) ===================== */
 function Calendar({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
-  const durationMin = serviceDuration(state.service_key, services);
 
   const [slotsByDay, setSlotsByDay] = useState({});
   const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
-  const [monthCursor, setMonthCursor] = useState(new Date());
+  const [monthCursor, setMonthCursor] = useState(DateTime.now().setZone(TZ));
+  const [rangeKeys, setRangeKeys] = useState({ earliest_key: null, latest_key: null });
+  const durationMin = services[state.service_key]?.visitService
+    ? services[services[state.service_key].visitService].duration
+    : services[state.service_key]?.duration;
 
-  useEffect(() => {
-    const map = buildCalendarAvailability(durationMin, new Date());
-    setSlotsByDay(map);
-    const keys = Object.keys(map).sort();
-    if (keys.length && !selectedDay) {
+  async function loadMonth(dt) {
+    const monthStr = dt.toFormat("yyyy-LL");
+    const url = `${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${monthStr}`;
+    const data = await fetch(url).then(r => r.json());
+    if (!data?.ok) throw new Error(data?.error || "availability failed");
+    setSlotsByDay(data.days || {});
+    setRangeKeys({ earliest_key: data.earliest_key || null, latest_key: data.latest_key || null });
+
+    // Auto-select first available day if none
+    const keys = Object.keys(data.days || {}).sort();
+    if (!selectedDay && keys.length) {
       setSelectedDay(keys[0]);
-      setState((s) => ({ ...s, selectedDay: keys[0] }));
-      const first = dateFromKeyLocal(keys[0]);
-      setMonthCursor(new Date(first.getFullYear(), first.getMonth(), 1));
-    } else if (selectedDay) {
-      const d = dateFromKeyLocal(selectedDay);
-      setMonthCursor(new Date(d.getFullYear(), d.getMonth(), 1));
+      setState((s) => ({ ...s, selectedDay: keys[0], prefetchedDaySlots: data.days[keys[0]] || [] }));
+    } else if (selectedDay && data.days[selectedDay]) {
+      setState((s) => ({ ...s, prefetchedDaySlots: data.days[selectedDay] }));
+    } else if (selectedDay && !data.days[selectedDay]) {
+      // If previously selected day disappears (month changed), clear
+      setState((s) => ({ ...s, selectedDay: null, prefetchedDaySlots: [] }));
+      setSelectedDay(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [durationMin]);
+  }
 
-  const allKeys = useMemo(() => Object.keys(slotsByDay).sort(), [slotsByDay]);
-  const earliestKey = allKeys[0] || null;
-  const latestKey = allKeys[allKeys.length - 1] || null;
+  useEffect(() => { loadMonth(monthCursor); /* eslint-disable-next-line */}, [state.service_key, monthCursor.toISO()]);
 
-  const bookedDays = (state.membershipSlots || []).map(s => keyLocal(new Date(s.start_iso)));
+  const bookedDays = (state.membershipSlots || []).map(s => keyLocal(DateTime.fromISO(s.start_iso).setZone(TZ)));
   const selectedIsBooked = bookedDays.includes(selectedDay || "");
-
   const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-  const onPickDay = (k) => { if (!bookedDays.includes(k)) { setSelectedDay(k); setState((s) => ({ ...s, selectedDay: k })); } };
+
+  const onPickDay = (k) => {
+    if (!bookedDays.includes(k)) {
+      setSelectedDay(k);
+      setState((s) => ({ ...s, selectedDay: k, prefetchedDaySlots: slotsByDay[k] || [] }));
+    }
+  };
   const onRemoveDay = (dayKey) => {
     setState((st) => ({
       ...st,
-      membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(new Date(s.start_iso)) !== dayKey),
+      membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(DateTime.fromISO(s.start_iso).setZone(TZ)) !== dayKey),
     }));
   };
 
@@ -451,8 +321,8 @@ function Calendar({ onNext, onBack, state, setState, services }) {
           setSelectedDay={onPickDay}
           monthCursor={monthCursor}
           setMonthCursor={setMonthCursor}
-          earliestKey={earliestKey}
-          latestKey={latestKey}
+          earliestKey={rangeKeys.earliest_key}
+          latestKey={rangeKeys.latest_key}
           bookedDays={bookedDays}
           membershipCount={(state.membershipSlots || []).length}
           isMembership={isMembership}
@@ -461,7 +331,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
 
         {isMembership && selectedIsBooked && (
           <div className="gm note" style={{ marginTop: 10 }}>
-            You’ve already booked <b>{dateFromKeyLocal(selectedDay).toLocaleDateString("en-GB", { weekday: "long", month: "short", day: "numeric", timeZone: TZ })}</b>.
+            You’ve already booked <b>{dateFromKeyLocal(selectedDay).toLocaleString(DateTime.DATE_MED_WITH_WEEKDAY)}</b>.
             Please pick a <b>different day</b> for your second visit.
           </div>
         )}
@@ -471,10 +341,7 @@ function Calendar({ onNext, onBack, state, setState, services }) {
           <button
             className="gm btn primary"
             disabled={!selectedDay || selectedIsBooked}
-            onClick={() => {
-              setState((s) => ({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots }));
-              onNext();
-            }}
+            onClick={() => { setState((s) => ({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots })); onNext(); }}
           >
             See times
           </button>
@@ -484,22 +351,18 @@ function Calendar({ onNext, onBack, state, setState, services }) {
   );
 }
 
-/* ===================== Times (logo left, times right) ===================== */
+/* ===================== Times ===================== */
 function Times({ onNext, onBack, state, setState, services }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
-  const durationMin = serviceDuration(state.service_key, services);
-
-  const day = dateFromKeyLocal(selectedDay); // local date
   const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
-  useEffect(() => {
-    setDaySlots(dayStartsCanonical(day, durationMin, new Date()));
-  }, [selectedDay, durationMin]);
+
+  useEffect(() => { setDaySlots(state.prefetchedDaySlots || []); }, [state.prefetchedDaySlots]);
 
   const selected =
     isMembership
-      ? (state.membershipSlots || []).find((s) => s && keyLocal(new Date(s.start_iso)) === selectedDay)
-      : state.slot && keyLocal(new Date(state.slot.start_iso)) === selectedDay
+      ? (state.membershipSlots || []).find((s) => s && keyLocal(DateTime.fromISO(s.start_iso).setZone(TZ)) === selectedDay)
+      : state.slot && keyLocal(DateTime.fromISO(state.slot.start_iso).setZone(TZ)) === selectedDay
         ? state.slot
         : null;
 
@@ -510,10 +373,10 @@ function Times({ onNext, onBack, state, setState, services }) {
     }
     setState((st) => {
       const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
-      const dayK = keyLocal(new Date(slot.start_iso));
-      const idxSameDay = ms.findIndex(x => keyLocal(new Date(x.start_iso)) === dayK);
+      const dayK = keyLocal(DateTime.fromISO(slot.start_iso).setZone(TZ));
+      const idxSameDay = ms.findIndex(x => keyLocal(DateTime.fromISO(x.start_iso).setZone(TZ)) === dayK);
       if (idxSameDay !== -1) { ms[idxSameDay] = slot; return { ...st, membershipSlots: ms }; }
-      if (ms.some(x => keyLocal(new Date(x.start_iso)) === dayK)) return { ...st, membershipSlots: ms };
+      if (ms.some(x => keyLocal(DateTime.fromISO(x.start_iso).setZone(TZ)) === dayK)) return { ...st, membershipSlots: ms };
       if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
       return { ...st, membershipSlots: [ms[0], slot] };
     });
@@ -525,7 +388,9 @@ function Times({ onNext, onBack, state, setState, services }) {
   }
 
   const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
-  const headerDateObj = selected ? new Date(selected.start_iso) : dateFromKeyLocal(selectedDay);
+  const headerDateObj = selected
+    ? DateTime.fromISO(selected.start_iso).setZone(TZ)
+    : dateFromKeyLocal(selectedDay);
 
   return (
     <div className="gm page-section">
@@ -536,17 +401,18 @@ function Times({ onNext, onBack, state, setState, services }) {
 
         <div className="gm details-right">
           <h2 className="gm h2" style={{ textAlign: "center", marginBottom: 16, fontWeight: 900 }}>
-            {headerDateObj.toLocaleDateString("en-GB", { weekday: "long", month: "long", day: "numeric", timeZone: TZ })}
+            {headerDateObj.toLocaleString(DateTime.DATE_HUGE)}
           </h2>
 
           <div className="gm timegrid">
             {daySlots.map((s)=> {
               const sel = selected?.start_iso === s.start_iso ||
                           (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
+              const t = DateTime.fromISO(s.start_iso).setZone(TZ).toFormat("HH:mm");
               return (
                 <div key={s.start_iso} className="gm timebox-wrap" style={{ position: "relative" }}>
                   <button className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
-                    {fmtTime(s.start_iso)}
+                    {t}
                   </button>
                   {sel && (
                     <button type="button" aria-label="Remove this booking" className="gm closebtn"
@@ -571,14 +437,15 @@ function Times({ onNext, onBack, state, setState, services }) {
 }
 
 /* ===================== Confirm (Stripe) ===================== */
-function Confirm({ onBack, state, setState }) {
+function Confirm({ onBack, state }) {
   const [loading, setLoading] = useState(false);
 
   const total = useMemo(() => {
-    const map = { exterior: 40, full: 60, standard_membership: 70, premium_membership: 100 };
-    const addonsMap = { wax: 15, polish: 15 };
-    let t = map[state.service_key] || 0;
-    t += (state.addons || []).reduce((s, k) => s + (addonsMap[k] || 0), 0);
+    const cfg = JSON.parse(sessionStorage.getItem("gm_cfg") || "{}");
+    const map = cfg.services || {};
+    const addonsMap = cfg.addons || {};
+    let t = map[state.service_key]?.price || 0;
+    t += (state.addons || []).reduce((s, k) => s + (addonsMap[k]?.price || 0), 0);
     return t;
   }, [state.service_key, state.addons]);
 
@@ -594,22 +461,19 @@ function Confirm({ onBack, state, setState }) {
         membershipSlots: state.membershipSlots,
       };
       const resp = await fetch(`${API}/pay/create-checkout-session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
-      const raw = await resp.text();
-      let data; try { data = JSON.parse(raw); } catch { data = { ok: false, error: `Invalid JSON from API: ${raw.slice(0,200)}` }; }
-      if (!resp.ok || !data?.ok || !data?.url) throw new Error(data?.error || `HTTP ${resp.status} — ${raw.slice(0,200)}`);
-      window.location.href = data.url; // Stripe Checkout
+      const data = await resp.json().catch(()=> ({}));
+      if (!resp.ok || !data?.ok || !data?.url) throw new Error(data?.error || `HTTP ${resp.status}`);
+      window.location.href = data.url;
     } catch (err) {
       alert(`Checkout failed:\n${String(err.message || err)}\n\nAPI base: ${API}`);
     } finally { setLoading(false); }
   }
 
   const when = state.service_key?.includes("membership")
-    ? (state.membershipSlots || []).map((s) => dstr(s.start_iso)).join(" & ")
-    : state.slot && dstr(state.slot.start_iso);
+    ? (state.membershipSlots || []).map((s) => DateTime.fromISO(s.start_iso).setZone(TZ).toFormat("ccc d LLL HH:mm")).join(" & ")
+    : state.slot && DateTime.fromISO(state.slot.start_iso).setZone(TZ).toFormat("ccc d LLL HH:mm");
 
   return (
     <div className="gm page-section">
@@ -654,10 +518,7 @@ function ThankYou() {
         <p className="gm muted" style={{ marginBottom: 12 }}>
           A confirmation will be sent to your email. If you don’t see it, please check your spam folder.
         </p>
-        <button
-          className="gm btn primary"
-          onClick={() => { window.history.replaceState({}, "", "/"); window.location.reload(); }}
-        >
+        <button className="gm btn primary" onClick={() => { window.history.replaceState({}, "", "/"); window.location.reload(); }}>
           Back to start
         </button>
       </div>
@@ -667,7 +528,9 @@ function ThankYou() {
 
 /* ===================== App ===================== */
 function App() {
-  const [state, setState] = useState({});
+  const [state, setState] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("gm_state") || "{}"); } catch { return {}; }
+  });
   const [step, setStep] = useState(0);
   const [config, setConfig] = useState({ services: {}, addons: {} });
 
@@ -680,30 +543,18 @@ function App() {
   useEffect(() => {
     fetch(API + "/config")
       .then((r) => r.json())
-      .then((d) => {
-        const services = hasKeys(d?.services) ? d.services : DEFAULT_SERVICES;
-        const addons = hasKeys(d?.addons) ? d.addons : DEFAULT_ADDONS;
-        setConfig({ services, addons });
-      })
-      .catch(() => setConfig({ services: DEFAULT_SERVICES, addons: DEFAULT_ADDONS }));
+      .then((d) => { setConfig(d); sessionStorage.setItem("gm_cfg", JSON.stringify(d)); })
+      .catch(() => {});
   }, []);
 
-  const services = hasKeys(config.services) ? config.services : DEFAULT_SERVICES;
+  const services = hasKeys(config.services) ? config.services : {};
 
   return (
     <div className="gm-site">
       <div className="gm-booking wrap">
         {step === 0 && <Details onNext={() => setStep(1)} state={state} setState={setState} />}
         {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} />}
-        {step === 2 && (
-          <Calendar
-            services={services}
-            onNext={() => setStep(3)}
-            onBack={() => { setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] })); setStep(1); }}
-            state={state}
-            setState={setState}
-          />
-        )}
+        {step === 2 && <Calendar services={services} onNext={() => setStep(3)} onBack={() => { setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] })); setStep(1); }} state={state} setState={setState} />}
         {step === 3 && <Times services={services} onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
         {step === 4 && <Confirm onBack={() => setStep(3)} state={state} setState={setState} />}
         {step === 5 && <ThankYou />}
