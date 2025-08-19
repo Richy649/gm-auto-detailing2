@@ -400,6 +400,11 @@ function Calendar({ onNext, onBack, state, setState }) {
 }
 
 /* ===================== Times (no logo here) ===================== */
+useEffect(() => {
+  window.scrollTo({ top: 0, behavior: "instant" });
+  parentScrollToTop();
+  setTimeout(reportHeight, 50);
+}, []);
 function Times({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
   const selectedDay = state.selectedDay;
