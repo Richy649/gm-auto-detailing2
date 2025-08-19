@@ -302,10 +302,32 @@ function MonthGrid({
         {dows.map((d) => <div key={d} className="gm dow">{d}</div>)}
       </div>
 
-      <div className="gm monthgrid">{cells}</div>
-    </div>
-  );
-}
+     <div className="gm monthgrid">
+  {dayKeys.map((k, i) => {
+    if (!k) return <div key={`b${i}`} className="gm dayblank" />;
+
+    const has = !!(daysMap[k] && daysMap[k].length);
+    const sel = state.selectedDayKey === k;
+
+    // Hard guards so unbookable days are disabled:
+    const earliest = state.availability?.earliest_key || todayKey; // first day API says you can book
+    const latest   = state.availability?.latest_key   || limitKey; // last day API allows
+    const disabled = !has || k < earliest || k > latest || k < todayKey;
+
+    return (
+      <div key={k} className="gm daywrap">
+        <button
+          className={cx("gm daycell", has && "has", sel && "selected", disabled && "off")}
+          onClick={() => !disabled && pickDay(k)}
+          disabled={disabled}
+        >
+          {Number(k.slice(-2))}
+        </button>
+      </div>
+    );
+  })}
+</div>
+
 
 /* ===================== Calendar (fetch availability) ===================== */
 function Calendar({ onNext, onBack, state, setState }) {
