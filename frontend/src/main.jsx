@@ -46,7 +46,7 @@ window.addEventListener("load", reportHeight);
 window.addEventListener("resize", () => setTimeout(reportHeight, 60));
 setInterval(reportHeight, 900);
 
-/* ================== SIMPLE BUTTON ================== */
+/* ================== SIMPLE BUTTONS ================== */
 const Button = ({ children, className, ...props }) => (
   <button className={cx("gm btn", className)} {...props}>{children}</button>
 );
@@ -94,7 +94,7 @@ function Details({ state, setState, onNext }) {
         <div className="gm h2 center">Welcome to the gmautodetailing.uk booking app.</div>
 
         <div className="gm details-grid">
-          {/* KEEP this logo */}
+          {/* KEEP this logo (the only one) */}
           <img src="/logo.png" alt="GM" className="gm logo-big" />
           <div className="gm details-right">
             <div className="gm row">
@@ -125,25 +125,28 @@ function Services({ state, setState, onBack, onNext, cfg }) {
   const sCfg = cfg.services || {};
   const aCfg = cfg.addons || {};
 
-  React.useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    setTimeout(reportHeight, 60);
-    return () => { document.body.style.overflow = prev; };
-  }, []);
+  // Allow normal scrolling; just keep the iframe height in sync
+  React.useEffect(() => { setTimeout(reportHeight, 60); }, []);
+  React.useEffect(() => { setTimeout(reportHeight, 60); }, [svc, addons]);
 
   function go() {
     if (!svc) return alert("Please choose a service.");
     setState((s) => ({
       ...s,
       service_key: svc,
-      addons,                    // addons allowed for all services (incl. memberships)
+      addons,                    // addons allowed for ALL services (incl. memberships)
       selectedDayKey: null,
       selectedSlot: null,
       membershipSlots: [],
     }));
+    setTimeout(reportHeight, 60);
     onNext();
   }
+
+  const toggleWax = () =>
+    setAddons((arr) => (arr.includes("wax") ? arr.filter((x) => x !== "wax") : [...arr, "wax"]));
+  const togglePolish = () =>
+    setAddons((arr) => (arr.includes("polish") ? arr.filter((x) => x !== "polish") : [...arr, "polish"]));
 
   return (
     <div className="gm page-section gm-booking wrap">
@@ -153,7 +156,7 @@ function Services({ state, setState, onBack, onNext, cfg }) {
         <div className="gm cards">
           <ServiceCard title={sCfg.exterior?.name || "Exterior Detail"} price={sCfg.exterior?.price ?? 40}
             selected={svc === "exterior"} onClick={()=>setSvc("exterior")} />
-          <ServiceCard title={sCfg.full?.name || "Full Detail"} price={sCfg.full?.price ?? 60}
+        <ServiceCard title={sCfg.full?.name || "Full Detail"} price={sCfg.full?.price ?? 60}
             selected={svc === "full"} onClick={()=>setSvc("full")} />
           <ServiceCard title={sCfg.standard_membership?.name || "Standard Membership (2 Exterior)"} price={sCfg.standard_membership?.price ?? 70}
             selected={svc === "standard_membership"} onClick={()=>setSvc("standard_membership")} />
@@ -169,7 +172,7 @@ function Services({ state, setState, onBack, onNext, cfg }) {
             desc="Adds gloss and strong water beading. Light protection between washes."
             align="left"
             selected={addons.includes("wax")}
-            onToggle={()=> setAddons((arr)=> arr.includes("wax") ? arr.filter(x=>x!=="wax") : [...arr,"wax"])}
+            onToggle={toggleWax}
           />
           <AddonCard
             title={aCfg.polish?.name || "Hand Polish"}
@@ -177,7 +180,7 @@ function Services({ state, setState, onBack, onNext, cfg }) {
             desc="Hand-finished shine. Softens light marks and brightens the paint."
             align="right"
             selected={addons.includes("polish")}
-            onToggle={()=> setAddons((arr)=> arr.includes("polish") ? arr.filter(x=>x!=="polish") : [...arr,"polish"])}
+            onToggle={togglePolish}
           />
         </div>
 
@@ -252,7 +255,7 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
           </div>
           <div className="gm monthtitle">{monthLabel(monthKey)}</div>
           <div className="gm monthnav-right">
-            {/* Membership counter only */}
+            {/* Membership counter only (no 'Pick a day' text) */}
             {isMembership ? (
               <div className={cx("gm counter", (state.membershipSlots.length >= 2 ? "ok" : "warn"))}>
                 {state.membershipSlots.length}/2
