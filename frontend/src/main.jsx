@@ -2,6 +2,18 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { DateTime } from "luxon";
 import "./calendar.css";
+// --- Iframe helpers: report height + request parent scroll ---
+function reportHeight() {
+  const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
+  try { window.parent.postMessage({ type: "GM_HEIGHT", height: h }, "*"); } catch {}
+}
+function parentScrollToTop() {
+  try { window.parent.postMessage({ type: "GM_SCROLL_TOP" }, "*"); } catch {}
+}
+window.addEventListener("load", reportHeight);
+window.addEventListener("resize", () => setTimeout(reportHeight, 60));
+setInterval(reportHeight, 900);
+
 
 /* ===================== API base ===================== */
 const API = import.meta.env.VITE_API || "https://gm-auto-detailing2.onrender.com/api";
