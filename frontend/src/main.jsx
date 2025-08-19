@@ -1,10 +1,47 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React from "react";
 import { createRoot } from "react-dom/client";
-import { DateTime } from "luxon";
-import "./calendar.css";
-// --- Iframe helpers: report height + request parent scroll ---
+
+/* ================== CONFIG ================== */
+const API = import.meta.env.VITE_API || "https://gm-auto-detailing2.onrender.com/api";
+const TZ = "Europe/London";
+const CURRENCY = "£";
+
+/* ================== UTILS ================== */
+const fmtGBP = (n) => `${CURRENCY}${(Math.round(n * 100) / 100).toFixed(2)}`;
+const cx = (...a) => a.filter(Boolean).join(" ");
+const toDateKey = (d) => {
+  // key in local UK time yyyy-mm-dd
+  const s = new Date(d).toLocaleString("en-GB", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" });
+  const [day, mon, yr] = s.split("/");
+  return `${yr}-${mon}-${day}`;
+};
+const fromKey = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  // create local date then get UTC ISO (safe for comparisons)
+  const dt = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  return dt;
+};
+const addMonthsKey = (key, delta) => {
+  const d = fromKey(key);
+  d.setUTCMonth(d.getUTCMonth() + delta);
+  d.setUTCDate(1);
+  return toDateKey(d);
+};
+const monthOfKey = (key) => key.slice(0, 7); // yyyy-mm
+const prettyMonth = (key) => {
+  const d = fromKey(key + "-01");
+  return d.toLocaleString("en-GB", { timeZone: TZ, month: "long", year: "numeric" });
+};
+const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+
+/* ======== IFRAME helpers: auto-height & scroll-to-top ======== */
 function reportHeight() {
-  const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
+  const h = Math.max(
+    document.body.scrollHeight,
+    document.documentElement.scrollHeight,
+    window.innerHeight
+  );
   try { window.parent.postMessage({ type: "GM_HEIGHT", height: h }, "*"); } catch {}
 }
 function parentScrollToTop() {
@@ -14,610 +51,604 @@ window.addEventListener("load", reportHeight);
 window.addEventListener("resize", () => setTimeout(reportHeight, 60));
 setInterval(reportHeight, 900);
 
-
-/* ===================== API base ===================== */
-const API = import.meta.env.VITE_API || "https://gm-auto-detailing2.onrender.com/api";
-const TZ = "Europe/London";
-
-/* ===================== helpers ===================== */
-const fmtGBP = (n) => `£${(Math.round(n * 100) / 100).toFixed(2)}`;
-const cx = (...a) => a.filter(Boolean).join(" ");
-const hasKeys = (o) => o && typeof o === "object" && Object.keys(o).length > 0;
-const keyLocal = (dt) => dt.setZone(TZ).toFormat("yyyy-LL-dd");
-const dateFromKeyLocal = (key) => DateTime.fromFormat(key, "yyyy-LL-dd", { zone: TZ });
-
-/* ===================== Header ===================== */
-function Header({ size = "md" }) {
+/* ================== HEADER ================== */
+function Header({ size = "lg" }) {
   return (
-    <header className={cx("gm header", size === "lg" && "lg", size === "xl" && "xl")}>
-      <img className="gm logo" src="/logo.png" alt="GM Auto Detailing" />
+    <header className={cx("gm header", size)}>
+      <img src="/logo.png" alt="GM Auto Detailing" className="logo" />
     </header>
   );
 }
 
-/* ===================== Details ===================== */
-function Details({ onNext, state, setState }) {
-  const [v, setV] = useState(
-    state.customer || { name: "", street: "", postcode: "", email: "", phone: "" }
-  );
-
-  useEffect(() => {
-    setState((s) => ({ ...s, customer: v }));
-    sessionStorage.setItem("gm_state", JSON.stringify({ ...state, customer: v }));
-    // eslint-disable-next-line
-  }, [v]);
-
-  const ok =
-    v.name.trim().length > 1 &&
-    v.street.trim().length > 5 &&
-    v.postcode.trim().length >= 5 &&
-    v.phone.trim().length > 6;
-
+/* ================== INPUTS / BUTTONS ================== */
+function Input({ label, ...props }) {
   return (
-    <div className="gm page-section">
-      <div className="gm details-grid">
-        <div className="gm details-left">
-          <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
-        </div>
-        <div className="gm details-right">
-          <p className="gm hero-note">
-            Welcome to <b>gmautodetailing.uk</b> — we use your details so we arrive on time and at the right
-            location.
-          </p>
-          <h2 className="gm h2 center">Your details</h2>
+    <div className="gm row one">
+      <input className="gm input" placeholder={label} {...props} />
+    </div>
+  );
+}
 
-          <div className="gm row">
-            <input className="gm input" placeholder="Full name" value={v.name}
-                   onChange={(e) => setV({ ...v, name: e.target.value })} />
-            <input className="gm input" placeholder="Phone" value={v.phone}
-                   onChange={(e) => setV({ ...v, phone: e.target.value })} />
-          </div>
-          <div className="gm row">
-            <input className="gm input" placeholder="Email (for confirmation)" value={v.email}
-                   onChange={(e) => setV({ ...v, email: e.target.value })} />
-            <input className="gm input" placeholder="Street address" value={v.street}
-                   onChange={(e) => setV({ ...v, street: e.target.value })} />
-          </div>
-          <div className="gm row one">
-            <input className="gm input" placeholder="Postcode (e.g. SW14 7XX)" value={v.postcode}
-                   onChange={(e) => setV({ ...v, postcode: e.target.value.toUpperCase() })} />
-          </div>
+function PrimaryButton({ children, ...props }) {
+  return (
+    <button className="gm btn primary" {...props}>{children}</button>
+  );
+}
+function Button({ children, ...props }) {
+  return (
+    <button className="gm btn" {...props}>{children}</button>
+  );
+}
 
-          <div className="gm actions">
-            <button className="gm btn" disabled>Back</button>
-            <button className="gm btn primary" onClick={onNext} disabled={!ok}>Next</button>
-          </div>
-        </div>
+/* ================== CARDS ================== */
+function ServiceCard({ title, price, selected, onClick, children }) {
+  return (
+    <div className={cx("gm card", selected && "selected")} onClick={onClick} role="button">
+      <div className="gm card-title">{title}</div>
+      <div className="gm muted" style={{ fontWeight: 800, marginBottom: 6 }}>{fmtGBP(price)}</div>
+      {children}
+    </div>
+  );
+}
+
+function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
+  return (
+    <div className={cx("gm benefit", selected && "on")} style={{ textAlign: align }}>
+      <div className="benefit-title">
+        <span className="benefit-name">{title}</span>
+        <span className="benefit-price">{fmtGBP(price)}</span>
+      </div>
+      <div className="benefit-copy">{desc}</div>
+      <div className={cx("benefit-actions", align === "right" ? "right" : "left")}>
+        <Button onClick={onToggle}>{selected ? "Remove" : "Add"}</Button>
       </div>
     </div>
   );
 }
 
-/* ===================== Services ===================== */
-function Services({ onNext, onBack, state, setState, config, cfgLoading, reloadConfig }) {
-  const services = config.services || {};
-  const addonsCfg = config.addons || {};
+/* ================== CALENDAR ================== */
+function Calendar({ state, setState, onBack, onGoTimes }) {
+  const isMembership = state.service_key?.includes("membership");
+  const monthKey = state.monthKey; // yyyy-mm
+  const [loading, setLoading] = React.useState(false);
 
-  if (!hasKeys(services)) {
-    return (
-      <div className="gm page-section">
-        <Header size="xl" />
-        <div className="gm panel center">
-          <h2 className="gm h2">Loading services…</h2>
-          <p className="gm muted">
-            {cfgLoading ? "Fetching config from the server." : "Could not load config. Try again."}
-          </p>
-          <button className="gm btn" onClick={reloadConfig}>Retry</button>
-          <div style={{ marginTop: 16 }}>
-            <button className="gm btn" onClick={onBack}>Back</button>
-          </div>
-        </div>
-      </div>
-    );
+  // Month navigation guard (today → today+1m)
+  const todayKey = toDateKey(new Date());
+  const plus30 = new Date(); plus30.setMonth(plus30.getMonth() + 1);
+  const limitKey = toDateKey(plus30);
+  const earliestMonth = monthOfKey(todayKey);
+  const latestMonth = monthOfKey(limitKey);
+
+  const canPrev = monthKey > earliestMonth;
+  const canNext = monthKey < latestMonth;
+
+  const daysMap = state.availability?.days || {};
+  const dayKeys = React.useMemo(() => {
+    // Build visible grid for the month (with blanks)
+    const [y, m] = monthKey.split("-").map(Number);
+    const first = new Date(Date.UTC(y, m - 1, 1, 12));
+    // get weekday index 0..6 with Monday as 0
+    const day = (first.getUTCDay() + 6) % 7; // Sunday (0) -> 6
+    const last = new Date(Date.UTC(y, m, 0, 12));
+    const total = last.getUTCDate();
+    const keys = [];
+    for (let i = 0; i < day; i++) keys.push(null);
+    for (let d = 1; d <= total; d++) {
+      keys.push(`${y}-${pad(m)}-${pad(d)}`);
+    }
+    return keys;
+  }, [monthKey]);
+
+  function loadMonth(mk) {
+    setLoading(true);
+    fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${mk}`)
+      .then(r => r.json())
+      .then(d => {
+        setState(s => ({ ...s, availability: d, monthKey: mk }));
+      })
+      .finally(() => { setLoading(false); setTimeout(reportHeight, 60); });
   }
 
-  const firstKey = Object.keys(services)[0];
-  const [service, setService] = useState(
-    state.service_key && services[state.service_key] ? state.service_key : firstKey
-  );
-  const [addons, setAddons] = useState(state.addons || []);
+  React.useEffect(() => {
+    // ensure availability loaded for chosen service/month
+    if (!state.availability || state.availability.month !== monthKey) {
+      loadMonth(monthKey);
+    } else {
+      setTimeout(reportHeight, 10);
+    }
+  }, [state.service_key, monthKey]);
 
-  useEffect(() => setState((s) => ({ ...s, addons })), [addons]);
-
-  useEffect(() => {
-    setState((s) => {
-      const isMembership = service?.includes("membership");
-      const next = { ...s, service_key: service };
-      next.selectedDay = null;
-      next.prefetchedDaySlots = [];
-      if (isMembership) next.slot = null; else next.membershipSlots = [];
-      sessionStorage.setItem("gm_state", JSON.stringify(next));
-      return next;
-    });
-    // eslint-disable-next-line
-  }, [service]);
-
-  function toggleAddon(k) {
-    setAddons((a) => (a.includes(k) ? a.filter((x) => x !== k) : [...a, k]));
+  function pickDay(k) {
+    if (!k) return;
+    if (!daysMap[k] || daysMap[k].length === 0) return;
+    setState(s => ({ ...s, selectedDayKey: k }));
+    onGoTimes?.();
   }
-
-  const AddonCard = ({ k, title, price, desc, align }) => {
-    const on = addons.includes(k);
-    return (
-      <div className={cx("gm benefit", on && "on")}>
-        <div className="benefit-title">
-          <span className="benefit-name">{title}</span>
-          <span className="benefit-price">{fmtGBP(price)}</span>
-        </div>
-        <div className="benefit-copy">{desc}</div>
-        <div className={cx("benefit-actions", align === "left" ? "left" : "right")}>
-          <button type="button" className="gm btn" onClick={() => toggleAddon(k)}>
-            {on ? "Remove" : "Add"}
-          </button>
-        </div>
-      </div>
-    );
-  };
 
   return (
-    <div className="gm page-section">
+    <div className="gm page-section gm-booking wrap">
       <Header size="xl" />
-      <div className="gm panel">
-        <h2 className="gm h2 center">Choose your service</h2>
+      <div className="gm panel wider">
+        <div className="gm monthbar-grid">
+          <div className="gm monthnav-left">
+            <Button className="gm btn nav" disabled={!canPrev || loading} onClick={() => canPrev && !loading && loadMonth(addMonthsKey(monthKey + "-01", -1).slice(0, 7))}>
+              Previous
+            </Button>
+          </div>
+          <div className="gm monthtitle">{prettyMonth(monthKey + "-01")}</div>
+          <div className="gm monthnav-right">
+            <div className="gm counter" style={{ marginRight: 8 }}>
+              {isMembership ? (
+                <span className={cx("counter", state.membershipSlots.length >= 2 ? "ok" : "warn")}>
+                  {state.membershipSlots.length}/2
+                </span>
+              ) : "Pick a day"}
+            </div>
+            <Button className="gm btn nav" disabled={!canNext || loading} onClick={() => canNext && !loading && loadMonth(addMonthsKey(monthKey + "-01", +1).slice(0, 7))}>
+              Next
+            </Button>
+          </div>
+        </div>
 
-        <div className="gm cards">
-          {Object.entries(services).map(([key, val]) => {
-            const isMembership = key.includes("membership") || val.visits >= 2;
+        <div className="gm dowgrid">
+          {weekdayNames.map(w => <div key={w} className="gm dow">{w}</div>)}
+        </div>
+
+        <div className="gm monthgrid">
+          {dayKeys.map((k, i) => {
+            if (!k) return <div key={`b${i}`} className="gm dayblank" />;
+            const has = !!(daysMap[k] && daysMap[k].length);
+            const sel = state.selectedDayKey === k;
             return (
-              <button
-                type="button"
-                key={key}
-                className={cx("gm card", service === key && "selected")}
-                onClick={() => setService(key)}
-              >
-                <div className="gm card-title">{val.name}</div>
-                {"price" in val && <div className="gm muted">{fmtGBP(val.price)}</div>}
-                {!isMembership && "duration" in val && <div className="gm muted">{val.duration} min</div>}
-                {isMembership && <div className="gm muted">{val.visits || 2} visits • {val.duration || 0} min each</div>}
-              </button>
+              <div key={k} className="gm daywrap">
+                <button
+                  className={cx("gm daycell", has && "has", sel && "selected")}
+                  onClick={() => pickDay(k)}
+                  disabled={!has}
+                >
+                  {Number(k.slice(-2))}
+                </button>
+              </div>
             );
           })}
         </div>
 
-        <div className="gm muted center heading-small">Add-ons (optional)</div>
-        <div className="gm addon-benefits two-col">
-          <AddonCard
-            k="wax"
-            title="Full Body Wax"
-            price={addonsCfg.wax?.price ?? 10}
-            desc=" Adds gloss and strong water beading. Light protection between washes."
-            align="left"
-          />
-          <AddonCard
-            k="polish"
-            title="Hand Polish"
-            price={addonsCfg.polish?.price ?? 22.5}
-            desc=" Hand-finished shine. Softens light marks and brightens the paint."
-."
-            align="right"
-          />
-        </div>
-
-        <div className="gm actions bottom-stick">
-          <button className="gm btn" onClick={onBack}>Back</button>
-          <button className="gm btn primary" onClick={onNext}>See times</button>
+        <div className="gm actions space" style={{ marginTop: 12 }}>
+          <Button onClick={onBack}>Back</Button>
         </div>
       </div>
     </div>
   );
 }
-useEffect(() => {
-  document.body.classList.add("no-scroll");
-  reportHeight();
-  return () => document.body.classList.remove("no-scroll");
-}, []);
 
-/* ===================== Month grid with weekday header ===================== */
-function MonthGrid({
-  slotsByDay, selectedDay, setSelectedDay,
-  monthCursor, setMonthCursor,
-  membershipCount, isMembership, bookedDays, onRemoveDay
-}) {
-  const monthStart = DateTime.fromObject({ year: monthCursor.year, month: monthCursor.month, day: 1 }, { zone: TZ });
-  const monthTitle = monthStart.toFormat("LLLL yyyy");
-  const daysInMonth = monthStart.daysInMonth;
+/* ================== TIMES ================== */
+function Times({ state, setState, onBack, onConfirm }) {
+  const dayKey = state.selectedDayKey;
+  const list = (state.availability?.days?.[dayKey] || []).slice();
 
-  // Nav: current month ↔ month that contains (today + 1 month)
-  const now = DateTime.now().setZone(TZ).startOf("month");
-  const horizon = DateTime.now().setZone(TZ).plus({ months: 1 });
-  const horizonMonthStart = horizon.startOf("month");
+  React.useEffect(() => {
+    // On entry, ensure the Squarespace page scrolls to top of embed and height recalculated
+    window.scrollTo({ top: 0, behavior: "instant" });
+    parentScrollToTop();
+    setTimeout(reportHeight, 50);
+  }, []);
 
-  const ym = (d) => d.year * 12 + d.month;
-  const prevDisabled = ym(monthStart) <= ym(now);
-  const nextDisabled = ym(monthStart) >= ym(horizonMonthStart);
-
-  // Limit endDay to horizon day if this is the horizon month
-  let endDay = daysInMonth;
-  if (monthStart.hasSame(horizon, "month")) {
-    endDay = Math.min(endDay, horizon.day);
+  function choose(slot) {
+    if (state.service_key?.includes("membership")) {
+      // no two visits on same day
+      const existsIdx = state.membershipSlots.findIndex(s => s.day_key === dayKey);
+      const next = state.membershipSlots.slice();
+      if (existsIdx >= 0) next.splice(existsIdx, 1, { day_key: dayKey, slot });
+      else {
+        if (next.length >= 2) return; // already full
+        next.push({ day_key: dayKey, slot });
+      }
+      setState(s => ({ ...s, membershipSlots: next }));
+    } else {
+      setState(s => ({ ...s, selectedSlot: slot }));
+    }
   }
 
-  // Weekday header (Mon..Sun)
-  const dows = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-  // Leading blanks: Luxon Monday=1..Sunday=7 => offset 0..6
-  const leading = (monthStart.weekday + 6) % 7;
-
-  const cells = [];
-  for (let i = 0; i < leading; i++) cells.push(<div key={`blank-${i}`} className="gm dayblank" />);
-  for (let day = 1; day <= endDay; day++) {
-    const d = monthStart.set({ day });
-    const k = d.setZone(TZ).toFormat("yyyy-LL-dd");
-    const has = !!slotsByDay[k];
-    const selected = selectedDay === k;
-    const chosen = bookedDays.includes(k);
-
-    cells.push(
-      <div key={k} className="gm daywrap">
-        <button
-          className={cx("gm daycell", has && "has", selected && "selected", chosen && "chosen")}
-          disabled={!has || chosen}
-          onClick={() => setSelectedDay(k)}
-          title={d.toLocaleString(DateTime.DATE_FULL)}
-          type="button"
-        >
-          {day}
-        </button>
-        {isMembership && chosen && (
-          <button
-            type="button" aria-label="Remove this booked day" className="gm closebtn"
-            onClick={(e) => { e.stopPropagation(); onRemoveDay(k); }}
-            title="Remove this booking"
-          >×</button>
-        )}
-      </div>
-    );
+  function removePick(dk) {
+    setState(s => ({ ...s, membershipSlots: s.membershipSlots.filter(x => x.day_key !== dk) }));
   }
 
-  return (
-    <div className="gm calwrap">
-      <div className="gm monthbar-grid">
-        <div className="gm monthnav-left">
-          <button className="gm btn nav" disabled={prevDisabled}
-            onClick={() => !prevDisabled && setMonthCursor(monthStart.minus({ months: 1 }))}>
-            Previous
-          </button>
-        </div>
-
-        <div className="gm monthtitle">{monthTitle}</div>
-
-        <div className="gm monthnav-right">
-          {isMembership && (
-            <span className={cx("gm counter", (membershipCount >= 2) ? "ok" : "warn")}>
-              {membershipCount}/2
-            </span>
-          )}
-          <button className="gm btn nav" disabled={nextDisabled}
-            onClick={() => !nextDisabled && setMonthCursor(monthStart.plus({ months: 1 }))}>
-            Next
-          </button>
-        </div>
-      </div>
-
-      <div className="gm dowgrid">
-        {dows.map((d) => <div key={d} className="gm dow">{d}</div>)}
-      </div>
-
-      <div className="gm monthgrid">{cells}</div>
-    </div>
-  );
-}
-
-/* ===================== Calendar (fetch availability) ===================== */
-function Calendar({ onNext, onBack, state, setState }) {
   const isMembership = state.service_key?.includes("membership");
-
-  const [slotsByDay, setSlotsByDay] = useState({});
-  const [selectedDay, setSelectedDay] = useState(state.selectedDay || null);
-  const [monthCursor, setMonthCursor] = useState(DateTime.now().setZone(TZ));
-
-  async function loadMonth(dt) {
-    const monthStr = dt.toFormat("yyyy-LL");
-    const url = `${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${monthStr}`;
-    const data = await fetch(url).then(r => r.json());
-    if (!data?.ok) throw new Error(data?.error || "availability failed");
-    setSlotsByDay(data.days || {});
-    const keys = Object.keys(data.days || {}).sort();
-    if (!selectedDay && keys.length) {
-      setSelectedDay(keys[0]);
-      setState((s) => ({ ...s, selectedDay: keys[0], prefetchedDaySlots: data.days[keys[0]] || [] }));
-    } else if (selectedDay && data.days[selectedDay]) {
-      setState((s) => ({ ...s, prefetchedDaySlots: data.days[selectedDay] }));
-    } else if (selectedDay && !data.days[selectedDay]) {
-      setState((s) => ({ ...s, selectedDay: null, prefetchedDaySlots: [] }));
-      setSelectedDay(null);
-    }
-  }
-
-  useEffect(() => { loadMonth(monthCursor); /* eslint-disable-next-line */}, [state.service_key, monthCursor.toISO()]);
-
-  const bookedDays = (state.membershipSlots || []).map(s => keyLocal(DateTime.fromISO(s.start_iso).setZone(TZ)));
-  const selectedIsBooked = bookedDays.includes(selectedDay || "");
-  const currentDaySlots = selectedDay ? (slotsByDay[selectedDay] || []) : [];
-
-  const onPickDay = (k) => {
-    if (!bookedDays.includes(k)) {
-      setSelectedDay(k);
-      setState((s) => ({ ...s, selectedDay: k, prefetchedDaySlots: slotsByDay[k] || [] }));
-    }
-  };
-  const onRemoveDay = (dayKey) => {
-    setState((st) => ({
-      ...st,
-      membershipSlots: (st.membershipSlots || []).filter(s => keyLocal(DateTime.fromISO(s.start_iso).setZone(TZ)) !== dayKey),
-    }));
-  };
+  const counter = state.membershipSlots.length;
 
   return (
-    <div className="gm page-section">
-      <Header size="xl" />
+    <div className="gm page-section gm-booking wrap">
+      <Header size="lg" /> {/* logo larger than details but smaller than calendar per request */}
       <div className="gm panel wider">
-        <h2 className="gm h2 center">Pick a date</h2>
+        <div className="gm h2 center">
+          {new Date(fromKey(dayKey)).toLocaleString("en-GB", { timeZone: TZ, weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+        </div>
 
-        <MonthGrid
-          slotsByDay={slotsByDay}
-          selectedDay={selectedDay}
-          setSelectedDay={onPickDay}
-          monthCursor={monthCursor}
-          setMonthCursor={setMonthCursor}
-          bookedDays={bookedDays}
-          membershipCount={(state.membershipSlots || []).length}
-          isMembership={isMembership}
-          onRemoveDay={onRemoveDay}
-        />
-
-        {isMembership && selectedIsBooked && (
-          <div className="gm note">
-            You’ve already booked <b>{dateFromKeyLocal(selectedDay).toLocaleString(DateTime.DATE_MED_WITH_WEEKDAY)}</b>.
-            Please pick a different day.
+        {isMembership && (
+          <div className="gm actions space" style={{ marginBottom: 8 }}>
+            <div className={cx("gm counter", counter >= 2 ? "ok" : "warn")}>{counter}/2</div>
+            <div />
           </div>
         )}
 
-        <div className="gm actions">
-          <button className="gm btn" onClick={onBack}>Back</button>
-          <button
-            className="gm btn primary"
-            disabled={!selectedDay || selectedIsBooked}
-            onClick={() => { setState((s) => ({ ...s, selectedDay, prefetchedDaySlots: currentDaySlots })); onNext(); }}
-          >
-            See times
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ===================== Times (no logo here) ===================== */
-useEffect(() => {
-  window.scrollTo({ top: 0, behavior: "instant" });
-  parentScrollToTop();
-  setTimeout(reportHeight, 50);
-}, []);
-function Times({ onNext, onBack, state, setState }) {
-  const isMembership = state.service_key?.includes("membership");
-  const selectedDay = state.selectedDay;
-  const [daySlots, setDaySlots] = useState(state.prefetchedDaySlots || []);
-
-  useEffect(() => { setDaySlots(state.prefetchedDaySlots || []); }, [state.prefetchedDaySlots]);
-
-  const selected =
-    isMembership
-      ? (state.membershipSlots || []).find((s) => s && keyLocal(DateTime.fromISO(s.start_iso).setZone(TZ)) === selectedDay)
-      : state.slot && keyLocal(DateTime.fromISO(state.slot.start_iso).setZone(TZ)) === selectedDay
-        ? state.slot
-        : null;
-
-  function choose(slot) {
-    if (!isMembership) { setState((st) => ({ ...st, slot })); return; }
-    setState((st) => {
-      const ms = Array.isArray(st.membershipSlots) ? [...st.membershipSlots] : [];
-      const dayK = keyLocal(DateTime.fromISO(slot.start_iso).setZone(TZ));
-      const idxSameDay = ms.findIndex(x => keyLocal(DateTime.fromISO(x.start_iso).setZone(TZ)) === dayK);
-      if (idxSameDay !== -1) { ms[idxSameDay] = slot; return { ...st, membershipSlots: ms }; }
-      if (ms.some(x => keyLocal(DateTime.fromISO(x.start_iso).setZone(TZ)) === dayK)) return { ...st, membershipSlots: ms };
-      if (ms.length < 2) return { ...st, membershipSlots: [...ms, slot] };
-      return { ...st, membershipSlots: [ms[0], slot] };
-    });
-  }
-
-  function removeSelectedSlot(slot) {
-    if (!isMembership) setState((st) => ({ ...st, slot: null }));
-    else setState((st) => ({ ...st, membershipSlots: (st.membershipSlots || []).filter((x) => x.start_iso !== slot.start_iso) }));
-  }
-
-  const canNext = isMembership ? ((state.membershipSlots||[]).length > 0) : !!selected;
-  const headerDateObj = selected
-    ? DateTime.fromISO(selected.start_iso).setZone(TZ)
-    : dateFromKeyLocal(selectedDay);
-
-  return (
-    <div className="gm page-section">
-      <div className="gm panel wider">
-        <h2 className="gm h2 center" style={{ marginBottom: 16 }}>
-          {headerDateObj.toLocaleString(DateTime.DATE_HUGE)}
-        </h2>
-
         <div className="gm timegrid">
-          {daySlots.map((s)=> {
-            const sel = selected?.start_iso === s.start_iso ||
-                        (isMembership && (state.membershipSlots||[]).some(x=>x.start_iso===s.start_iso));
-            const t = DateTime.fromISO(s.start_iso).setZone(TZ).toFormat("HH:mm");
+          {list.map((s, i) => {
+            const start = new Date(s.start_iso).toLocaleString("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false });
+            const on =
+              isMembership
+                ? state.membershipSlots.some(x => x.day_key === dayKey && x.slot.start_iso === s.start_iso)
+                : state.selectedSlot?.start_iso === s.start_iso;
             return (
-              <div key={s.start_iso} className="gm timebox-wrap">
-                <button className={cx("gm timebox", sel && "timebox-on")} onClick={()=>choose(s)} type="button">
-                  {t}
+              <div key={i} className="gm timebox-wrap">
+                <button className={cx("gm timebox", on && "timebox-on")} onClick={() => choose(s)}>
+                  {start}
                 </button>
-                {sel && (
-                  <button type="button" aria-label="Remove this booking" className="gm closebtn"
-                          onClick={(e) => { e.stopPropagation(); removeSelectedSlot(s); }} title="Remove this booking">×</button>
+                {isMembership && on && (
+                  <button className="gm closebtn" onClick={() => removePick(dayKey)}>×</button>
                 )}
               </div>
             );
           })}
         </div>
 
-        <div className="gm actions end">
-          <button className="gm btn" onClick={onBack}>Back to calendar</button>
-          <button className="gm btn primary" disabled={!canNext}
-                  onClick={() => { if (isMembership && (state.membershipSlots||[]).length === 1) onBack(); else onNext(); }}>
-            {isMembership && (state.membershipSlots||[]).length === 1 ? "Choose second date" : "Continue"}
-          </button>
+        <div className="gm actions space" style={{ marginTop: 12 }}>
+          <Button onClick={onBack}>Back to calendar</Button>
+          <PrimaryButton
+            onClick={onConfirm}
+            disabled={isMembership ? state.membershipSlots.length !== 2 : !state.selectedSlot}
+          >
+            Continue
+          </PrimaryButton>
         </div>
       </div>
     </div>
   );
 }
 
-/* ===================== Confirm (Stripe) ===================== */
-function Confirm({ onBack, state }) {
-  const [loading, setLoading] = useState(false);
+/* ================== DETAILS ================== */
+function Details({ state, setState, onNext }) {
+  // Smaller logo here; layout with logo left
+  const [form, setForm] = React.useState(state.customer || {});
 
-  const total = useMemo(() => {
-    const cfg = JSON.parse(sessionStorage.getItem("gm_cfg") || "{}");
-    const map = cfg.services || {};
-    const addonsMap = cfg.addons || {};
-    let t = map[state.service_key]?.price || 0;
-    t += (state.addons || []).reduce((s, k) => s + (addonsMap[k]?.price || 0), 0);
-    return t;
-  }, [state.service_key, state.addons]);
-
-  async function confirm() {
-    if (loading) return;
-    setLoading(true);
-    try {
-      const payload = {
-        customer: state.customer,
-        service_key: state.service_key,
-        addons: state.addons || [],
-        slot: state.slot,
-        membershipSlots: state.membershipSlots,
-        origin: window.location.origin // backend fallback if env missing
-      };
-      const resp = await fetch(`${API}/pay/create-checkout-session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await resp.json().catch(()=> ({}));
-      if (!resp.ok || !data?.ok || !data?.url) throw new Error(data?.error || `HTTP ${resp.status}`);
-      window.location.href = data.url;
-    } catch (err) {
-      alert(`Checkout failed:\n${String(err.message || err)}\n\nPlease try again or contact us.`);
-    } finally { setLoading(false); }
+  function go() {
+    const required = ["name", "email", "phone", "street", "postcode"];
+    for (const k of required) {
+      if (!String(form[k] || "").trim()) return alert("Please complete your details.");
+    }
+    setState((s) => ({ ...s, customer: form }));
+    onNext();
   }
 
-  const when = state.service_key?.includes("membership")
-    ? (state.membershipSlots || []).map((s) => DateTime.fromISO(s.start_iso).setZone(TZ).toFormat("ccc d LLL HH:mm")).join(" & ")
-    : state.slot && DateTime.fromISO(state.slot.start_iso).setZone(TZ).toFormat("ccc d LLL HH:mm");
-
   return (
-    <div className="gm page-section">
+    <div className="gm page-section gm-booking wrap">
       <Header size="lg" />
-      <div className="gm panel">
-        <h2 className="gm h2 center">Confirm Booking</h2>
-
-        <div className="gm twocol">
-          <div className="gm panel sub">
-            <div><b>Date & time:</b> {when || "—"}</div>
-            <div><b>Name:</b> {state.customer?.name}</div>
-            <div><b>Street:</b> {state.customer?.street}</div>
-            <div><b>Postcode:</b> {state.customer?.postcode}</div>
-            <div><b>Email:</b> {state.customer?.email}</div>
-            <div><b>Phone:</b> {state.customer?.phone}</div>
-            <div><b>Service:</b> {state.service_key}</div>
-            <div><b>Add-ons:</b> {(state.addons||[]).join(", ") || "None"}</div>
+      <div className="gm panel wider">
+        <div className="gm details-grid">
+          <img src="/logo.png" alt="GM" className="gm logo-big" />
+          <div className="gm details-right">
+            <p className="gm hero-note">
+              Welcome to gmautodetailing.uk booking. We use your details so we arrive on time and at the correct location,
+              and to contact you if anything changes.
+            </p>
+            <div className="gm row">
+              <input className="gm input" placeholder="Name" value={form.name || ""} onChange={e => setForm({ ...form, name: e.target.value })} />
+              <input className="gm input" placeholder="Phone" value={form.phone || ""} onChange={e => setForm({ ...form, phone: e.target.value })} />
+            </div>
+            <div className="gm row">
+              <input className="gm input" placeholder="Email" value={form.email || ""} onChange={e => setForm({ ...form, email: e.target.value })} />
+            </div>
+            <div className="gm row">
+              <input className="gm input" placeholder="Street address" value={form.street || ""} onChange={e => setForm({ ...form, street: e.target.value })} />
+              <input className="gm input" placeholder="Postcode" value={form.postcode || ""} onChange={e => setForm({ ...form, postcode: e.target.value })} />
+            </div>
+            <div className="gm actions end">
+              <PrimaryButton onClick={go}>Next</PrimaryButton>
+            </div>
           </div>
-          <div className="gm panel sub center">
-            <div className="gm muted">Amount due</div>
-            <div className="gm total">{fmtGBP(total)}</div>
-          </div>
-        </div>
-
-        <div className="gm actions space">
-          <button className="gm btn" onClick={onBack} disabled={loading}>Back</button>
-          <button className="gm btn primary" onClick={confirm} disabled={loading}>
-            {loading ? "Starting checkout…" : "Confirm & Pay"}
-          </button>
         </div>
       </div>
     </div>
   );
 }
 
-/* ===================== Thank You ===================== */
-function ThankYou() {
-  return (
-    <div className="gm page-section">
-      <Header />
-      <div className="gm panel center">
-        <h2 className="gm h2">Thank you for your booking! 🎉</h2>
-        <p className="gm muted">
-          A confirmation will be sent to your email. If you don’t see it, please check your spam folder.
-        </p>
-        <button className="gm btn primary" onClick={() => { window.history.replaceState({}, "", "/"); window.location.reload(); }}>
-          Back to start
-        </button>
-      </div>
-    </div>
-  );
-}
+/* ================== SERVICES ================== */
+function Services({ state, setState, onBack, onNext, cfg }) {
+  const [svc, setSvc] = React.useState(state.service_key || "");
+  const [addons, setAddons] = React.useState(state.addons || []);
 
-/* ===================== App ===================== */
-function App() {
-  const [state, setState] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem("gm_state") || "{}"); } catch { return {}; }
-  });
-  const [step, setStep] = useState(0);
-  const [config, setConfig] = useState({ services: {}, addons: {} });
-  const [cfgLoading, setCfgLoading] = useState(true);
-
-  const fetchConfig = async (attempt = 1) => {
-    try {
-      setCfgLoading(true);
-      const r = await fetch(API + "/config", { cache: "no-store" });
-      const d = await r.json();
-      setConfig(d || {});
-      sessionStorage.setItem("gm_cfg", JSON.stringify(d || {}));
-      setCfgLoading(false);
-    } catch (e) {
-      if (attempt < 3) setTimeout(() => fetchConfig(attempt + 1), 400 * attempt);
-      else setCfgLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    const qp = new URLSearchParams(window.location.search);
-    if (qp.get("paid") === "1") setStep(5);
-    else if (qp.get("cancelled") === "1") alert("Payment cancelled. Your booking wasn’t completed.");
+  // Make page non-scrollable while on Services (prevents weirdness inside Squarespace)
+  React.useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    setTimeout(reportHeight, 60);
+    return () => { document.body.style.overflow = prev; };
   }, []);
 
-  useEffect(() => { fetchConfig(); }, []);
+  function go() {
+    if (!svc) return alert("Please choose a service.");
+    setState((s) => ({
+      ...s,
+      service_key: svc,
+      addons: svc.includes("membership") ? [] : addons,
+      // reset slot selections when service changes
+      selectedDayKey: null,
+      selectedSlot: null,
+      membershipSlots: [],
+    }));
+    onNext();
+  }
 
-  const services = hasKeys(config.services) ? config.services : {};
+  const sCfg = cfg.services || {};
+  const aCfg = cfg.addons || {};
+  const isMembership = svc.includes("membership");
 
   return (
-    <div className="gm-site">
-      <div className="gm-booking wrap">
-        {step === 0 && <Details onNext={() => setStep(1)} state={state} setState={setState} />}
-        {step === 1 && <Services onNext={() => setStep(2)} onBack={() => setStep(0)} state={state} setState={setState} config={config} cfgLoading={cfgLoading} reloadConfig={fetchConfig} />}
-        {step === 2 && <Calendar onNext={() => setStep(3)} onBack={() => { setState((s) => ({ ...s, selectedDay: null, slot: null, membershipSlots: [], prefetchedDaySlots: [] })); setStep(1); }} state={state} setState={setState} />}
-        {step === 3 && <Times onNext={() => setStep(4)} onBack={() => setStep(2)} state={state} setState={setState} />}
-        {step === 4 && <Confirm onBack={() => setStep(3)} state={state} setState={setState} />}
-        {step === 5 && <ThankYou />}
+    <div className="gm page-section gm-booking wrap">
+      <Header size="lg" />
+      <div className="gm panel wider">
+        <div className="gm h2 center">Choose your service</div>
+        <div className="gm cards">
+          <ServiceCard
+            title={sCfg.exterior?.name || "Exterior Detail"}
+            price={sCfg.exterior?.price ?? 40}
+            selected={svc === "exterior"}
+            onClick={() => setSvc("exterior")}
+          />
+          <ServiceCard
+            title={sCfg.full?.name || "Full Detail"}
+            price={sCfg.full?.price ?? 60}
+            selected={svc === "full"}
+            onClick={() => setSvc("full")}
+          />
+          <ServiceCard
+            title={sCfg.standard_membership?.name || "Standard Membership (2 Exterior)"}
+            price={sCfg.standard_membership?.price ?? 70}
+            selected={svc === "standard_membership"}
+            onClick={() => setSvc("standard_membership")}
+          />
+          <ServiceCard
+            title={sCfg.premium_membership?.name || "Premium Membership (2 Full)"}
+            price={sCfg.premium_membership?.price ?? 100}
+            selected={svc === "premium_membership"}
+            onClick={() => setSvc("premium_membership")}
+          />
+        </div>
+
+        {!isMembership && (
+          <>
+            <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
+            <div className="gm addon-benefits two-col">
+              <AddonCard
+                key="wax"
+                title={aCfg.wax?.name || "Full Body Wax"}
+                price={aCfg.wax?.price ?? 10}
+                desc="Adds gloss and strong water beading. Light protection between washes."
+                align="left"
+                selected={addons.includes("wax")}
+                onToggle={() =>
+                  setAddons((arr) =>
+                    arr.includes("wax") ? arr.filter((x) => x !== "wax") : [...arr, "wax"]
+                  )
+                }
+              />
+              <AddonCard
+                key="polish"
+                title={aCfg.polish?.name || "Hand Polish"}
+                price={aCfg.polish?.price ?? 22.5}
+                desc="Hand-finished shine. Softens light marks and brightens the paint."
+                align="right"
+                selected={addons.includes("polish")}
+                onToggle={() =>
+                  setAddons((arr) =>
+                    arr.includes("polish") ? arr.filter((x) => x !== "polish") : [...arr, "polish"]
+                  )
+                }
+              />
+            </div>
+          </>
+        )}
+
+        <div className="gm actions space bottom-stick">
+          <Button onClick={onBack}>Back</Button>
+          <PrimaryButton onClick={go}>See times</PrimaryButton>
+        </div>
       </div>
     </div>
   );
 }
 
+/* ================== CONFIRM ================== */
+function Confirm({ state, setState, onBack, onPaid }) {
+  const isMembership = state.service_key?.includes("membership");
+  const services = state.config?.services || {};
+  const addonsCfg = state.config?.addons || {};
+  const base = services[state.service_key]?.price ?? 0;
+  const total = isMembership
+    ? base
+    : base + (state.addons || []).reduce((s, k) => s + (addonsCfg[k]?.price ?? 0), 0);
+
+  async function pay() {
+    if (!state.customer || !state.service_key) return;
+    const payload = {
+      customer: state.customer,
+      service_key: state.service_key,
+      addons: isMembership ? [] : (state.addons || []),
+      origin: window.location.origin,
+      ...(isMembership
+        ? { membershipSlots: state.membershipSlots.map(x => x.slot) }
+        : { slot: state.selectedSlot }),
+    };
+    const r = await fetch(`${API}/pay/create-checkout-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!d?.ok || !d?.url) {
+      alert(d?.error || "Payment failed to initialize.");
+      return;
+    }
+    try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
+  }
+
+  const slotLines = isMembership
+    ? state.membershipSlots
+        .slice()
+        .sort((a, b) => new Date(a.slot.start_iso) - new Date(b.slot.start_iso))
+        .map((x, i) => {
+          const dt = new Date(x.slot.start_iso).toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+          return <div key={i}>{dt}</div>;
+        })
+    : state.selectedSlot
+      ? [
+          <div key="1">
+            {new Date(state.selectedSlot.start_iso).toLocaleString("en-GB", { timeZone: TZ, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })}
+          </div>,
+        ]
+      : null;
+
+  return (
+    <div className="gm page-section gm-booking wrap">
+      <Header size="xl" />
+      <div className="gm panel wider">
+        <div className="gm h2 center">Confirm booking</div>
+
+        <div className="gm twocol">
+          <div>
+            <div className="gm card" style={{ marginBottom: 10 }}>
+              <div className="gm card-title">Your details</div>
+              <div>{state.customer?.name}</div>
+              <div>{state.customer?.phone}</div>
+              <div>{state.customer?.email}</div>
+              <div>{state.customer?.street}, {state.customer?.postcode}</div>
+            </div>
+
+            <div className="gm card">
+              <div className="gm card-title">Booking</div>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>{services[state.service_key]?.name || state.service_key}</div>
+              {slotLines}
+              {!isMembership && !!(state.addons || []).length && (
+                <div style={{ marginTop: 6 }}>
+                  <div style={{ fontWeight: 800 }}>Add-ons</div>
+                  <div>{state.addons.map(k => addonsCfg[k]?.name || k).join(", ")}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="gm card">
+            <div className="gm card-title">Amount due</div>
+            <div className="gm total">{fmtGBP(total)}</div>
+            <div className="gm actions end" style={{ marginTop: 10 }}>
+              <Button onClick={onBack}>Back</Button>
+              <PrimaryButton onClick={pay}>Confirm & Pay</PrimaryButton>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================== THANK YOU ================== */
+function ThankYou() {
+  React.useEffect(() => { setTimeout(reportHeight, 60); }, []);
+  return (
+    <div className="gm page-section gm-booking wrap">
+      <Header size="xl" />
+      <div className="gm panel wider" style={{ textAlign: "center" }}>
+        <div className="gm h2 center">Thanks for your booking!</div>
+        <div>We’ve sent a confirmation to your email.</div>
+      </div>
+    </div>
+  );
+}
+
+/* ================== APP (flow) ================== */
+function App() {
+  const [state, setState] = React.useState({
+    step: new URLSearchParams(window.location.search).get("paid") ? "thankyou" : "details",
+    customer: {},
+    service_key: "",
+    addons: [],
+    selectedDayKey: null,
+    selectedSlot: null,
+    membershipSlots: [],
+    availability: null,
+    monthKey: toDateKey(new Date()).slice(0, 7), // yyyy-mm
+    config: null,
+  });
+
+  // Load config once
+  React.useEffect(() => {
+    fetch(`${API}/config`).then(r => r.json()).then((cfg) => {
+      setState(s => ({ ...s, config: cfg }));
+    }).finally(() => setTimeout(reportHeight, 60));
+  }, []);
+
+  // When service changes, fetch availability for the current month
+  React.useEffect(() => {
+    if (!state.service_key) return;
+    fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${state.monthKey}`)
+      .then(r => r.json())
+      .then(d => {
+        // Start from first day that actually has availability
+        const keys = Object.keys(d.days || {}).sort();
+        const first = keys[0] || null;
+        setState(s => ({ ...s, availability: d, selectedDayKey: first || s.selectedDayKey }));
+      })
+      .finally(() => setTimeout(reportHeight, 60));
+  }, [state.service_key]);
+
+  function goto(step) {
+    setState((s) => ({ ...s, step }));
+    setTimeout(reportHeight, 60);
+  }
+
+  if (state.step === "thankyou") return <ThankYou />;
+
+  if (state.step === "details")
+    return <Details
+      state={state}
+      setState={setState}
+      onNext={() => goto("services")}
+    />;
+
+  if (state.step === "services")
+    return <Services
+      state={state}
+      setState={setState}
+      cfg={state.config || {}}
+      onBack={() => goto("details")}
+      onNext={() => goto("calendar")}
+    />;
+
+  if (state.step === "calendar")
+    return <Calendar
+      state={state}
+      setState={setState}
+      onBack={() => goto("services")}
+      onGoTimes={() => goto("times")}
+    />;
+
+  if (state.step === "times")
+    return <Times
+      state={state}
+      setState={setState}
+      onBack={() => goto("calendar")}
+      onConfirm={() => goto("confirm")}
+    />;
+
+  if (state.step === "confirm")
+    return <Confirm
+      state={state}
+      setState={setState}
+      onBack={() => goto("times")}
+      onPaid={() => goto("thankyou")}
+    />;
+
+  return null;
+}
+
+/* ================== BOOT ================== */
 createRoot(document.getElementById("root")).render(<App />);
