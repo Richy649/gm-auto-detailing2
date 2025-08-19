@@ -191,7 +191,6 @@ function Services({ onNext, onBack, state, setState, config, cfgLoading, reloadC
             title="Full Body Wax"
             price={addonsCfg.wax?.price ?? 10}
             desc=" Adds gloss and strong water beading. Light protection between washes."
-."
             align="left"
           />
           <AddonCard
