@@ -11,11 +11,12 @@ import { initStore } from "./store.js"; // ⬅️ add this
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-/* ===== CORS: allow prod + ANY *.vercel.app preview + localhost ===== */
 const ALLOW_ORIGINS = [
-  "https://gm-auto-detailing2.vercel.app",
+  "https://book.gmautodetailing.uk",
+  "https://gm-auto-detailing2.vercel.app", // keep during the switch
   "http://localhost:5173"
 ];
+
 const VERCEL_ANY_RE = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i;
 
 const corsOptions = {
