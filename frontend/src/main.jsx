@@ -210,6 +210,11 @@ function Services({ onNext, onBack, state, setState, config, cfgLoading, reloadC
     </div>
   );
 }
+useEffect(() => {
+  document.body.classList.add("no-scroll");
+  reportHeight();
+  return () => document.body.classList.remove("no-scroll");
+}, []);
 
 /* ===================== Month grid with weekday header ===================== */
 function MonthGrid({
