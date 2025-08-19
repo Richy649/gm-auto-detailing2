@@ -190,14 +190,16 @@ function Services({ onNext, onBack, state, setState, config, cfgLoading, reloadC
             k="wax"
             title="Full Body Wax"
             price={addonsCfg.wax?.price ?? 10}
-            desc="Durable gloss and water beading. Protects the paint between washes."
+            desc=" Adds gloss and strong water beading. Light protection between washes."
+."
             align="left"
           />
           <AddonCard
             k="polish"
             title="Hand Polish"
             price={addonsCfg.polish?.price ?? 22.5}
-            desc="Hand-finished clarity. Reduces light haze and brings back shine."
+            desc=" Hand-finished shine. Softens light marks and brightens the paint."
+."
             align="right"
           />
         </div>
