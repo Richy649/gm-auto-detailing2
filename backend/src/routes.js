@@ -41,7 +41,7 @@ function londonOffsetMinutes(key) {
   return (hour - 12) * 60; // 12:00 UTC shows 13:00 in BST, 12:00 in GMT
 }
 
-/** Build a UTC Date ISO string from London local time HH:MM on a given day key */
+/** Build a UTC ISO from London local HH:MM on a given day key */
 function londonLocalToUTCISO(dayKey, hh, mm) {
   const [y, m, d] = dayKey.split("-").map(Number);
   const offset = londonOffsetMinutes(dayKey); // +0 or +60
@@ -76,18 +76,13 @@ function generateStarts(dayKey, durationMin) {
   const hardEnd = endMin + OVERRUN_MAX_MIN;
 
   while (t + durationMin <= hardEnd) {
-    // Ensure next suggested start is after buffer from this end
     res.push(t);
-    // step to next candidate start
     t = t + durationMin + BUFFER_MIN;
 
-    // If the next start would be inside the last job (rare), break
     if (t <= res[res.length - 1]) break;
-    // Stop if even starting at t we cannot finish within allowed hardEnd
     if (t + durationMin > hardEnd && res.length > 0) break;
   }
 
-  // Filter out starts that would finish past the hardEnd
   return res.filter((s) => s + durationMin <= hardEnd);
 }
 
@@ -113,9 +108,8 @@ function buildSlotsForDay(dayKey, serviceKey) {
 router.get("/availability", (req, res) => {
   try {
     const service_key = String(req.query.service_key || "").trim() || "exterior";
-    const month = String(req.query.month || "").match(/^\d{4}-\d{2}$/)
-      ? String(req.query.month)
-      : toKey(new Date()).slice(0, 7);
+    const monthParam = String(req.query.month || "");
+    const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : yyyymm(toKey(new Date()));
 
     const todayKey = toKey(new Date());
     const plus1 = new Date();
@@ -131,12 +125,11 @@ router.get("/availability", (req, res) => {
     for (let d = 1; d <= last.getUTCDate(); d++) {
       const key = `${y}-${pad(m)}-${pad(d)}`;
 
-      // Respect global window: today .. +1 month
+      // Respect window: today .. +1 month
       if (key < todayKey || key > latestKey) continue;
 
       const slots = buildSlotsForDay(key, service_key);
 
-      // Only include days with at least one slot
       if (slots.length) {
         days[key] = slots;
       }
