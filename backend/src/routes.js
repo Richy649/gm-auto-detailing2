@@ -1,109 +1,157 @@
-import express from 'express';
-import { z } from 'zod';
-import { db } from './db.js';
-import { SERVICES, ADDONS, MAX_DAYS_AHEAD } from './config.js';
+// backend/src/routes.js
+import { Router } from "express";
 
-export const router = express.Router();
+const router = Router();
 
-const CustomerSchema = z.object({
-  name: z.string().min(2),
-  phone: z.string().min(6),
-  address: z.string().min(5),
-  email: z.string().email().optional().or(z.literal(''))
-});
-const BookingSchema = z.object({
-  customer: CustomerSchema,
-  area: z.enum(['left','right']).default('right'),
-  service_key: z.enum(['exterior','full','standard_membership','premium_membership']),
-  addons: z.array(z.enum(['wax','polish'])).default([]),
-  slot: z.object({ start_iso: z.string(), end_iso: z.string() }).optional(),
-  membershipSlots: z.array(z.object({ start_iso: z.string(), end_iso: z.string() })).optional()
-});
+const TZ = "Europe/London";
+const SERVICE_DURATION = {
+  exterior: 75,
+  full: 120,
+  standard_membership: 75,
+  premium_membership: 120,
+};
+const BUFFER_MIN = 30;
+const OVERRUN_MAX_MIN = 45;
 
-// Config endpoint
-router.get('/config', (req, res) => res.json({ services: SERVICES, addons: ADDONS }));
+/* ---------- date helpers (DST-safe) ---------- */
+const pad = (n) => (n < 10 ? `0${n}` : `${n}`);
+const toKey = (d) => {
+  // yyyy-mm-dd in London local
+  const s = new Date(d).toLocaleString("en-GB", {
+    timeZone: TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const [dd, mm, yyyy] = s.split("/");
+  return `${yyyy}-${mm}-${dd}`;
+};
+const fromKeyNoonUTC = (key) => {
+  const [y, m, d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)); // noon UTC (stable weekday)
+};
+const yyyymm = (key) => key.slice(0, 7);
 
-// Simple debug
-router.get('/debug/time', (req, res) => {
-  res.json({ now: new Date().toISOString(), tz: process.env.TZ || 'unset' });
-});
-
-/** ---- FORCE SLOTS: guaranteed times so the UI lights up ----
- * Right of Sheen => Mon, Wed, Fri, Sun (1,3,5,0)
- * Left  of Sheen => Tue, Thu, Sat       (2,4,6)
- * 24h minimum notice, up to MAX_DAYS_AHEAD.
- * Fixed times each allowed day: 10:00, 13:00, 16:00
- */
-function forcedSlots(service_key, area='right') {
-  const allowed = new Set(area === 'left' ? [2,4,6] : [1,3,5,0]); // 0=Sun..6=Sat
-  const out = [];
-  const now = new Date();
-  const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1); // 24h min (day-level)
-  const endDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + MAX_DAYS_AHEAD);
-  const durMin = SERVICES[service_key]?.duration || 60;
-  const times = ['10:00','13:00','16:00'];
-
-  for (let d = new Date(startDay); d <= endDay; d.setDate(d.getDate() + 1)) {
-    if (!allowed.has(d.getDay())) continue;
-    for (const hhmm of times) {
-      const [h,m] = hhmm.split(':').map(Number);
-      const s = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, 0, 0);
-      const e = new Date(s.getTime() + durMin*60*1000);
-      out.push({ start_iso: s.toISOString(), end_iso: e.toISOString() });
-    }
-  }
-  return out;
+/** Returns +0 or +60 (BST) minutes for that date in London */
+function londonOffsetMinutes(key) {
+  const dt = fromKeyNoonUTC(key);
+  const hour = Number(
+    dt.toLocaleString("en-GB", { timeZone: TZ, hour: "2-digit", hour12: false })
+  );
+  return (hour - 12) * 60; // 12:00 UTC shows 13:00 in BST, 12:00 in GMT
 }
 
-// Availability: ALWAYS return forced slots for now
-router.post('/availability', (req, res) => {
-  const { service_key, area = 'right' } = req.body || {};
-  if (!service_key || !(service_key in SERVICES)) {
-    return res.json({ slots: [] });
+/** Build a UTC Date ISO string from London local time HH:MM on a given day key */
+function londonLocalToUTCISO(dayKey, hh, mm) {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const offset = londonOffsetMinutes(dayKey); // +0 or +60
+  const localMin = hh * 60 + mm;
+  const utcMin = localMin - offset;
+  const base = Date.UTC(y, m - 1, d, 0, 0, 0);
+  const ts = base + utcMin * 60 * 1000;
+  return new Date(ts).toISOString();
+}
+
+function isWeekend(dayKey) {
+  const dow = fromKeyNoonUTC(dayKey).getUTCDay(); // 0 Sun ... 6 Sat
+  return dow === 0 || dow === 6;
+}
+
+/** Parse "HH:MM" -> minutes */
+function hm(str) {
+  const [h, m] = str.split(":").map(Number);
+  return h * 60 + (m || 0);
+}
+
+/** Generate non-overlapping starts across the day, honoring buffer+overrun */
+function generateStarts(dayKey, durationMin) {
+  const wknd = isWeekend(dayKey);
+  const startMin = wknd ? hm("09:00") : hm("16:00");
+  const endMin = wknd ? hm("19:30") : hm("21:00");
+
+  const res = [];
+  let t = startMin;
+
+  // Allow last job to end up to endMin + OVERRUN_MAX_MIN
+  const hardEnd = endMin + OVERRUN_MAX_MIN;
+
+  while (t + durationMin <= hardEnd) {
+    // Ensure next suggested start is after buffer from this end
+    res.push(t);
+    // step to next candidate start
+    t = t + durationMin + BUFFER_MIN;
+
+    // If the next start would be inside the last job (rare), break
+    if (t <= res[res.length - 1]) break;
+    // Stop if even starting at t we cannot finish within allowed hardEnd
+    if (t + durationMin > hardEnd && res.length > 0) break;
   }
-  const slots = forcedSlots(service_key, area);
-  return res.json({ slots });
-});
 
-// Book (kept the same)
-router.post('/book', (req, res) => {
-  const parsed = BookingSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
-  const data = parsed.data;
+  // Filter out starts that would finish past the hardEnd
+  return res.filter((s) => s + durationMin <= hardEnd);
+}
 
-  const c = db.prepare('INSERT INTO customers (name,phone,address,area,email) VALUES (?,?,?,?,?)')
-    .run(data.customer.name, data.customer.phone, data.customer.address, data.area, data.customer.email || null);
-  const customer_id = c.lastInsertRowid;
+/** Build slots list [{start_iso,end_iso}, ...] for a given service and day */
+function buildSlotsForDay(dayKey, serviceKey) {
+  const duration = SERVICE_DURATION[serviceKey] ?? 75;
+  const starts = generateStarts(dayKey, duration);
+  return starts.map((mStart) => {
+    const mEnd = mStart + duration;
+    const sh = Math.floor(mStart / 60),
+      sm = mStart % 60;
+    const eh = Math.floor(mEnd / 60),
+      em = mEnd % 60;
+    return {
+      start_iso: londonLocalToUTCISO(dayKey, sh, sm),
+      end_iso: londonLocalToUTCISO(dayKey, eh, em),
+    };
+  });
+}
 
-  const isMembership = data.service_key.includes('membership');
-  const slots = isMembership ? (data.membershipSlots || []) : [data.slot].filter(Boolean);
-  if (!slots.length || (isMembership && slots.length !== 2)) {
-    return res.status(400).json({ error: 'Invalid slots' });
-  }
-  if (isMembership) {
-    const dayKey = iso => new Date(iso).toISOString().slice(0,10);
-    if (dayKey(slots[0].start_iso) === dayKey(slots[1].start_iso)) {
-      return res.status(400).json({ error: 'Membership visits must be on two different days.' });
-    }
-  }
-
-  const insert = db.prepare('INSERT INTO bookings (customer_id, service_key, addons, start_iso, end_iso, status) VALUES (?,?,?,?,?,?)');
+/* ---------- GET /api/availability ---------- */
+/* Query: ?service_key=exterior&month=YYYY-MM (month optional) */
+router.get("/availability", (req, res) => {
   try {
-    const tx = db.transaction(()=>{
-      for(const s of slots){
-        const overlap = db.prepare(`
-          SELECT id FROM bookings
-          WHERE status IN ('scheduled','started')
-          AND NOT(? <= start_iso OR ? >= end_iso)
-        `).all(s.start_iso, s.end_iso);
-        if (overlap.length) throw new Error('Conflict');
-        insert.run(customer_id, data.service_key, JSON.stringify(data.addons || []), s.start_iso, s.end_iso, 'scheduled');
-      }
-    });
-    tx();
-  } catch {
-    return res.status(409).json({ error: 'Slot conflict, please choose another time.' });
-  }
+    const service_key = String(req.query.service_key || "").trim() || "exterior";
+    const month = String(req.query.month || "").match(/^\d{4}-\d{2}$/)
+      ? String(req.query.month)
+      : toKey(new Date()).slice(0, 7);
 
-  res.json({ ok:true });
+    const todayKey = toKey(new Date());
+    const plus1 = new Date();
+    plus1.setMonth(plus1.getMonth() + 1);
+    const latestKey = toKey(plus1);
+
+    // Build all days of requested month
+    const [y, m] = month.split("-").map(Number);
+    const first = new Date(Date.UTC(y, m - 1, 1, 12));
+    const last = new Date(Date.UTC(y, m, 0, 12));
+    const days = {};
+
+    for (let d = 1; d <= last.getUTCDate(); d++) {
+      const key = `${y}-${pad(m)}-${pad(d)}`;
+
+      // Respect global window: today .. +1 month
+      if (key < todayKey || key > latestKey) continue;
+
+      const slots = buildSlotsForDay(key, service_key);
+
+      // Only include days with at least one slot
+      if (slots.length) {
+        days[key] = slots;
+      }
+    }
+
+    res.json({
+      month,
+      earliest_key: todayKey,
+      latest_key: latestKey,
+      days,
+    });
+  } catch (err) {
+    console.error("[/api/availability] error", err);
+    res.status(500).json({ error: "availability_failed" });
+  }
 });
+
+export default router;
