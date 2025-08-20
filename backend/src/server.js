@@ -36,7 +36,7 @@ app.post("/api/pay/create-checkout-session", createCheckoutSession);
 /* -------- Your API routes (/api/availability, etc.) -------- */
 app.use("/api", apiRoutes);
 
-/* -------- Fallback /api/config (if not provided in routes) -------- */
+/* -------- Fallback /api/config -------- */
 app.get("/api/config", (_req, res) => {
   res.json({
     services: {
