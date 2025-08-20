@@ -1,11 +1,12 @@
 // backend/src/server.js
 import express from "express";
 import cors from "cors";
-import { createCheckoutSession, stripeWebhook, mountPayments } from "./payments.js";
+import { createCheckoutSession, stripeWebhook } from "./payments.js";
+import apiRoutes from "./routes.js";
 
 const app = express();
 
-/* ------------------- CORS ------------------- */
+/* ------------ CORS (allow your frontends) ------------ */
 const allowList = [
   "https://book.gmautodetailing.uk",
   "https://gm-auto-detailing2.vercel.app",
@@ -23,45 +24,26 @@ app.use(
   })
 );
 
-/* ---------------- Stripe webhook FIRST (raw) ---------------- */
+/* -------- Stripe webhook FIRST (RAW body) -------- */
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), stripeWebhook);
 
-/* --------------- JSON body for normal API routes -------------- */
+/* -------- Normal JSON body for the rest -------- */
 app.use(express.json());
 
-/* ---------------- Payments endpoint ---------------- */
+/* -------- Payments endpoint -------- */
 app.post("/api/pay/create-checkout-session", createCheckoutSession);
-// (Alternatively you could do: mountPayments(app))
 
-/* --------------- Optional: mount your existing routes --------- */
-/* If you have backend/src/routes.js that defines /api/availability, etc. */
-(async function mountOptionalRoutes() {
-  try {
-    const mod = await import("./routes.js"); // must exist to mount
-    const router =
-      mod.default ||
-      mod.router ||
-      mod.routes ||
-      (typeof mod.mount === "function" ? mod.mount(express.Router()) : null);
+/* -------- Your API routes (/api/availability, etc.) -------- */
+app.use("/api", apiRoutes);
 
-    if (router) {
-      app.use("/api", router);
-      console.log("[server] Mounted routes.js under /api");
-    }
-  } catch (err) {
-    console.warn("[server] routes.js not found or failed to load. Fallback endpoints only.", err?.message || "");
-  }
-})();
-
-/* ----------------- Fallback /api/config ----------------- */
-/* If your routes.js provides /config already, this will be shadowed (that’s fine). */
+/* -------- Fallback /api/config (if not provided in routes) -------- */
 app.get("/api/config", (_req, res) => {
   res.json({
     services: {
       exterior: { key: "exterior", name: "Exterior Detail", price: 40, duration_min: 75 },
       full: { key: "full", name: "Full Detail", price: 60, duration_min: 120 },
-      standard_membership: { key: "standard_membership", name: "Standard Membership (2 Exterior)", price: 70 },
-      premium_membership: { key: "premium_membership", name: "Premium Membership (2 Full)", price: 100 },
+      standard_membership: { key: "standard_membership", name: "Standard Membership (2 Exterior)", price: 70, duration_min: 75 },
+      premium_membership: { key: "premium_membership", name: "Premium Membership (2 Full)", price: 100, duration_min: 120 },
     },
     addons: {
       wax: { key: "wax", name: "Full Body Wax", price: 10 },
@@ -70,17 +52,14 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
-/* ------------------- Health & root ------------------- */
+/* -------- Health -------- */
 app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/api", (_req, res) => res.json({ ok: true, name: "GM API", version: 1 }));
 
-/* ------------------- Start server ------------------- */
+/* -------- Start -------- */
 const port = process.env.PORT || 3001;
 app.listen(port, () => {
   console.log("API listening on", port);
   if (!process.env.PUBLIC_APP_ORIGIN) {
-    console.warn(
-      "[server] PUBLIC_APP_ORIGIN not set. Set it to your frontend origin, e.g. https://book.gmautodetailing.uk"
-    );
+    console.warn("[server] Set PUBLIC_APP_ORIGIN to your frontend origin, e.g. https://book.gmautodetailing.uk");
   }
 });
