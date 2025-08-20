@@ -1,139 +1,124 @@
-// backend/src/payments.js
+// backend/payments.js
+import express from "express";
 import Stripe from "stripe";
-import { getConfig } from "./config.js";
-import {
-  initStore, cleanupExpiredHolds, isSlotFree,
-  newHoldKey, addHold, attachSessionToHolds, releaseHoldsByKey,
-  promoteHoldsToBookingsBySession
-} from "./store.js";
 
-let _stripe = null;
-function stripe() {
-  if (_stripe) return _stripe;
-  const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error("STRIPE_SECRET_KEY missing");
-  _stripe = new Stripe(key, { apiVersion: "2024-06-20" });
-  return _stripe;
-}
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+  apiVersion: "2024-06-20",
+});
 
-function frontendURLFrom(req) {
-  const env = (process.env.FRONTEND_PUBLIC_URL || "").replace(/\/+$/, "");
-  if (env) return env;
-  const fromBody = ((req.body && req.body.origin) || "").replace(/\/+$/, "");
-  if (fromBody && /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(fromBody)) return fromBody;
-  return null;
-}
+// simple price table (GBP)
+const SERVICE_PRICES = {
+  exterior: 40,
+  full: 60,
+  standard_membership: 70,
+  premium_membership: 100,
+};
+const ADDON_PRICES = {
+  wax: 10,
+  polish: 22.5,
+};
 
-const HOLD_MINUTES = 15;
+// robust origin getter -> absolute https://host
+function resolveOrigin(req) {
+  const cand =
+    req.body?.origin ||
+    req.get("origin") ||
+    req.get("referer") ||
+    process.env.PUBLIC_APP_ORIGIN;
 
-export async function createCheckoutSession(req, res) {
   try {
-    await initStore();
-    await cleanupExpiredHolds();
+    const u = new URL(cand);
+    // we only want scheme + host, not a path
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    if (process.env.PUBLIC_APP_ORIGIN) return process.env.PUBLIC_APP_ORIGIN;
+    return null;
+  }
+}
 
-    const cfg = getConfig();
-    const { customer, service_key, addons = [], slot, membershipSlots = [] } = req.body || {};
-    if (!customer || !service_key) return res.status(400).json({ ok: false, error: "Missing customer or service_key" });
+export function mountPayments(app) {
+  // JSON only for this route (webhook keeps raw in server.js)
+  app.post("/api/pay/create-checkout-session", express.json(), async (req, res) => {
+    try {
+      const origin = resolveOrigin(req);
+      if (!origin) {
+        return res.status(400).json({ ok: false, error: "No valid URL for return." });
+      }
 
-    const svc = cfg.services?.[service_key];
-    if (!svc) return res.status(400).json({ ok: false, error: "Unknown service_key" });
-
-    const slots = membershipSlots?.length ? membershipSlots : (slot ? [slot] : []);
-    if (!slots.length) return res.status(400).json({ ok:false, error: "No time selected" });
-
-    if (service_key.includes("membership")) {
-      const days = new Set(slots.map(s => (new Date(s.start_iso)).toISOString().slice(0,10)));
-      if (days.size !== slots.length) return res.status(400).json({ ok:false, error: "Membership visits must be on different days" });
-    }
-
-    const hold_key = newHoldKey();
-    for (const s of slots) {
-      const free = await isSlotFree(s.start_iso, s.end_iso);
-      if (!free) return res.status(409).json({ ok:false, error: "Sorry, that time was just taken. Please choose another slot." });
-      const r = await addHold({ hold_key, service_key, start_iso: s.start_iso, end_iso: s.end_iso, customer });
-      if (!r.ok) return res.status(409).json({ ok:false, error: "Another user just reserved that time. Pick a different slot." });
-    }
-
-    const currency = cfg.currency || "gbp";
-    const basePrice = cfg.services[service_key].price;
-    const line_items = [
-      {
-        price_data: {
-          currency,
-          product_data: { name: cfg.services[service_key].name },
-          unit_amount: Math.round(basePrice * 100),
-        },
-        quantity: 1,
-      },
-      ...addons
-        .filter(a => cfg.addons[a])
-        .map(a => ({
-          price_data: {
-            currency,
-            product_data: { name: `Addon: ${cfg.addons[a].name}` },
-            unit_amount: Math.round(cfg.addons[a].price * 100),
-          },
-          quantity: 1,
-        })),
-    ];
-
-    const origin = frontendURLFrom(req);
-    if (!origin) {
-      await releaseHoldsByKey(hold_key);
-      return res.status(500).json({ ok:false, error: "Frontend URL not configured" });
-    }
-
-    const session = await stripe().checkout.sessions.create({
-      mode: "payment",
-      line_items,
-      metadata: {
+      const {
+        customer = {},
         service_key,
-        addons: JSON.stringify(addons || []),
-        customer: JSON.stringify(customer || {}),
-        hold_key,
-        hold_expires_minutes: String(HOLD_MINUTES)
-      },
-      success_url: `${origin}/?paid=1&session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/?cancelled=1`,
-    });
+        addons = [],
+        slot,                   // for 1-off booking
+        membershipSlots = [],   // for 2-slot memberships
+      } = req.body || {};
 
-    await attachSessionToHolds(hold_key, session.id);
-    res.json({ ok: true, url: session.url });
-  } catch (e) {
-    console.error("[createCheckoutSession] error:", e);
-    return res.status(500).json({ ok:false, error: e.message || "Checkout failed" });
-  }
-}
+      if (!service_key) {
+        return res.status(400).json({ ok: false, error: "Missing service_key." });
+      }
 
-export async function stripeWebhook(req, res) {
-  try {
-    await initStore();
-    const sig = req.headers["stripe-signature"];
-    const whSecret = process.env.STRIPE_WEBHOOK_SECRET;
+      const base = SERVICE_PRICES[service_key] ?? 0;
+      const addonsTotal = (addons || []).reduce(
+        (s, k) => s + (ADDON_PRICES[k] ?? 0),
+        0
+      );
+      const total = base + addonsTotal;
+      if (!total || total <= 0) {
+        return res.status(400).json({ ok: false, error: "Invalid amount." });
+      }
 
-    let event = null;
-    if (whSecret && req.rawBody) {
-      event = stripe().webhooks.constructEvent(req.rawBody, sig, whSecret);
-    } else {
-      event = req.body; // fallback
-      console.warn("[stripeWebhook] Missing STRIPE_WEBHOOK_SECRET or rawBody; not verifying signature.");
-    }
-
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const md = session.metadata || {};
-      const metadata = {
-        service_key: md.service_key,
-        addons: JSON.parse(md.addons || "[]"),
-        customer: JSON.parse(md.customer || "{}")
+      // Build nice description
+      const titleMap = {
+        exterior: "Exterior Detail",
+        full: "Full Detail",
+        standard_membership: "Standard Membership (2 Exterior)",
+        premium_membership: "Premium Membership (2 Full)",
       };
-      await promoteHoldsToBookingsBySession(session.id, metadata);
-      console.log("[stripeWebhook] bookings inserted for session", session.id);
-    }
+      const productName = `GM Auto Detailing – ${titleMap[service_key] || service_key}`;
 
-    return res.json({ received: true });
-  } catch (e) {
-    console.error("[stripeWebhook] error:", e);
-    return res.status(400).send(`Webhook Error: ${e.message}`);
-  }
+      // Metadata for your records (visible in Stripe)
+      const md = {
+        service_key,
+        addons: (addons || []).join(","),
+        slot_start: slot?.start_iso || "",
+        slot_end: slot?.end_iso || "",
+        membership_slots: membershipSlots.length ? "2" : "0",
+        customer_name: customer?.name || "",
+        customer_email: customer?.email || "",
+        customer_phone: customer?.phone || "",
+        customer_street: customer?.street || "",
+        customer_postcode: customer?.postcode || "",
+      };
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        currency: "gbp",
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: "gbp",
+              unit_amount: Math.round(total * 100), // pence
+              product_data: {
+                name: productName,
+                description: addons.length
+                  ? `Add-ons: ${addons.join(", ")}`
+                  : undefined,
+              },
+            },
+          },
+        ],
+        success_url: `${origin}?paid=1`,
+        cancel_url: `${origin}?canceled=1`,
+        customer_email: customer?.email || undefined,
+        allow_promotion_codes: true,
+        metadata: md,
+      });
+
+      return res.json({ ok: true, url: session.url });
+    } catch (err) {
+      console.error("[pay:create-checkout-session] error", err);
+      return res.status(500).json({ ok: false, error: "Stripe error. " + (err?.message || "") });
+    }
+  });
 }
