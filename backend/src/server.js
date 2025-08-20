@@ -1,59 +1,86 @@
-
 // backend/src/server.js
 import express from "express";
 import cors from "cors";
-import morgan from "morgan";
-import { getConfig } from "./config.js";
-import { getAvailability } from "./availability.js";
-import { createCheckoutSession, stripeWebhook } from "./payments.js";
-import { initStore } from "./store.js"; // ⬅️ add this
+import { createCheckoutSession, stripeWebhook, mountPayments } from "./payments.js";
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 
-const ALLOW_ORIGINS = [
+/* ------------------- CORS ------------------- */
+const allowList = [
   "https://book.gmautodetailing.uk",
-  "https://gm-auto-detailing2.vercel.app", // keep during the switch
-  "http://localhost:5173"
+  "https://gm-auto-detailing2.vercel.app",
 ];
+const vercelPreview = /\.vercel\.app$/i;
 
-const VERCEL_ANY_RE = /^https:\/\/[a-z0-9-]+\.vercel\.app$/i;
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin) return cb(null, true);
+      if (allowList.includes(origin) || vercelPreview.test(origin)) return cb(null, true);
+      return cb(null, false);
+    },
+    credentials: false,
+  })
+);
 
-const corsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (ALLOW_ORIGINS.includes(origin) || VERCEL_ANY_RE.test(origin)) return cb(null, true);
-    cb(new Error(`CORS blocked: ${origin}`));
-  },
-  credentials: false,
-};
-
-/* Stripe webhook must be raw BEFORE json() */
+/* ---------------- Stripe webhook FIRST (raw) ---------------- */
 app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), stripeWebhook);
 
-/* Normal middleware */
-app.use(cors(corsOptions));
-app.use(morgan("tiny"));
+/* --------------- JSON body for normal API routes -------------- */
 app.use(express.json());
 
-/* Routes */
-app.get("/api/config", (_req, res) => res.json(getConfig()));
-app.get("/api/availability", getAvailability);
+/* ---------------- Payments endpoint ---------------- */
 app.post("/api/pay/create-checkout-session", createCheckoutSession);
+// (Alternatively you could do: mountPayments(app))
 
-app.get("/api/health", async (_req, res) => {
-  const { dbMode } = await import("./store.js");
+/* --------------- Optional: mount your existing routes --------- */
+/* If you have backend/src/routes.js that defines /api/availability, etc. */
+(async function mountOptionalRoutes() {
+  try {
+    const mod = await import("./routes.js"); // must exist to mount
+    const router =
+      mod.default ||
+      mod.router ||
+      mod.routes ||
+      (typeof mod.mount === "function" ? mod.mount(express.Router()) : null);
+
+    if (router) {
+      app.use("/api", router);
+      console.log("[server] Mounted routes.js under /api");
+    }
+  } catch (err) {
+    console.warn("[server] routes.js not found or failed to load. Fallback endpoints only.", err?.message || "");
+  }
+})();
+
+/* ----------------- Fallback /api/config ----------------- */
+/* If your routes.js provides /config already, this will be shadowed (that’s fine). */
+app.get("/api/config", (_req, res) => {
   res.json({
-    ok: true,
-    stripe: !!process.env.STRIPE_SECRET_KEY,
-    frontend_url: process.env.FRONTEND_PUBLIC_URL || null,
-    db_mode: dbMode()
+    services: {
+      exterior: { key: "exterior", name: "Exterior Detail", price: 40, duration_min: 75 },
+      full: { key: "full", name: "Full Detail", price: 60, duration_min: 120 },
+      standard_membership: { key: "standard_membership", name: "Standard Membership (2 Exterior)", price: 70 },
+      premium_membership: { key: "premium_membership", name: "Premium Membership (2 Full)", price: 100 },
+    },
+    addons: {
+      wax: { key: "wax", name: "Full Body Wax", price: 10 },
+      polish: { key: "polish", name: "Hand Polish", price: 22.5 },
+    },
   });
 });
 
-app.get("/", (_req, res) => res.status(200).send("GM Auto Detailing API OK"));
+/* ------------------- Health & root ------------------- */
+app.get("/health", (_req, res) => res.json({ ok: true }));
+app.get("/api", (_req, res) => res.json({ ok: true, name: "GM API", version: 1 }));
 
-/* ✅ Ensure DB schema exists BEFORE serving requests */
-await initStore();
-
-app.listen(PORT, () => console.log(`API listening on :${PORT}`));
+/* ------------------- Start server ------------------- */
+const port = process.env.PORT || 3001;
+app.listen(port, () => {
+  console.log("API listening on", port);
+  if (!process.env.PUBLIC_APP_ORIGIN) {
+    console.warn(
+      "[server] PUBLIC_APP_ORIGIN not set. Set it to your frontend origin, e.g. https://book.gmautodetailing.uk"
+    );
+  }
+});
