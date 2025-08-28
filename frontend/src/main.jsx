@@ -91,13 +91,22 @@ function Details({ state, setState, onNext }) {
   const [form, setForm] = React.useState(state.customer || {});
   const [tap, setTap] = React.useState(state.has_tap ? "yes" : "");
 
+  function validEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim()); }
+  function validUKPhone(p) {
+    const d = String(p || "").replace(/[^\d+]/g, "");
+    if (d.startsWith("+44")) return /^\+44\d{10}$/.test(d);
+    if (d.startsWith("0"))   return /^0\d{10}$/.test(d);
+    return false;
+  }
+
   function go() {
-    if (!String(form.name || "").trim())  return alert("Please enter your name.");
-    if (!validUKPhone(form.phone))        return alert("Please enter a valid UK phone number (0XXXXXXXXXX or +44XXXXXXXXXX).");
-    if (!validEmail(form.email))          return alert("Please enter a valid email address.");
-    if (!String(form.street || "").trim())   return alert("Please enter your street address.");
-    if (!String(form.postcode || "").trim()) return alert("Please enter your postcode.");
-    if (tap !== "yes")                    return alert("To proceed, you must have an outhouse tap.");
+    if (!String(form.name || "").trim())        return alert("Please enter your name.");
+    if (!validUKPhone(form.phone))              return alert("Please enter a valid UK phone number.");
+    if (!validEmail(form.email))                return alert("Please enter a valid email address.");
+    if (!String(form.street || "").trim())      return alert("Please enter your street address.");
+    if (!String(form.postcode || "").trim())    return alert("Please enter your postcode.");
+    if (tap !== "yes")                          return alert("To proceed, you must have an outhouse tap.");
+
     setState((s) => ({ ...s, customer: form, has_tap: true }));
     onNext();
   }
@@ -106,38 +115,85 @@ function Details({ state, setState, onNext }) {
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider">
         <div className="gm h2 center heavy">Welcome to the gmautodetailing.uk booking app.</div>
+
         <div className="gm details-grid">
-          <img src="/logo.png" alt="GM" className="gm logo-big" />
+          {/* Logo column */}
+          <img src="/logo.png" alt="GM Auto Detailing" className="gm logo-big" />
+
+          {/* Form column */}
           <div className="gm details-right">
             <div className="gm row">
-              <input className="gm input" placeholder="Name" value={form.name || ""} onChange={(e)=>setForm({ ...form, name:e.target.value })}/>
-              <input className="gm input" placeholder="Phone (UK)" value={form.phone || ""} onChange={(e)=>setForm({ ...form, phone:e.target.value })}/>
-            </div>
-            <div className="gm row one">
-              <input className="gm input" placeholder="Email" value={form.email || ""} onChange={(e)=>setForm({ ...form, email:e.target.value })}/>
-            </div>
-            <div className="gm row">
-              <input className="gm input" placeholder="Street address" value={form.street || ""} onChange={(e)=>setForm({ ...form, street:e.target.value })}/>
-              <input className="gm input" placeholder="Postcode" value={form.postcode || ""} onChange={(e)=>setForm({ ...form, postcode:e.target.value })}/>
+              <input
+                className="gm input"
+                placeholder="Name"
+                value={form.name || ""}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
+              <input
+                className="gm input"
+                placeholder="Phone (UK)"
+                value={form.phone || ""}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              />
             </div>
 
-            {/* Outhouse tap box */}
-            <div className="gm card" style={{ padding: 14, marginTop: 8 }}>
+            <div className="gm row one">
+              <input
+                className="gm input"
+                placeholder="Email"
+                value={form.email || ""}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+            </div>
+
+            <div className="gm row">
+              <input
+                className="gm input"
+                placeholder="Street address"
+                value={form.street || ""}
+                onChange={(e) => setForm({ ...form, street: e.target.value })}
+              />
+              <input
+                className="gm input"
+                placeholder="Postcode"
+                value={form.postcode || ""}
+                onChange={(e) => setForm({ ...form, postcode: e.target.value })}
+              />
+            </div>
+
+            {/* Outhouse tap box — no extra text, black Yes/No */}
+            <div className="gm card tap-card">
               <div className="gm card-title">Do you have an outhouse tap?</div>
               <div className="tap-choices">
-                <button className={cx("tap-btn", tap==="yes" && "on")} onClick={()=>setTap("yes")}>Yes</button>
-                <button className={cx("tap-btn", tap==="no"  && "on")} onClick={()=>setTap("no")}>No</button>
+                <button
+                  type="button"
+                  className={`tap-btn ${tap === "yes" ? "on" : ""}`}
+                  onClick={() => setTap("yes")}
+                  aria-pressed={tap === "yes"}
+                >
+                  Yes
+                </button>
+                <button
+                  type="button"
+                  className={`tap-btn ${tap === "no" ? "on" : ""}`}
+                  onClick={() => setTap("no")}
+                  aria-pressed={tap === "no"}
+                >
+                  No
+                </button>
               </div>
-              <div className="gm muted">An outside tap is required for water access during detailing.</div>
             </div>
 
-            <div className="gm actions end"><PrimaryButton onClick={go}>Next</PrimaryButton></div>
+            <div className="gm actions end">
+              <button className="gm btn primary" onClick={go}>Next</button>
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
 
 /* ================== SERVICES ================== */
 function Services({ state, setState, onBack, onNext, cfg }) {
