@@ -1,106 +1,117 @@
-/* frontend/src/calendar.css */
+/* ---- Fonts: Raleway Light & Medium ---- */
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;500;600;700&display=swap');
 
-/* Base */
 :root {
   --gm-bg: #f3efe8;          /* your beige page */
   --gm-card: #ffffff;
   --gm-border: #e3e0d7;
   --gm-text: #111;
   --gm-muted: #686868;
-  --gm-primary: #111;        /* buttons text */
   --gm-accent: #222;         /* button bg */
   --gm-green: #23a35a;       /* selected highlight */
   --gm-orange: #e39b24;      /* day selected w/o time */
   --gm-off: #b9b9b9;         /* disabled */
-  --gm-brown: #5b3b1e;       /* calendar date text colour */
+  --gm-brown: #5b3b1e;       /* calendar date text */
 }
 
-html, body { margin:0; padding:0; background: var(--gm-bg); font-family: 'Raleway', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: var(--gm-text); }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--gm-bg);
+  font-family: 'Raleway', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: var(--gm-text);
+  font-weight: 300; /* Light by default */
+}
+
 .gm.wrap { padding: 14px; }
 .gm.panel { background: var(--gm-card); border: 1px solid var(--gm-border); border-radius: 12px; padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
 .gm.panel.wider { max-width: 980px; margin: 0 auto; }
-.gm.h2 { font-weight: 700; font-size: 20px; margin: 6px 0 12px; }
+
+.gm.h2 { font-weight: 500; font-size: 20px; margin: 6px 0 12px; } /* Medium */
 .gm.h2.center { text-align: center; }
-.gm.h2.heavy { font-weight: 800; }
+.gm.h2.heavy { font-weight: 500; } /* keep Medium as requested */
 .gm.muted { color: var(--gm-muted); font-size: 14px; }
 
-/* Details */
 .gm.logo-big { width: 160px; height: auto; object-fit: contain; }
+
+/* Details */
 .gm.details-grid { display: grid; grid-template-columns: 200px 1fr; gap: 16px; align-items: start; }
 .gm.details-right .gm.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
 .gm.details-right .gm.row.one { grid-template-columns: 1fr; }
-.gm.input { width: 100%; padding: 10px 12px; border: 1px solid var(--gm-border); border-radius: 10px; font-size: 15px; }
+.gm.input { width: 100%; padding: 10px 12px; border: 1px solid var(--gm-border); border-radius: 10px; font-size: 15px; font-weight: 300; }
 
+/* Outhouse tap */
 .tap-choices { display: flex; gap: 10px; margin: 8px 0; }
-.tap-btn { border: 1px solid var(--gm-border); background: #fafafa; border-radius: 999px; padding: 8px 14px; cursor: pointer; }
+.tap-btn { border: 1px solid var(--gm-border); background: #fafafa; border-radius: 999px; padding: 8px 14px; cursor: pointer; font-weight: 500; }
 .tap-btn.on { background: #222; color: white; }
 
-/* Services (layout unchanged) */
+/* Services (layout unchanged; just styling & selected state) */
 .gm.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; }
 .gm.card { border: 1px solid var(--gm-border); background: #fff; border-radius: 12px; padding: 12px; cursor: pointer; transition: box-shadow .15s, border-color .15s, background .15s; }
 .gm.card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
-/* ✅ SELECTED SERVICE — GREEN */
-.gm.card.selected {
-  background: #e9f8f0;
-  border-color: var(--gm-green);
+.gm.card.selected { /* ✅ selected service turns green */
+  background: #e9f8f0; border-color: var(--gm-green);
   box-shadow: inset 0 0 0 2px var(--gm-green);
 }
-
-.gm.card-title { font-weight: 600; margin-bottom: 6px; }
+.gm.card-title { font-weight: 500; margin-bottom: 6px; } /* Medium */
 .gm.price-row { display: flex; align-items: baseline; gap: 10px; }
-.gm.price-now { font-weight: 700; font-size: 18px; }
+.gm.price-now { font-weight: 600; font-size: 18px; }   /* Medium+ */
 .gm.price-strike { color: #b00; text-decoration: line-through; opacity: 0.8; }
 
-/* Add-ons */
+/* Add-ons: force two columns (Wax left, Polish right) */
+.gm.addon-benefits.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;   /* side-by-side on desktop */
+  gap: 12px;
+}
 .gm.benefit { border: 1px dashed var(--gm-border); border-radius: 12px; padding: 12px; background: #fff; transition: box-shadow .15s, border-color .15s, background .15s; }
 .gm.benefit:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
-/* ✅ SELECTED ADD-ON — GREEN */
-.gm.benefit.on {
-  border-style: solid;
-  background: #e9f8f0;
-  border-color: var(--gm-green);
-  box-shadow: inset 0 0 0 2px var(--gm-green);
+.gm.benefit.on { /* ✅ selected add-on turns green */
+  border-style: solid; background: #e9f8f0; border-color: var(--gm-green); box-shadow: inset 0 0 0 2px var(--gm-green);
 }
-.benefit-title { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
-.benefit-copy { font-size: 14px; color: var(--gm-muted); margin-bottom: 8px; }
-.benefit-actions { }
+.benefit-title { display: flex; justify-content: space-between; font-weight: 500; margin-bottom: 4px; } /* Medium */
+.benefit-copy { font-size: 14px; color: var(--gm-muted); margin-bottom: 8px; font-weight: 300; }
 .benefit-actions.right { text-align: right; }
 
-/* Buttons / actions */
 .gm.actions { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
 .gm.actions.end { grid-template-columns: 1fr auto; }
 .gm.actions.space { grid-template-columns: auto 1fr auto; }
 .bottom-stick { margin-top: 14px; }
 
-.gm.btn { border: 1px solid var(--gm-border); background: #fff; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 600; }
+/* Buttons */
+.gm.btn { border: 1px solid var(--gm-border); background: #fff; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-weight: 500; } /* Medium */
 .gm.btn.nav { padding: 8px 12px; }
 .gm.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .gm.btn.primary { background: var(--gm-accent); color: #fff; border-color: var(--gm-accent); }
 
 /* Confirm */
 .gm.twocol { display: grid; grid-template-columns: 1fr 320px; gap: 12px; }
-.gm.total { font-size: 22px; font-weight: 800; }
+.gm.total { font-size: 22px; font-weight: 600; }
 
-/* Calendar layout */
-.gm.monthbar-grid { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-bottom: 8px; }
-.gm.monthtitle { text-align: center; font-weight: 700; font-size: 18px; }
-.gm.counter { justify-self: end; padding: 4px 10px; border-radius: 999px; font-weight: 700; }
+/* Calendar header: Previous (left), Title (center), Next (right) */
+.gm.monthbar-grid { display: grid; grid-template-columns: auto 1fr auto; align-items: center; margin-bottom: 8px; }
+.gm.monthnav-left { justify-self: start; }
+.gm.monthtitle { text-align: center; font-weight: 500; font-size: 18px; } /* centered regardless of word length */
+.gm.monthnav-right { justify-self: end; display: flex; align-items: center; gap: 8px; } /* ✅ "Next" sticks to far right */
+.gm.counter { padding: 4px 10px; border-radius: 999px; font-weight: 600; }
 .gm.counter.warn { background: #fff3cd; color: #7a5900; border: 1px solid #ffe08a; }
 .gm.counter.ok { background: #e7f7ee; color: #0b6b37; border: 1px solid #bde8cd; }
 
+/* Weekday row */
 .gm.dowgrid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; margin-bottom: 6px; }
-.gm.dow { text-align: center; font-weight: 600; font-size: 12px; color: var(--gm-muted); }
+.gm.dow { text-align: center; font-weight: 500; font-size: 12px; color: var(--gm-muted); }
 
+/* Calendar grid */
 .gm.monthgrid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; }
 .gm.dayblank { height: 44px; }
 .gm.daywrap { }
 .gm.daycell {
   width: 100%; height: 44px;
   border-radius: 10px; border: 1px solid var(--gm-border);
-  background: #fff; color: var(--gm-brown); font-weight: 700; transition: background .15s, box-shadow .15s, border-color .15s;
+  background: #fff; color: var(--gm-brown); font-weight: 600;
+  transition: background .15s, box-shadow .15s, border-color .15s;
 }
 .gm.daycell.has { border-color: #c7bea8; }
-.gm.daycell.off { background: #eee; color: #9a9a9a; opacity: 0.6; filter: grayscale(0.3); }
+.gm.daycell.off { background: #eee; color: #9a9a9a; opacity: 0.7; filter: grayscale(0.3); }
 .gm.daycell.selected-green { background: #e9f8f0; border-color: var(--gm-green); color: #0b6b37; box-shadow: inset 0 0 0 2px var(--gm-green); }
 .gm.daycell.selected-orange { background: #fff6e8; border-color: var(--gm-orange); color: #7a4a00; box-shadow: inset 0 0 0 2px var(--gm-orange); }
 
@@ -122,10 +133,12 @@ html, body { margin:0; padding:0; background: var(--gm-bg); font-family: 'Ralewa
 /* Alerts */
 .gm.alert { background: #fff7e6; border: 1px solid #ffe1b0; color: #7a4a00; padding: 10px 12px; border-radius: 10px; margin: 8px 0; }
 
-/* Responsive tweaks */
+/* Responsive */
 @media (max-width: 740px) {
   .gm.panel.wider { margin: 0 6px; }
   .gm.details-grid { grid-template-columns: 1fr; }
   .gm.logo-big { width: 140px; }
   .gm.twocol { grid-template-columns: 1fr; }
+  /* On small screens, addons can stack vertically */
+  .gm.addon-benefits.two-col { grid-template-columns: 1fr; }
 }
