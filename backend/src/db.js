@@ -24,7 +24,7 @@ async function isNotNull(table, column) {
   return r.rows[0]?.is_nullable === "NO";
 }
 
-/* ---------- ensure base table ---------- */
+/* ---------- bootstrap schema ---------- */
 async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.bookings (
@@ -32,10 +32,10 @@ async function ensureTable() {
       stripe_session_id TEXT,
       service_key TEXT,
       addons TEXT[] DEFAULT '{}',
-      /* legacy strings kept for back-compat */
+      -- legacy string fields (kept for back-compat)
       start_iso TEXT,
       end_iso   TEXT,
-      /* canonical timestamptz */
+      -- canonical timestamptz fields used by availability
       start_time TIMESTAMPTZ,
       end_time   TIMESTAMPTZ,
       customer_name TEXT,
@@ -49,9 +49,8 @@ async function ensureTable() {
   `);
 }
 
-/* ---------- ensure columns & sane constraints ---------- */
-async function ensureColumns() {
-  const needCols = [
+async function ensureColumnsAndConstraints() {
+  const need = [
     ["stripe_session_id", "TEXT", ""],
     ["service_key", "TEXT", ""],
     ["addons", "TEXT[]", "DEFAULT '{}'::text[]"],
@@ -66,13 +65,13 @@ async function ensureColumns() {
     ["customer_postcode", "TEXT", ""],
     ["has_tap", "BOOLEAN", "DEFAULT false"],
   ];
-  for (const [col, type, extra] of needCols) {
+  for (const [col, type, extra] of need) {
     if (!(await columnExists("bookings", col))) {
       await pool.query(`ALTER TABLE public.bookings ADD COLUMN ${col} ${type} ${extra};`);
     }
   }
 
-  // Drop NOT NULL on legacy text columns if any old schema enforced it
+  // Make sure legacy text fields are nullable (some old schemas set NOT NULL)
   if (await isNotNull("bookings", "start_iso")) {
     await pool.query(`ALTER TABLE public.bookings ALTER COLUMN start_iso DROP NOT NULL;`);
   }
@@ -80,7 +79,7 @@ async function ensureColumns() {
     await pool.query(`ALTER TABLE public.bookings ALTER COLUMN end_iso DROP NOT NULL;`);
   }
 
-  // One-time backfill canonical timestamptz from legacy strings
+  // One-time backfill canonical timestamptz from legacy strings where missing
   await pool
     .query(`UPDATE public.bookings
             SET start_time = COALESCE(start_time, NULLIF(start_iso,'')::timestamptz),
@@ -89,7 +88,6 @@ async function ensureColumns() {
     .catch(() => {});
 }
 
-/* ---------- indexes ---------- */
 async function ensureIndexes() {
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx
                     ON public.bookings (start_time, end_time);`);
@@ -109,23 +107,27 @@ export async function initDB() {
     return;
   }
   await ensureTable();
-  await ensureColumns();
+  await ensureColumnsAndConstraints();
   await ensureIndexes();
   console.log("[db] schema ensured");
 }
 
+/* ---------- writes & reads ---------- */
 /**
- * Saves a booking. Writes BOTH legacy (start_iso/end_iso) and canonical (start_time/end_time)
- * in a single INSERT, so legacy constraints can never block.
- * Returns inserted id.
+ * Save a booking row.
+ * We bind each param ONCE with a single type:
+ *   - start_iso/end_iso: plain strings
+ *   - start_time/end_time: the same ISO strings; PG will cast text -> timestamptz
  */
 export async function saveBooking(b) {
   if (!pool) {
     console.warn("[db] saveBooking skipped: no pool (DATABASE_URL missing)");
     return null;
   }
-  const startISO = b.start_iso || null;
-  const endISO   = b.end_iso   || null;
+
+  // Prefer ISO strings; if caller provided explicit timestamptz, fall back to those.
+  const startISO = b.start_iso || b.start_time || null;
+  const endISO   = b.end_iso   || b.end_time   || null;
 
   const sql = `
     INSERT INTO public.bookings
@@ -136,8 +138,7 @@ export async function saveBooking(b) {
     VALUES
       ($1,$2,$3,
        $4,$5,
-       COALESCE(NULLIF($4,'')::timestamptz, $6),
-       COALESCE(NULLIF($5,'')::timestamptz, $7),
+       $6,$7,
        $8,$9,$10,$11,$12,$13)
     RETURNING id
   `;
@@ -145,10 +146,10 @@ export async function saveBooking(b) {
     b.stripe_session_id || null,
     b.service_key || null,
     b.addons || [],
-    startISO,
-    endISO,
-    b.start_time || null,
-    b.end_time || null,
+    startISO,                  // $4 -> start_iso (TEXT)
+    endISO,                    // $5 -> end_iso (TEXT)
+    startISO,                  // $6 -> start_time (TIMESTAMPTZ via implicit cast)
+    endISO,                    // $7 -> end_time   (TIMESTAMPTZ via implicit cast)
     b.customer?.name || null,
     (b.customer?.email || null),
     (b.customer?.phone || null),
@@ -159,11 +160,11 @@ export async function saveBooking(b) {
 
   const res = await pool.query(sql, params);
   const id = res.rows[0]?.id || null;
-  console.log(`[saveBooking] inserted id=${id} service=${b.service_key} start=${startISO || b.start_time} end=${endISO || b.end_time}`);
+  console.log(`[saveBooking] inserted id=${id} service=${b.service_key} start=${startISO} end=${endISO}`);
   return id;
 }
 
-/** returns bookings overlapping [startISO, endISO) (uses canonical timestamptz) */
+/** availability masking: get rows overlapping [startISO, endISO) using canonical timestamptz */
 export async function getBookingsBetween(startISO, endISO) {
   if (!pool) return [];
   const q = `
@@ -176,7 +177,7 @@ export async function getBookingsBetween(startISO, endISO) {
   return r.rows || [];
 }
 
-/** (email OR phone OR street) seen before */
+/** first-time: seen by email OR phone OR street */
 export async function hasExistingCustomer({ email, phone, street }) {
   if (!pool) return false;
   try {
@@ -203,14 +204,13 @@ export async function hasExistingCustomer({ email, phone, street }) {
   }
 }
 
-/* ---------- (optional) small admin helper ---------- */
+/* (optional) for admin endpoint */
 export async function listRecentBookings(limit = 10) {
   if (!pool) return [];
   const r = await pool.query(
     `SELECT id, service_key, start_time, end_time, customer_name, customer_email, created_at
      FROM public.bookings
-     ORDER BY id DESC
-     LIMIT $1`,
+     ORDER BY id DESC LIMIT $1`,
     [Math.max(1, Math.min(100, Number(limit) || 10))]
   );
   return r.rows || [];
