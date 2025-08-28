@@ -142,3 +142,64 @@ html, body {
   /* On small screens, addons can stack vertically */
   .gm.addon-benefits.two-col { grid-template-columns: 1fr; }
 }
+/* (keep your existing @import for Raleway if present) */
+
+/* Ensure the white panel contains everything */
+.gm.panel { overflow: hidden; }
+
+/* Details layout */
+.gm.details-grid {
+  display: grid;
+  grid-template-columns: 200px 1fr;   /* desktop: logo left, form right */
+  gap: 16px;
+  align-items: start;
+}
+.gm.logo-big { width: 160px; height: auto; object-fit: contain; }
+
+/* Keep inputs inside panel, no overflow */
+.gm.details-right { width: 100%; }
+.gm.details-right .gm.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.gm.details-right .gm.row.one { grid-template-columns: 1fr; }
+
+/* Inputs sized correctly */
+.gm.input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gm-border);
+  border-radius: 10px;
+  font-size: 15px;
+  box-sizing: border-box;   /* ← prevents spilling out of the card */
+}
+
+/* Tap box */
+.tap-card { padding: 14px; }
+.tap-choices { display: flex; gap: 10px; margin-top: 6px; justify-content: center; }
+.tap-btn {
+  border: 1px solid #000;
+  background: #fff;
+  color: #000;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-weight: 600;       /* Raleway Medium feel */
+  cursor: pointer;
+}
+.tap-btn.on {
+  background: #000;
+  color: #fff;
+  border-color: #000;
+}
+
+/* --- Mobile fixes --- */
+@media (max-width: 740px) {
+  /* Stack logo above the form and center it */
+  .gm.details-grid { grid-template-columns: 1fr; }
+  .gm.logo-big { display: block; margin: 0 auto 8px; width: 160px; }
+
+  /* Form rows go single-column on phones (prevents overflow) */
+  .gm.details-right .gm.row { grid-template-columns: 1fr; }
+}
