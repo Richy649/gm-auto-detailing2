@@ -12,6 +12,7 @@
   --radius:14px;
   --radius-sm:10px;
   --shadow:0 8px 26px rgba(0,0,0,.06);
+  --green:#34d399;         /* Selected day highlight */
 }
 
 *{ box-sizing:border-box; }
@@ -36,12 +37,12 @@ html,body{
 .gm.details-grid{
   display:grid; grid-template-columns:160px 1fr; gap:16px; align-items:start;
 }
-.gm.logo-big{ width:100%; max-height:120px; height:auto; object-fit:contain; } /* the only logo */
+.gm.logo-big{ width:100%; max-height:120px; height:auto; object-fit:contain; }
 .gm.details-right{ width:100%; }
-.gm.hero-note{ font-size:15px; line-height:1.6; font-weight:600; margin:0 0 10px; }
 .gm.row{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
 .gm.row.one{ grid-template-columns:1fr; }
 .gm.input{ width:100%; padding:12px 13px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--ink); }
+.gm.checklabel{ display:flex; align-items:center; gap:8px; font-weight:700; margin:6px 0 2px; }
 
 /* Buttons */
 .gm.btn{
@@ -54,6 +55,12 @@ html,body{
 .gm.actions{ display:flex; justify-content:space-between; align-items:center; }
 .gm.actions.end{ justify-content:flex-end; gap:8px; }
 .gm.actions.space{ justify-content:space-between; }
+
+/* Price display (red strike then now) */
+.gm.price-row{ display:flex; align-items:baseline; gap:10px; margin:2px 0 6px; }
+.gm.price-row.big{ gap:14px; }
+.gm.price-strike{ color:#dc2626; text-decoration:line-through; font-weight:800; opacity:.9; }
+.gm.price-now{ font-weight:900; color:#111; }
 
 /* Service cards */
 .gm.h2{ font-weight:900; font-size:22px; margin:2px 0 12px; }
@@ -75,7 +82,7 @@ html,body{
 .benefit-actions.left{ justify-content:flex-start; }
 .benefit-actions.right{ justify-content:flex-end; }
 
-/* Sticky footer on Services — and padding so nothing gets cut off */
+/* Sticky footer on Services — padding so nothing gets cut off */
 .bottom-stick{ position:sticky; bottom:0; background:var(--panel); padding-top:8px; }
 .gm.panel.wider { padding-bottom: 96px; }
 @media (max-width: 720px){
@@ -109,7 +116,8 @@ html,body{
   color:var(--date-ink);
 }
 .gm.daycell.has{ background:#f8fafc; }
-.gm.daycell.selected{ outline:3px solid #fde68a; background:#fffbeb; }
+/* GREEN selected day */
+.gm.daycell.selected{ outline:3px solid var(--green); background:#ecfdf5; }
 
 /* Strong grey for unbookable days */
 .gm.daycell:disabled,
