@@ -1,5 +1,6 @@
+// backend/src/routes.js
 import { Router } from "express";
-import { hasExistingCustomer } from "./db.js";
+import { getBookingsBetween, hasExistingCustomer } from "./db.js";
 
 const router = Router();
 
@@ -19,7 +20,7 @@ router.get("/config", (_req, res) => {
   });
 });
 
-/* ---------- Availability (rolling 1 month forward) ---------- */
+/* ---------- Availability (rolling 30 days; 24h cutoff; DB-backed) ---------- */
 const TZ = "Europe/London";
 const SERVICE_DURATION = { exterior:75, full:120, standard_membership:75, premium_membership:120 };
 const BUFFER_MIN = 30;
@@ -78,12 +79,22 @@ function slotsForDay(dayKey, serviceKey){
   });
 }
 
-router.get("/availability", (req, res) => {
+function overlaps(aStartISO, aEndISO, bStartISO, bEndISO){
+  const aS = new Date(aStartISO).getTime();
+  const aE = new Date(aEndISO).getTime();
+  const bS = new Date(bStartISO).getTime();
+  const bE = new Date(bEndISO).getTime();
+  return aS < bE && aE > bS;
+}
+
+router.get("/availability", async (req, res) => {
   try {
     const service_key = String(req.query.service_key || "exterior").trim();
     const monthParam  = String(req.query.month || "").trim();
 
-    const todayKey = toKey(new Date());
+    const now = new Date();
+    const minStart = new Date(now.getTime() + 24*60*60*1000); // 24h cutoff
+    const todayKey = toKey(minStart); // no “today”; earliest is tomorrow (or later if within 24h today)
     const plus1 = new Date(); plus1.setMonth(plus1.getMonth()+1);
     const latestKey = toKey(plus1);
 
@@ -91,15 +102,35 @@ router.get("/availability", (req, res) => {
       ? monthParam
       : monthOfKey(todayKey);
 
+    // Preload all bookings in the visible month window
     const [y,m] = month.split("-").map(Number);
-    const last = new Date(Date.UTC(y, m, 0, 12));
+    const monthStart = new Date(Date.UTC(y, m-1, 1, 0, 0, 0)).toISOString();
+    const monthEnd   = new Date(Date.UTC(y, m,   1, 0, 0, 0)).toISOString();
+    const bookings = await getBookingsBetween(monthStart, monthEnd);
+
     const days = {};
+    const last = new Date(Date.UTC(y, m, 0, 12));
     for (let d=1; d<=last.getUTCDate(); d++){
       const key = `${y}-${pad(m)}-${pad(d)}`;
       if (key < todayKey || key > latestKey) continue;
-      const slots = slotsForDay(key, service_key);
-      if (slots.length) days[key] = slots;
+
+      const allSlots = slotsForDay(key, service_key);
+
+      // drop slots that start before minStart (24h rule)
+      const afterCutoff = allSlots.filter(s => new Date(s.start_iso).getTime() >= minStart.getTime());
+      if (!afterCutoff.length) continue;
+
+      // drop slots overlapping any booking (regardless of service type)
+      const daySlots = afterCutoff.filter(slot => {
+        for (const b of bookings) {
+          if (overlaps(slot.start_iso, slot.end_iso, b.start_time, b.end_time)) return false;
+        }
+        return true;
+      });
+
+      if (daySlots.length) days[key] = daySlots;
     }
+
     return res.json({ month, earliest_key: todayKey, latest_key: latestKey, days });
   } catch (err) {
     console.error("[/api/availability] error", err);
