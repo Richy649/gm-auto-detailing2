@@ -23,7 +23,10 @@ const toDateKey = (d) => {
 };
 const fromKey = (key) => { const [y, m, d] = key.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)); };
 const monthOfKey = (key) => key.slice(0, 7);
-const monthLabel = (yyyyMM) => new Date(fromKey(`${yyyyMM}-01`)).toLocaleString("en-GB", { timeZone: TZ, month: "long", year: "numeric" });
+const monthLabel = (yyyyMM) => {
+  const d = fromKey(`${yyyyMM}-01`);
+  return d.toLocaleString("en-GB", { timeZone: TZ, month: "long", year: "numeric" });
+};
 const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const addMonthsYYYYMM = (yyyyMM, delta) => {
   const [y, m] = yyyyMM.split("-").map(Number);
@@ -104,7 +107,7 @@ function Details({ state, setState, onNext }) {
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider">
-        <div className="gm h2 center">Welcome to the gmautodetailing.uk booking app.</div>
+        <div className="gm h2 center heavy">Welcome to the gmautodetailing.uk booking app.</div>
         <div className="gm details-grid">
           <img src="/logo.png" alt="GM" className="gm logo-big" />
           <div className="gm details-right">
@@ -235,6 +238,8 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
   const daysMap = state.availability?.days || {};
   const selectedDayKey = state.selectedDayKey;
 
+  const [loadErr, setLoadErr] = React.useState(null);
+
   const dayKeys = React.useMemo(() => {
     const [y, m] = monthKey.split("-").map(Number);
     const first = new Date(Date.UTC(y, m - 1, 1, 12));
@@ -247,34 +252,37 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
     return keys;
   }, [monthKey]);
 
-  function cacheKey(svc, m) { return `${svc}|${m}`; }
-
   function applyAvailability(payload){
+    setLoadErr(null);
     setState((s)=> ({ ...s, availability: payload, monthKey: payload.month }));
     setTimeout(reportHeight, 60);
   }
 
   function fetchMonth(yyyyMM, preferCache=true){
-    const key = cacheKey(state.service_key, yyyyMM);
+    const key = `${state.service_key}|${yyyyMM}`;
     if (preferCache && AvCache.has(key)) {
       applyAvailability(AvCache.get(key));
       // refresh in background
       fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${yyyyMM}`)
         .then(r=>r.json()).then(d=> { AvCache.set(key, d); if (d.month===state.monthKey) applyAvailability(d); })
-        .catch(()=>{});
+        .catch((e)=>{ console.warn("[availability refresh] failed", e); });
       return;
     }
-    applyAvailability({ month: yyyyMM, earliest_key: todayKey, latest_key: limitKey, days: {} }); // instant skeleton
+    // instant skeleton
+    applyAvailability({ month: yyyyMM, earliest_key: todayKey, latest_key: limitKey, days: {} });
     fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${yyyyMM}`)
-      .then(r=>r.json())
+      .then(r=>{
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then(d=> { AvCache.set(key, d); applyAvailability(d); })
-      .catch(()=>{ /* leave skeleton */ });
+      .catch((e)=>{ console.error("[availability] load failed", e); setLoadErr("We’re having trouble loading availability."); });
   }
 
   function prefetchNext(){
     if (!canNext) return;
     const next = addMonthsYYYYMM(monthKey, +1);
-    const key = cacheKey(state.service_key, next);
+    const key = `${state.service_key}|${next}`;
     if (!AvCache.has(key)) {
       fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${next}`)
         .then(r=>r.json()).then(d=> AvCache.set(key, d)).catch(()=>{});
@@ -282,7 +290,7 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
   }
 
   React.useEffect(() => {
-    const key = cacheKey(state.service_key, monthKey);
+    if (!state.service_key) return;
     if (state.availability?.month !== monthKey) fetchMonth(monthKey, true);
     else setTimeout(reportHeight, 10);
     prefetchNext();
@@ -315,6 +323,13 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
             <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && fetchMonth(addMonthsYYYYMM(monthKey, +1))}>Next</Button>
           </div>
         </div>
+
+        {loadErr && (
+          <div className="gm alert">
+            {loadErr}
+            <Button className="gm btn" onClick={()=> fetchMonth(monthKey, false)} style={{ marginLeft: 8 }}>Retry</Button>
+          </div>
+        )}
 
         <div className="gm dowgrid">{weekdayNames.map((w)=> <div key={w} className="gm dow">{w}</div>)}</div>
 
@@ -531,16 +546,8 @@ function App(){
 
   React.useEffect(()=>{
     if (!state.service_key) return;
-    const k = `${state.service_key}|${state.monthKey}`;
-    if (AvCache.has(k)) {
-      setState(s=> ({ ...s, availability: AvCache.get(k) }));
-      setTimeout(reportHeight, 60);
-    } else {
-      setState(s=> ({ ...s, availability: { month: state.monthKey, earliest_key: toDateKey(new Date()), latest_key: toDateKey(new Date(new Date().setMonth(new Date().getMonth()+1))), days:{} } }));
-    }
-    fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${state.monthKey}`)
-      .then(r=>r.json()).then(d=> { AvCache.set(k,d); setState(s=> ({...s, availability:d })); })
-      .finally(()=> setTimeout(reportHeight,60));
+    // show skeleton quickly; Calendar will replace with cached/real
+    setState(s=> ({ ...s, availability: { month: state.monthKey, earliest_key: toDateKey(new Date()), latest_key: toDateKey(new Date(new Date().setMonth(new Date().getMonth()+1))), days:{} } }));
   },[state.service_key, state.monthKey]);
 
   const goto=(step)=> { setState(s=> ({...s, step})); setTimeout(reportHeight,60); };
