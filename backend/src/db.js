@@ -1,3 +1,4 @@
+// backend/src/db.js
 import pkg from "pg";
 const { Pool } = pkg;
 
@@ -49,6 +50,8 @@ async function ensureIndexes() {
                     ON public.bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_street_norm_idx
                     ON public.bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx
+                    ON public.bookings (start_time, end_time);`);
 }
 
 export async function initDB() {
@@ -87,13 +90,22 @@ export async function saveBooking(b) {
   return res.rows[0]?.id || null;
 }
 
+/** Fetch all bookings overlapping a [start,end) window (ISO strings) */
+export async function getBookingsBetween(startISO, endISO) {
+  if (!pool) return [];
+  const q = `
+    SELECT id, service_key, start_time, end_time
+    FROM public.bookings
+    WHERE NOT (end_time <= $1 OR start_time >= $2)
+  `;
+  const r = await pool.query(q, [startISO, endISO]);
+  return r.rows || [];
+}
+
 /** true if (email OR phone OR street) has appeared in any prior booking */
 export async function hasExistingCustomer({ email, phone, street }) {
   if (!pool) return false;
   try {
-    // make sure columns exist before querying
-    await ensureColumns();
-
     const e = (email || "").toLowerCase().trim();
     const p = String(phone || "");
     const s = (street || "").toLowerCase().trim();
