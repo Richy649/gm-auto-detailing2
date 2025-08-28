@@ -1,26 +1,25 @@
-// backend/src/routes.js
 import { Router } from "express";
 import { getBookingsBetween, hasExistingCustomer } from "./db.js";
 
 const router = Router();
 
-/* ---------- Config (names / prices) ---------- */
+/* ---------- Public config ---------- */
 router.get("/config", (_req, res) => {
   res.json({
     services: {
       exterior: { name: "Exterior Detail", price: 40 },
       full: { name: "Full Detail", price: 60 },
       standard_membership: { name: "Standard Membership (2 Exterior)", price: 70 },
-      premium_membership: { name: "Premium Membership (2 Full)", price: 100 }
+      premium_membership: { name: "Premium Membership (2 Full)", price: 100 },
     },
     addons: {
       wax: { name: "Full Body Wax", price: 10 },
-      polish: { name: "Hand Polish", price: 22.5 }
-    }
+      polish: { name: "Hand Polish", price: 22.5 },
+    },
   });
 });
 
-/* ---------- Availability (rolling 30 days; 24h cutoff; DB-backed) ---------- */
+/* ---------- Availability (returns ALL slots; each has available:true|false) ---------- */
 const TZ = "Europe/London";
 const SERVICE_DURATION = { exterior:75, full:120, standard_membership:75, premium_membership:120 };
 const BUFFER_MIN = 30;
@@ -39,7 +38,7 @@ const hm = (str)=> { const [h,m]=str.split(":").map(Number); return h*60+(m||0);
 function londonOffsetMinutes(dayKey){
   const dt = fromKeyNoonUTC(dayKey);
   const hour = Number(dt.toLocaleString("en-GB",{ timeZone:TZ, hour:"2-digit", hour12:false }));
-  return (hour - 12) * 60; // relative to UTC noon anchor
+  return (hour - 12) * 60;
 }
 function londonLocalToUTCISO(dayKey, hh, mm){
   const [y,m,d] = dayKey.split("-").map(Number);
@@ -50,6 +49,7 @@ function londonLocalToUTCISO(dayKey, hh, mm){
   return new Date(base + utcMin*60*1000).toISOString();
 }
 function isWeekend(dayKey){ const dow = fromKeyNoonUTC(dayKey).getUTCDay(); return dow===0 || dow===6; }
+function overlaps(aS, aE, bS, bE){ return new Date(aS) < new Date(bE) && new Date(aE) > new Date(bS); }
 
 function generateStarts(dayKey, durationMin){
   const wknd = isWeekend(dayKey);
@@ -60,9 +60,7 @@ function generateStarts(dayKey, durationMin){
   const res=[]; let t=startMin;
   while (t + durationMin <= hardEnd){
     res.push(t);
-    const next = t + durationMin + BUFFER_MIN;
-    if (next <= t) break;
-    t = next;
+    t = t + durationMin + BUFFER_MIN;
   }
   return res.filter(s => s + durationMin <= hardEnd);
 }
@@ -79,59 +77,48 @@ function slotsForDay(dayKey, serviceKey){
   });
 }
 
-function overlaps(aStartISO, aEndISO, bStartISO, bEndISO){
-  const aS = new Date(aStartISO).getTime();
-  const aE = new Date(aEndISO).getTime();
-  const bS = new Date(bStartISO).getTime();
-  const bE = new Date(bEndISO).getTime();
-  return aS < bE && aE > bS;
-}
-
 router.get("/availability", async (req, res) => {
   try {
     const service_key = String(req.query.service_key || "exterior").trim();
     const monthParam  = String(req.query.month || "").trim();
 
+    // 24h cutoff: earliest selectable is now + 24h (tomorrow in practice)
     const now = new Date();
-    const minStart = new Date(now.getTime() + 24*60*60*1000); // 24h cutoff
-    const todayKey = toKey(minStart); // no “today”; earliest is tomorrow (or later if within 24h today)
+    const minStart = new Date(now.getTime() + 24*60*60*1000);
+    const earliestKey = toKey(minStart);
+
+    // Latest day = now + 1 month (inclusive by key compare)
     const plus1 = new Date(); plus1.setMonth(plus1.getMonth()+1);
     const latestKey = toKey(plus1);
 
-    const month = /^\d{4}-\d{2}$/.test(monthParam)
-      ? monthParam
-      : monthOfKey(todayKey);
-
-    // Preload all bookings in the visible month window
+    const month = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : monthOfKey(earliestKey);
     const [y,m] = month.split("-").map(Number);
-    const monthStart = new Date(Date.UTC(y, m-1, 1, 0, 0, 0)).toISOString();
-    const monthEnd   = new Date(Date.UTC(y, m,   1, 0, 0, 0)).toISOString();
-    const bookings = await getBookingsBetween(monthStart, monthEnd);
+
+    // Preload bookings overlapping the visible month window
+    const monthStartISO = new Date(Date.UTC(y, m-1, 1, 0, 0, 0)).toISOString();
+    const monthEndISO   = new Date(Date.UTC(y, m,   1, 0, 0, 0)).toISOString();
+    const bookings = await getBookingsBetween(monthStartISO, monthEndISO);
 
     const days = {};
     const last = new Date(Date.UTC(y, m, 0, 12));
     for (let d=1; d<=last.getUTCDate(); d++){
       const key = `${y}-${pad(m)}-${pad(d)}`;
-      if (key < todayKey || key > latestKey) continue;
+      if (key < earliestKey || key > latestKey) continue;
 
       const allSlots = slotsForDay(key, service_key);
 
-      // drop slots that start before minStart (24h rule)
-      const afterCutoff = allSlots.filter(s => new Date(s.start_iso).getTime() >= minStart.getTime());
-      if (!afterCutoff.length) continue;
+      // For UI: mark each slot available/taken; still exclude anything before minStart
+      const slots = allSlots
+        .filter(s => new Date(s.start_iso) >= minStart)
+        .map(s => {
+          const taken = bookings.some(b => overlaps(s.start_iso, s.end_iso, b.start_time, b.end_time));
+          return { ...s, available: !taken };
+        });
 
-      // drop slots overlapping any booking (regardless of service type)
-      const daySlots = afterCutoff.filter(slot => {
-        for (const b of bookings) {
-          if (overlaps(slot.start_iso, slot.end_iso, b.start_time, b.end_time)) return false;
-        }
-        return true;
-      });
-
-      if (daySlots.length) days[key] = daySlots;
+      if (slots.length) days[key] = slots;
     }
 
-    return res.json({ month, earliest_key: todayKey, latest_key: latestKey, days });
+    return res.json({ month, earliest_key: earliestKey, latest_key: latestKey, days });
   } catch (err) {
     console.error("[/api/availability] error", err);
     return res.status(500).json({ error: "availability_failed" });
@@ -145,7 +132,6 @@ router.get("/first-time", async (req, res) => {
     const phone  = String(req.query.phone  || "").trim();
     const street = String(req.query.street || "").trim().toLowerCase();
     if (!email && !phone && !street) return res.json({ first_time: true });
-
     const seen = await hasExistingCustomer({ email, phone, street });
     return res.json({ first_time: !seen });
   } catch (e) {
