@@ -7,15 +7,15 @@ export const pool = process.env.DATABASE_URL
   : null;
 
 async function ensureTable() {
-  // Creates table if missing (does NOT alter existing tables)
+  // Fresh schema for new installs (does not alter existing tables)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.bookings (
       id SERIAL PRIMARY KEY,
       stripe_session_id TEXT,
-      service_key TEXT NOT NULL,
+      service_key TEXT,
       addons TEXT[] DEFAULT '{}',
-      start_time TIMESTAMPTZ NOT NULL,
-      end_time   TIMESTAMPTZ NOT NULL,
+      start_time TIMESTAMPTZ,
+      end_time   TIMESTAMPTZ,
       customer_name TEXT,
       customer_email TEXT,
       customer_phone TEXT,
@@ -43,8 +43,13 @@ async function addColIfMissing(column, type, extra = "") {
 }
 
 async function ensureColumns() {
-  // Covers legacy tables missing these columns
+  // Legacy DBs may be missing any of these:
   await addColIfMissing("stripe_session_id", "TEXT");
+  await addColIfMissing("service_key", "TEXT");
+  await addColIfMissing("addons", "TEXT[]", "DEFAULT '{}'");
+  await addColIfMissing("start_time", "TIMESTAMPTZ");
+  await addColIfMissing("end_time", "TIMESTAMPTZ");
+  await addColIfMissing("customer_name", "TEXT");
   await addColIfMissing("customer_email", "TEXT");
   await addColIfMissing("customer_phone", "TEXT");
   await addColIfMissing("customer_street", "TEXT");
@@ -53,15 +58,29 @@ async function ensureColumns() {
 }
 
 async function ensureIndexes() {
-  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx
-                    ON public.bookings (start_time, end_time);`);
+  // Only create an index if the referenced columns actually exist
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='bookings' AND column_name='start_time'
+      ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='bookings' AND column_name='end_time'
+      ) THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS bookings_time_idx ON public.bookings (start_time, end_time)';
+      END IF;
+    END
+    $$;
+  `);
+
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_email_idx
                     ON public.bookings (lower(customer_email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_phone_digits_idx
                     ON public.bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_street_norm_idx
                     ON public.bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
-  // Optional: uniqueness helps dedupe webhook retries
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_session_idx
                     ON public.bookings (stripe_session_id);`);
 }
@@ -87,10 +106,10 @@ export async function saveBooking(b) {
      RETURNING id`,
     [
       b.stripe_session_id || null,
-      b.service_key,
+      b.service_key || null,
       b.addons || [],
-      b.start_iso,
-      b.end_iso,
+      b.start_iso || null,
+      b.end_iso || null,
       b.customer?.name || null,
       (b.customer?.email || null),
       (b.customer?.phone || null),
@@ -102,7 +121,6 @@ export async function saveBooking(b) {
   return res.rows[0]?.id || null;
 }
 
-/** Overlap query for availability masking */
 export async function getBookingsBetween(startISO, endISO) {
   if (!pool) return [];
   const q = `
@@ -114,7 +132,6 @@ export async function getBookingsBetween(startISO, endISO) {
   return r.rows || [];
 }
 
-/** First-time client check: email OR phone OR street seen before */
 export async function hasExistingCustomer({ email, phone, street }) {
   if (!pool) return false;
   try {
