@@ -1,20 +1,17 @@
 {
-  "name": "gm-auto-detailing-api",
+  "name": "gm-booking-backend",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
-  "main": "src/server.js",
+  "engines": { "node": ">=20.0.0" },
   "scripts": {
     "start": "node src/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "luxon": "^3.5.0",
-    "morgan": "^1.10.0",
-    "pg": "^8.11.5",
-    "stripe": "^14.0.0"
+    "stripe": "^14.0.0",
     "googleapis": "^141.0.0",
-"pg": "^8.12.0"
+    "pg": "^8.12.0"
   }
 }
-
