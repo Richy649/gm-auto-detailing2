@@ -23,10 +23,7 @@ const toDateKey = (d) => {
 };
 const fromKey = (key) => { const [y, m, d] = key.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d, 12, 0, 0)); };
 const monthOfKey = (key) => key.slice(0, 7);
-const monthLabel = (yyyyMM) => {
-  const d = fromKey(`${yyyyMM}-01`);
-  return d.toLocaleString("en-GB", { timeZone: TZ, month: "long", year: "numeric" });
-};
+const monthLabel = (yyyyMM) => new Date(fromKey(`${yyyyMM}-01`)).toLocaleString("en-GB", { timeZone: TZ, month: "long", year: "numeric" });
 const weekdayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const addMonthsYYYYMM = (yyyyMM, delta) => {
   const [y, m] = yyyyMM.split("-").map(Number);
@@ -219,10 +216,9 @@ function Services({ state, setState, onBack, onNext, cfg }) {
   );
 }
 
-/* ================== Availability cache (client) ================== */
-const AvCache = new Map(); // key = `${service_key}|${month}` -> payload
+/* ================== CALENDAR (no skeleton, no cache) ================== */
+let reqCounter = 0;
 
-/* ================== CALENDAR ================== */
 function Calendar({ state, setState, onBack, onGoTimes }) {
   const isMembership = state.service_key?.includes("membership");
   const monthKey = state.monthKey;
@@ -238,6 +234,7 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
   const daysMap = state.availability?.days || {};
   const selectedDayKey = state.selectedDayKey;
 
+  const [loading, setLoading] = React.useState(false);
   const [loadErr, setLoadErr] = React.useState(null);
 
   const dayKeys = React.useMemo(() => {
@@ -252,48 +249,36 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
     return keys;
   }, [monthKey]);
 
-  function applyAvailability(payload){
+  const doFetch = React.useCallback((yyyyMM) => {
+    const id = ++reqCounter;
+    setLoading(true);
     setLoadErr(null);
-    setState((s)=> ({ ...s, availability: payload, monthKey: payload.month }));
-    setTimeout(reportHeight, 60);
-  }
-
-  function fetchMonth(yyyyMM, preferCache=true){
-    const key = `${state.service_key}|${yyyyMM}`;
-    if (preferCache && AvCache.has(key)) {
-      applyAvailability(AvCache.get(key));
-      // refresh in background
-      fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${yyyyMM}`)
-        .then(r=>r.json()).then(d=> { AvCache.set(key, d); if (d.month===state.monthKey) applyAvailability(d); })
-        .catch((e)=>{ console.warn("[availability refresh] failed", e); });
-      return;
-    }
-    // instant skeleton
-    applyAvailability({ month: yyyyMM, earliest_key: todayKey, latest_key: limitKey, days: {} });
     fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${yyyyMM}`)
-      .then(r=>{
+      .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then(d=> { AvCache.set(key, d); applyAvailability(d); })
-      .catch((e)=>{ console.error("[availability] load failed", e); setLoadErr("We’re having trouble loading availability."); });
-  }
-
-  function prefetchNext(){
-    if (!canNext) return;
-    const next = addMonthsYYYYMM(monthKey, +1);
-    const key = `${state.service_key}|${next}`;
-    if (!AvCache.has(key)) {
-      fetch(`${API}/availability?service_key=${encodeURIComponent(state.service_key)}&month=${next}`)
-        .then(r=>r.json()).then(d=> AvCache.set(key, d)).catch(()=>{});
-    }
-  }
+      .then(d => {
+        // Only apply the newest response
+        if (id !== reqCounter) return;
+        setState(s => ({ ...s, availability: d, monthKey: d.month }));
+      })
+      .catch(err => {
+        if (id !== reqCounter) return;
+        console.error("[availability] load failed", err);
+        setLoadErr("We’re having trouble loading availability.");
+      })
+      .finally(() => { if (id === reqCounter) setLoading(false); setTimeout(reportHeight, 60); });
+  }, [setState, state.service_key]);
 
   React.useEffect(() => {
+    // Load real availability for the current month; don't show placeholder
     if (!state.service_key) return;
-    if (state.availability?.month !== monthKey) fetchMonth(monthKey, true);
-    else setTimeout(reportHeight, 10);
-    prefetchNext();
+    if (!state.availability || state.availability.month !== monthKey) {
+      doFetch(monthKey);
+    } else {
+      setTimeout(reportHeight, 10);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.service_key, monthKey]);
 
@@ -311,7 +296,7 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
       <div className="gm panel wider">
         <div className="gm monthbar-grid">
           <div className="gm monthnav-left">
-            <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && fetchMonth(addMonthsYYYYMM(monthKey, -1))}>Previous</Button>
+            <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}>Previous</Button>
           </div>
           <div className="gm monthtitle">{monthLabel(monthKey)}</div>
           <div className="gm monthnav-right">
@@ -320,38 +305,44 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
                 {state.membershipSlots.length}/2
               </div>
             ) : <div style={{ width: 1 }} />}
-            <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && fetchMonth(addMonthsYYYYMM(monthKey, +1))}>Next</Button>
+            <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, +1) }))}>Next</Button>
           </div>
         </div>
 
+        {loading && (
+          <div className="gm alert">Loading availability…</div>
+        )}
         {loadErr && (
           <div className="gm alert">
             {loadErr}
-            <Button className="gm btn" onClick={()=> fetchMonth(monthKey, false)} style={{ marginLeft: 8 }}>Retry</Button>
+            <Button className="gm btn" onClick={()=> doFetch(monthKey)} style={{ marginLeft: 8 }}>Retry</Button>
           </div>
         )}
 
-        <div className="gm dowgrid">{weekdayNames.map((w)=> <div key={w} className="gm dow">{w}</div>)}</div>
-
-        <div className={cx("gm monthgrid", !Object.keys(daysMap).length && "gm-skeleton")}>
-          {dayKeys.map((k,i)=>{
-            if (!k) return <div key={`b${i}`} className="gm dayblank" />;
-            const has = !!(daysMap[k] && daysMap[k].length);
-            const earliest = state.availability?.earliest_key || todayKey;
-            const latest   = state.availability?.latest_key   || limitKey;
-            const disabled = !has || k < earliest || k > latest || k < todayKey;
-            const sel = (selectedDayKey === k) || pickedMembershipDays.has(k); // keep green on picked membership day
-
-            return (
-              <div key={k} className="gm daywrap">
-                <button className={cx("gm daycell", has && "has", sel && "selected", disabled && "off")}
-                        onClick={()=> !disabled && pickDay(k)} disabled={disabled}>
-                  {Number(k.slice(-2))}
-                </button>
-              </div>
-            );
-          })}
-        </div>
+        {/* Only render the calendar grid when we have real data for this month */}
+        {state.availability?.month === monthKey ? (
+          <>
+            <div className="gm dowgrid">{weekdayNames.map((w)=> <div key={w} className="gm dow">{w}</div>)}</div>
+            <div className="gm monthgrid">
+              {dayKeys.map((k,i)=>{
+                if (!k) return <div key={`b${i}`} className="gm dayblank" />;
+                const has = !!(daysMap[k] && daysMap[k].length);
+                const earliest = state.availability?.earliest_key || toDateKey(new Date());
+                const latest   = state.availability?.latest_key   || toDateKey(new Date(new Date().setMonth(new Date().getMonth()+1)));
+                const disabled = !has || k < earliest || k > latest || k < toDateKey(new Date());
+                const sel = (selectedDayKey === k) || pickedMembershipDays.has(k); // keep green for picked membership day
+                return (
+                  <div key={k} className="gm daywrap">
+                    <button className={cx("gm daycell", has && "has", sel && "selected", disabled && "off")}
+                            onClick={()=> !disabled && pickDay(k)} disabled={disabled}>
+                      {Number(k.slice(-2))}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
 
         <div className="gm actions space" style={{ marginTop: 12 }}>
           <Button onClick={onBack}>Back</Button>
@@ -543,12 +534,6 @@ function App(){
     fetch(`${API}/config`).then(r=>r.json()).then(cfg=> setState(s=> ({...s, config:cfg})))
       .finally(()=> setTimeout(reportHeight,60));
   },[]);
-
-  React.useEffect(()=>{
-    if (!state.service_key) return;
-    // show skeleton quickly; Calendar will replace with cached/real
-    setState(s=> ({ ...s, availability: { month: state.monthKey, earliest_key: toDateKey(new Date()), latest_key: toDateKey(new Date(new Date().setMonth(new Date().getMonth()+1))), days:{} } }));
-  },[state.service_key, state.monthKey]);
 
   const goto=(step)=> { setState(s=> ({...s, step})); setTimeout(reportHeight,60); };
 
