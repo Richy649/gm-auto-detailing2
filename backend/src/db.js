@@ -7,6 +7,7 @@ export const pool = process.env.DATABASE_URL
   : null;
 
 async function ensureTable() {
+  // Creates table if missing (does NOT alter existing tables)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.bookings (
       id SERIAL PRIMARY KEY,
@@ -16,42 +17,53 @@ async function ensureTable() {
       start_time TIMESTAMPTZ NOT NULL,
       end_time   TIMESTAMPTZ NOT NULL,
       customer_name TEXT,
+      customer_email TEXT,
+      customer_phone TEXT,
+      customer_street TEXT,
+      customer_postcode TEXT,
+      has_tap BOOLEAN DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
 }
 
+async function addColIfMissing(column, type, extra = "") {
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema='public' AND table_name='bookings' AND column_name='${column}'
+      ) THEN
+        EXECUTE 'ALTER TABLE public.bookings ADD COLUMN ${column} ${type} ${extra}';
+      END IF;
+    END
+    $$;
+  `);
+}
+
 async function ensureColumns() {
-  const addCol = async (col, type, defaultSQL = "") => {
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_schema='public' AND table_name='bookings' AND column_name='${col}'
-        ) THEN
-          EXECUTE 'ALTER TABLE public.bookings ADD COLUMN ${col} ${type} ${defaultSQL}';
-        END IF;
-      END
-      $$;
-    `);
-  };
-  await addCol("customer_email",   "TEXT");
-  await addCol("customer_phone",   "TEXT");
-  await addCol("customer_street",  "TEXT");
-  await addCol("customer_postcode","TEXT");
-  await addCol("has_tap",          "BOOLEAN", "DEFAULT false");
+  // Covers legacy tables missing these columns
+  await addColIfMissing("stripe_session_id", "TEXT");
+  await addColIfMissing("customer_email", "TEXT");
+  await addColIfMissing("customer_phone", "TEXT");
+  await addColIfMissing("customer_street", "TEXT");
+  await addColIfMissing("customer_postcode", "TEXT");
+  await addColIfMissing("has_tap", "BOOLEAN", "DEFAULT false");
 }
 
 async function ensureIndexes() {
+  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx
+                    ON public.bookings (start_time, end_time);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_email_idx
                     ON public.bookings (lower(customer_email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_phone_digits_idx
                     ON public.bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_street_norm_idx
                     ON public.bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx
-                    ON public.bookings (start_time, end_time);`);
+  // Optional: uniqueness helps dedupe webhook retries
+  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_session_idx
+                    ON public.bookings (stripe_session_id);`);
 }
 
 export async function initDB() {
@@ -62,7 +74,7 @@ export async function initDB() {
   await ensureTable();
   await ensureColumns();
   await ensureIndexes();
-  console.log("[db] schema ensured (table, columns, indexes)");
+  console.log("[db] schema ensured");
 }
 
 export async function saveBooking(b) {
@@ -90,7 +102,7 @@ export async function saveBooking(b) {
   return res.rows[0]?.id || null;
 }
 
-/** Fetch all bookings overlapping a [start,end) window (ISO strings) */
+/** Overlap query for availability masking */
 export async function getBookingsBetween(startISO, endISO) {
   if (!pool) return [];
   const q = `
@@ -102,7 +114,7 @@ export async function getBookingsBetween(startISO, endISO) {
   return r.rows || [];
 }
 
-/** true if (email OR phone OR street) has appeared in any prior booking */
+/** First-time client check: email OR phone OR street seen before */
 export async function hasExistingCustomer({ email, phone, street }) {
   if (!pool) return false;
   try {
