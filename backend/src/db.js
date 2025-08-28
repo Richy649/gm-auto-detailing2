@@ -1,12 +1,8 @@
-// backend/src/db.js
 import pkg from "pg";
 const { Pool } = pkg;
 
 const pool = process.env.DATABASE_URL
-  ? new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-    })
+  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
   : null;
 
 export async function initDB() {
@@ -29,7 +25,11 @@ export async function initDB() {
       customer_postcode TEXT,
       has_tap BOOLEAN DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT now()
-    )
+    );
+    -- Helpful indexes for identity lookups
+    CREATE INDEX IF NOT EXISTS bookings_email_idx ON bookings (lower(customer_email));
+    CREATE INDEX IF NOT EXISTS bookings_phone_digits_idx ON bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));
+    CREATE INDEX IF NOT EXISTS bookings_street_norm_idx ON bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));
   `);
   console.log("[db] ready");
 }
@@ -48,12 +48,34 @@ export async function saveBooking(b) {
       b.start_iso,
       b.end_iso,
       b.customer?.name || null,
-      b.customer?.email || null,
-      b.customer?.phone || null,
-      b.customer?.street || null,
-      b.customer?.postcode || null,
+      (b.customer?.email || null),
+      (b.customer?.phone || null),
+      (b.customer?.street || null),
+      (b.customer?.postcode || null),
       !!b.has_tap,
     ]
   );
   return res.rows[0]?.id || null;
+}
+
+/** Returns true if any of email OR phone OR street has been seen before. */
+export async function hasExistingCustomer({ email, phone, street }) {
+  if (!pool) return false; // no DB => treat as first-time (frontend will show half, backend won’t discount without DB)
+  const e = (email || "").toLowerCase().trim();
+  const p = String(phone || "");
+  const s = (street || "").toLowerCase().trim();
+
+  const q = `
+    SELECT 1
+    FROM bookings
+    WHERE
+      ($1 <> '' AND lower(customer_email) = $1)
+      OR
+      ($2 <> '' AND regexp_replace(customer_phone,'[^0-9]+','','g') = regexp_replace($2,'[^0-9]+','','g'))
+      OR
+      ($3 <> '' AND regexp_replace(lower(customer_street),'[^a-z0-9]+','','g') = regexp_replace($3,'[^a-z0-9]+','','g'))
+    LIMIT 1
+  `;
+  const r = await pool.query(q, [e, p, s]);
+  return r.rowCount > 0;
 }
