@@ -1,6 +1,7 @@
 
 // backend/src/gcal.js
 import { google } from "googleapis";
+import { createHash } from "crypto";
 
 const TZ = "Europe/London";
 
@@ -19,7 +20,6 @@ function ready() {
 function getClient() {
   if (!ready()) return null;
   if (calendar) return calendar;
-
   const jwt = new google.auth.JWT({
     email: cfg.email,
     key: cfg.key,
@@ -29,17 +29,15 @@ function getClient() {
   return calendar;
 }
 
-function sanitizeId(s) {
-  // Google event id: 5–1024 chars, lowercase a-z, 0-9, -_
-  return String(s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, "-")
-    .slice(0, 128) || `gm-${Date.now()}`;
+function makeEventId(sessionId, index) {
+  // Google requires: 5–1024 chars; letters/digits/underscore only; must start with a letter
+  const hex = createHash("sha1").update(String(sessionId) + ":" + String(index)).digest("hex"); // a-f0-9
+  return `g${hex.slice(0, 20)}_${index}`; // starts with letter, no hyphen
 }
 
 /**
- * Create events idempotently. If the event id already exists, we treat it as success.
- * @param {string} sessionId - Stripe session id
+ * Create events idempotently. If the event id already exists (409), treat as success.
+ * @param {string} sessionId
  * @param {Array<{start_iso:string,end_iso:string,summary:string,description:string,location?:string}>} items
  */
 export async function createCalendarEvents(sessionId, items = []) {
@@ -48,9 +46,11 @@ export async function createCalendarEvents(sessionId, items = []) {
     return;
   }
   const cli = getClient();
+
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const eventId = sanitizeId(`gm-${sessionId}-${i + 1}`);
+    const eventId = makeEventId(sessionId, i + 1);
+
     const resource = {
       id: eventId,
       summary: it.summary || "GM Auto Detailing",
@@ -59,6 +59,7 @@ export async function createCalendarEvents(sessionId, items = []) {
       start: { dateTime: it.start_iso, timeZone: TZ },
       end:   { dateTime: it.end_iso,   timeZone: TZ },
     };
+
     try {
       await cli.events.insert({
         calendarId: cfg.calId,
