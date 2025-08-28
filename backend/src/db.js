@@ -6,18 +6,23 @@ export const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
   : null;
 
-/* ---------- helpers ---------- */
 async function columnExists(table, column) {
-  const q = `
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2
-    LIMIT 1`;
-  const r = await pool.query(q, [table, column]);
+  const r = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1 AND column_name=$2 LIMIT 1`,
+    [table, column]
+  );
   return r.rowCount > 0;
 }
+async function isNotNull(table, column) {
+  const r = await pool.query(
+    `SELECT is_nullable FROM information_schema.columns
+     WHERE table_schema='public' AND table_name=$1 AND column_name=$2`,
+    [table, column]
+  );
+  return r.rows[0]?.is_nullable === "NO";
+}
 
-/* ---------- ensure base table ---------- */
 async function ensureTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.bookings (
@@ -25,6 +30,10 @@ async function ensureTable() {
       stripe_session_id TEXT,
       service_key TEXT,
       addons TEXT[] DEFAULT '{}',
+      /* legacy text columns kept for backward compat */
+      start_iso TEXT,
+      end_iso   TEXT,
+      /* canonical timestamptz */
       start_time TIMESTAMPTZ,
       end_time   TIMESTAMPTZ,
       customer_name TEXT,
@@ -38,76 +47,63 @@ async function ensureTable() {
   `);
 }
 
-/* ---------- ensure columns (no DO $$, fully idempotent) ---------- */
 async function ensureColumns() {
-  // Columns we rely on
-  if (!(await columnExists("bookings", "stripe_session_id")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN stripe_session_id TEXT;`);
-
-  if (!(await columnExists("bookings", "service_key")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN service_key TEXT;`);
-
-  if (!(await columnExists("bookings", "addons"))) {
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN addons TEXT[];`);
-    await pool.query(`ALTER TABLE public.bookings ALTER COLUMN addons SET DEFAULT '{}'::text[];`);
-  }
-
-  // Time columns: add & backfill from legacy start_iso / end_iso if those exist
-  const hasStartTime = await columnExists("bookings", "start_time");
-  const hasEndTime   = await columnExists("bookings", "end_time");
-  const hasStartIso  = await columnExists("bookings", "start_iso");
-  const hasEndIso    = await columnExists("bookings", "end_iso");
-
-  if (!hasStartTime) {
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN start_time TIMESTAMPTZ;`);
-    if (hasStartIso) {
-      // best-effort backfill
-      await pool.query(`UPDATE public.bookings SET start_time = NULLIF(start_iso,'')::timestamptz;`).catch(()=>{});
-    }
-  }
-  if (!hasEndTime) {
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN end_time TIMESTAMPTZ;`);
-    if (hasEndIso) {
-      await pool.query(`UPDATE public.bookings SET end_time = NULLIF(end_iso,'')::timestamptz;`).catch(()=>{});
+  // Make sure all needed columns exist
+  const needCols = [
+    ["stripe_session_id", "TEXT", ""],
+    ["service_key", "TEXT", ""],
+    ["addons", "TEXT[]", "DEFAULT '{}'::text[]"],
+    ["start_iso", "TEXT", ""],
+    ["end_iso", "TEXT", ""],
+    ["start_time", "TIMESTAMPTZ", ""],
+    ["end_time", "TIMESTAMPTZ", ""],
+    ["customer_name", "TEXT", ""],
+    ["customer_email", "TEXT", ""],
+    ["customer_phone", "TEXT", ""],
+    ["customer_street", "TEXT", ""],
+    ["customer_postcode", "TEXT", ""],
+    ["has_tap", "BOOLEAN", "DEFAULT false"],
+  ];
+  for (const [col, type, extra] of needCols) {
+    if (!(await columnExists("bookings", col))) {
+      await pool.query(`ALTER TABLE public.bookings ADD COLUMN ${col} ${type} ${extra};`);
     }
   }
 
-  if (!(await columnExists("bookings", "customer_name")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN customer_name TEXT;`);
+  // Drop NOT NULL on legacy text columns if present
+  if (await isNotNull("bookings", "start_iso")) {
+    await pool.query(`ALTER TABLE public.bookings ALTER COLUMN start_iso DROP NOT NULL;`);
+  }
+  if (await isNotNull("bookings", "end_iso")) {
+    await pool.query(`ALTER TABLE public.bookings ALTER COLUMN end_iso DROP NOT NULL;`);
+  }
 
-  if (!(await columnExists("bookings", "customer_email")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN customer_email TEXT;`);
-
-  if (!(await columnExists("bookings", "customer_phone")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN customer_phone TEXT;`);
-
-  if (!(await columnExists("bookings", "customer_street")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN customer_street TEXT;`);
-
-  if (!(await columnExists("bookings", "customer_postcode")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN customer_postcode TEXT;`);
-
-  if (!(await columnExists("bookings", "has_tap")))
-    await pool.query(`ALTER TABLE public.bookings ADD COLUMN has_tap BOOLEAN DEFAULT false;`);
+  // Backfill canonical timestamptz from legacy text if missing
+  await pool
+    .query(`UPDATE public.bookings
+            SET start_time = NULLIF(start_iso,'')::timestamptz
+            WHERE start_time IS NULL AND start_iso IS NOT NULL;`)
+    .catch(() => {});
+  await pool
+    .query(`UPDATE public.bookings
+            SET end_time = NULLIF(end_iso,'')::timestamptz
+            WHERE end_time IS NULL AND end_iso IS NOT NULL;`)
+    .catch(() => {});
 }
 
-/* ---------- ensure indexes (only when columns exist) ---------- */
 async function ensureIndexes() {
-  // time index only if both columns exist
-  if (await columnExists("bookings", "start_time") && await columnExists("bookings", "end_time")) {
-    await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx ON public.bookings (start_time, end_time);`);
-  }
+  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_time_idx
+                    ON public.bookings (start_time, end_time);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_session_idx
+                    ON public.bookings (stripe_session_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_email_idx
                     ON public.bookings (lower(customer_email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_phone_digits_idx
                     ON public.bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_street_norm_idx
                     ON public.bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_session_idx
-                    ON public.bookings (stripe_session_id);`);
 }
 
-/* ---------- public API ---------- */
 export async function initDB() {
   if (!pool) {
     console.warn("[db] DATABASE_URL not set; DB features disabled.");
@@ -119,20 +115,27 @@ export async function initDB() {
   console.log("[db] schema ensured");
 }
 
+/** Always writes both legacy text and canonical timestamptz fields */
 export async function saveBooking(b) {
   if (!pool) return null;
+  const startISO = b.start_iso || null;
+  const endISO   = b.end_iso   || null;
+
   const res = await pool.query(
     `INSERT INTO public.bookings
-     (stripe_session_id, service_key, addons, start_time, end_time,
+     (stripe_session_id, service_key, addons,
+      start_iso, end_iso, start_time, end_time,
       customer_name, customer_email, customer_phone, customer_street, customer_postcode, has_tap)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING id`,
     [
       b.stripe_session_id || null,
       b.service_key || null,
       b.addons || [],
-      b.start_iso || null,
-      b.end_iso || null,
+      startISO,
+      endISO,
+      startISO ? null : b.start_time || null, // prefer explicit fields if provided
+      endISO   ? null : b.end_time   || null,
       b.customer?.name || null,
       (b.customer?.email || null),
       (b.customer?.phone || null),
@@ -141,10 +144,22 @@ export async function saveBooking(b) {
       !!b.has_tap,
     ]
   );
-  return res.rows[0]?.id || null;
+  // Also, if we only had ISO strings, backfill timestamptz in the same row
+  const id = res.rows[0]?.id;
+  if (id && (startISO || endISO)) {
+    await pool
+      .query(
+        `UPDATE public.bookings
+         SET start_time = COALESCE(start_time, NULLIF(start_iso,'')::timestamptz),
+             end_time   = COALESCE(end_time,   NULLIF(end_iso,'')::timestamptz)
+         WHERE id = $1`,
+        [id]
+      )
+      .catch(() => {});
+  }
+  return id;
 }
 
-/** returns bookings overlapping [startISO, endISO) */
 export async function getBookingsBetween(startISO, endISO) {
   if (!pool) return [];
   const q = `
@@ -157,7 +172,6 @@ export async function getBookingsBetween(startISO, endISO) {
   return r.rows || [];
 }
 
-/** (email OR phone OR street) seen before */
 export async function hasExistingCustomer({ email, phone, street }) {
   if (!pool) return false;
   try {
