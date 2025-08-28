@@ -14,10 +14,7 @@ const DEFAULT_PRICES = {
   standard_membership: 70,
   premium_membership: 100,
 };
-const DEFAULT_ADDONS = {
-  wax: 10,
-  polish: 22.5,
-};
+const DEFAULT_ADDONS = { wax: 10, polish: 22.5 };
 
 /* ================== UTILS ================== */
 const fmtGBP = (n) => `${CURRENCY}${(Math.round(n * 100) / 100).toFixed(2)}`;
@@ -161,18 +158,31 @@ function Details({ state, setState, onNext }) {
 function Services({ state, setState, onBack, onNext, cfg }) {
   const [svc, setSvc] = React.useState(state.service_key || "");
   const [addons, setAddons] = React.useState(state.addons || []);
+  const [firstTime, setFirstTime] = React.useState(false);
+
   const sCfg = cfg.services || {};
   const aCfg = cfg.addons || {};
-  const discount = Number(cfg.discount_gbp || 0); // applied silently
 
-  React.useEffect(() => { setTimeout(reportHeight, 60); }, []);
+  // Determine first-time by email OR phone OR street (name/postcode ignored)
+  React.useEffect(() => {
+    const { email, phone, street } = state.customer || {};
+    if (!email && !phone && !street) return;
+    const qs = new URLSearchParams({ email: email || "", phone: phone || "", street: street || "" });
+    fetch(`${API}/first-time?` + qs.toString())
+      .then(r => r.json())
+      .then(d => setFirstTime(!!d.first_time))
+      .catch(() => setFirstTime(false))
+      .finally(() => setTimeout(reportHeight, 60));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   React.useEffect(() => { setTimeout(reportHeight, 60); }, [svc, addons]);
 
   function basePrice(k) {
     return typeof sCfg[k]?.price === "number" ? sCfg[k].price : (DEFAULT_PRICES[k] || 0);
   }
   function effPrice(k) {
-    return Math.max(0, basePrice(k) - discount);
+    return firstTime ? basePrice(k) * 0.5 : basePrice(k);
   }
 
   function go() {
@@ -184,6 +194,7 @@ function Services({ state, setState, onBack, onNext, cfg }) {
       selectedDayKey: s.selectedDayKey || null,
       selectedSlot: s.selectedSlot || null,
       membershipSlots: s.membershipSlots || [],
+      first_time: firstTime
     }));
     setTimeout(reportHeight, 60);
     onNext();
@@ -198,10 +209,22 @@ function Services({ state, setState, onBack, onNext, cfg }) {
         <div className="gm h2 center">Choose your service</div>
 
         <div className="gm cards">
-          <ServiceCard title={sCfg.exterior?.name || "Exterior Detail"} price={effPrice("exterior")} strike={discount ? basePrice("exterior") : undefined} selected={svc==="exterior"} onClick={()=>setSvc("exterior")} />
-          <ServiceCard title={sCfg.full?.name || "Full Detail"} price={effPrice("full")} strike={discount ? basePrice("full") : undefined} selected={svc==="full"} onClick={()=>setSvc("full")} />
-          <ServiceCard title={sCfg.standard_membership?.name || "Standard Membership (2 Exterior)"} price={effPrice("standard_membership")} strike={discount ? basePrice("standard_membership") : undefined} selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} />
-          <ServiceCard title={sCfg.premium_membership?.name || "Premium Membership (2 Full)"} price={effPrice("premium_membership")} strike={discount ? basePrice("premium_membership") : undefined} selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
+          <ServiceCard title={sCfg.exterior?.name || "Exterior Detail"}
+            price={effPrice("exterior")}
+            strike={firstTime ? basePrice("exterior") : undefined}
+            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} />
+          <ServiceCard title={sCfg.full?.name || "Full Detail"}
+            price={effPrice("full")}
+            strike={firstTime ? basePrice("full") : undefined}
+            selected={svc==="full"} onClick={()=>setSvc("full")} />
+          <ServiceCard title={sCfg.standard_membership?.name || "Standard Membership (2 Exterior)"}
+            price={effPrice("standard_membership")}
+            strike={firstTime ? basePrice("standard_membership") : undefined}
+            selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} />
+          <ServiceCard title={sCfg.premium_membership?.name || "Premium Membership (2 Full)"}
+            price={effPrice("premium_membership")}
+            strike={firstTime ? basePrice("premium_membership") : undefined}
+            selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
         </div>
 
         <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -359,7 +382,7 @@ function Times({ state, setState, onBack, onConfirm }) {
       const next = state.membershipSlots.slice();
       if (idx >= 0) next.splice(idx, 1, { day_key: dayKey, slot });
       else { if (next.length >= 2) return; next.push({ day_key: dayKey, slot }); }
-      setState((s) => ({ ...s, membershipSlots: next, selectedDayKey: dayKey })); // keep highlight
+      setState((s) => ({ ...s, membershipSlots: next, selectedDayKey: dayKey })); // keep highlight green
     } else {
       setState((s) => ({ ...s, selectedSlot: slot, selectedDayKey: dayKey }));
     }
@@ -420,15 +443,21 @@ function Confirm({ state, setState, onBack }) {
   const isMembership = state.service_key?.includes("membership");
   const services = state.config?.services || {};
   const addonsCfg = state.config?.addons || {};
-  const discount = Number(state.config?.discount_gbp || 0);
+  const firstTime = !!state.first_time;
 
   const base =
     typeof services[state.service_key]?.price === "number"
       ? services[state.service_key].price
       : (DEFAULT_PRICES[state.service_key] || 0);
-  const addonsTotal = (state.addons || []).reduce((s, k) => s + (typeof addonsCfg[k]?.price === "number" ? addonsCfg[k].price : (DEFAULT_ADDONS[k] || 0)), 0);
-  const preDiscount = base + addonsTotal;
-  const total = Math.max(0, preDiscount - discount);
+
+  const addonsTotal = (state.addons || []).reduce(
+    (s, k) => s + (typeof addonsCfg[k]?.price === "number" ? addonsCfg[k].price : (DEFAULT_ADDONS[k] || 0)),
+    0
+  );
+
+  const serviceAfter = firstTime ? base * 0.5 : base; // 50% off service price only
+  const preDiscountTotal = base + addonsTotal;
+  const finalTotal = serviceAfter + addonsTotal;
 
   async function pay() {
     if (!state.customer || !state.service_key) return;
@@ -494,13 +523,13 @@ function Confirm({ state, setState, onBack }) {
 
           <div className="gm card">
             <div className="gm card-title">Amount due</div>
-            {discount ? (
+            {firstTime ? (
               <div className="gm price-row big">
-                <span className="gm price-strike">{fmtGBP(preDiscount)}</span>
-                <span className="gm total">{fmtGBP(total)}</span>
+                <span className="gm price-strike">{fmtGBP(preDiscountTotal)}</span>
+                <span className="gm total">{fmtGBP(finalTotal)}</span>
               </div>
             ) : (
-              <div className="gm total">{fmtGBP(total)}</div>
+              <div className="gm total">{fmtGBP(preDiscountTotal)}</div>
             )}
             <div className="gm actions end" style={{ marginTop: 10 }}>
               <Button onClick={onBack}>Back</Button>
@@ -540,6 +569,7 @@ function App() {
     availability: null,
     monthKey: toDateKey(new Date()).slice(0, 7),
     config: null,
+    first_time: false,
   });
 
   React.useEffect(() => {
