@@ -206,7 +206,7 @@ function Services({ state, setState, onBack, onNext, cfg }) {
 
         <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
         <div className="gm addon-benefits two-col">
-          <AddonCard title={aCfg.wax?.name || "Full Body Wax"}
+          <AddonCard title={aCfg.wax?.name || "Ceramic Wax"}
             price={typeof aCfg.wax?.price === "number" ? aCfg.wax.price : DEFAULT_ADDONS.wax}
             desc="Adds gloss and water beading. Light protection between washes."
             align="left" selected={addons.includes("wax")} onToggle={toggleWax} />
