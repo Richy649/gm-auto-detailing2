@@ -1,65 +1,38 @@
 // backend/src/server.js
 import express from "express";
 import cors from "cors";
-import { createCheckoutSession, stripeWebhook } from "./payments.js";
-import apiRoutes from "./routes.js";
+import routes from "./routes.js";
+import { initDB } from "./db.js";
+import { mountPayments } from "./payments.js";
 
 const app = express();
+const PORT = process.env.PORT || 10000;
 
-/* ------------ CORS (allow your frontends) ------------ */
-const allowList = [
-  "https://book.gmautodetailing.uk",
-  "https://gm-auto-detailing2.vercel.app",
-];
-const vercelPreview = /\.vercel\.app$/i;
+/* CORS: allow all (or set ALLOW_ORIGIN env if you want to restrict) */
+const allow = process.env.ALLOW_ORIGIN || "*";
+app.use(cors({
+  origin: allow === "*" ? true : allow.split(",").map(s=>s.trim()),
+}));
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true);
-      if (allowList.includes(origin) || vercelPreview.test(origin)) return cb(null, true);
-      return cb(null, false);
-    },
-    credentials: false,
-  })
-);
+/* Health */
+app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-/* -------- Stripe webhook FIRST (RAW body) -------- */
-app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), stripeWebhook);
+/* Payments (note: /api/pay/create-checkout-session uses express.json in payments.js; webhook uses express.raw) */
+mountPayments(app);
 
-/* -------- Normal JSON body for the rest -------- */
+/* JSON body for the rest of API */
 app.use(express.json());
 
-/* -------- Payments endpoint -------- */
-app.post("/api/pay/create-checkout-session", createCheckoutSession);
+/* Main API routes */
+app.use("/api", routes);
 
-/* -------- Your API routes (/api/availability, etc.) -------- */
-app.use("/api", apiRoutes);
+/* 404 for other /api paths */
+app.use("/api", (req, res) => res.status(404).json({ error: "not_found" }));
 
-/* -------- Fallback /api/config -------- */
-app.get("/api/config", (_req, res) => {
-  res.json({
-    services: {
-      exterior: { key: "exterior", name: "Exterior Detail", price: 40, duration_min: 75 },
-      full: { key: "full", name: "Full Detail", price: 60, duration_min: 120 },
-      standard_membership: { key: "standard_membership", name: "Standard Membership (2 Exterior)", price: 70, duration_min: 75 },
-      premium_membership: { key: "premium_membership", name: "Premium Membership (2 Full)", price: 100, duration_min: 120 },
-    },
-    addons: {
-      wax: { key: "wax", name: "Full Body Wax", price: 10 },
-      polish: { key: "polish", name: "Hand Polish", price: 22.5 },
-    },
+/* Boot */
+initDB()
+  .then(() => app.listen(PORT, () => console.log(`[server] listening on ${PORT}`)))
+  .catch((e) => {
+    console.error("[server] init failed", e);
+    app.listen(PORT, () => console.log(`[server] listening on ${PORT} (DB init failed)`));
   });
-});
-
-/* -------- Health -------- */
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
-/* -------- Start -------- */
-const port = process.env.PORT || 3001;
-app.listen(port, () => {
-  console.log("API listening on", port);
-  if (!process.env.PUBLIC_APP_ORIGIN) {
-    console.warn("[server] Set PUBLIC_APP_ORIGIN to your frontend origin, e.g. https://book.gmautodetailing.uk");
-  }
-});
