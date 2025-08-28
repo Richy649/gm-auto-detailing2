@@ -6,15 +6,9 @@ export const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } })
   : null;
 
-export async function initDB() {
-  if (!pool) {
-    console.warn("[db] DATABASE_URL not set; DB features disabled.");
-    return;
-  }
-
-  // Create table if it doesn't exist
+async function ensureTable() {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS bookings (
+    CREATE TABLE IF NOT EXISTS public.bookings (
       id SERIAL PRIMARY KEY,
       stripe_session_id TEXT,
       service_key TEXT NOT NULL,
@@ -25,29 +19,56 @@ export async function initDB() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+}
 
-  // ---- MIGRATION: add missing columns if not present ----
-  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email   TEXT;`);
-  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_phone   TEXT;`);
-  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_street  TEXT;`);
-  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_postcode TEXT;`);
-  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS has_tap BOOLEAN DEFAULT false;`);
+async function ensureColumns() {
+  // Add columns only if missing (works on all PG versions)
+  const addCol = async (col, type, defaultSQL = "") => {
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'bookings' AND column_name = '${col}'
+        ) THEN
+          EXECUTE 'ALTER TABLE public.bookings ADD COLUMN ${col} ${type} ${defaultSQL}';
+        END IF;
+      END
+      $$;
+    `);
+  };
 
-  // Helpful indexes for identity lookups (safe to re-run)
+  await addCol("customer_email",   "TEXT");
+  await addCol("customer_phone",   "TEXT");
+  await addCol("customer_street",  "TEXT");
+  await addCol("customer_postcode","TEXT");
+  await addCol("has_tap",          "BOOLEAN", "DEFAULT false");
+}
+
+async function ensureIndexes() {
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_email_idx
-                    ON bookings (lower(customer_email));`);
+                    ON public.bookings (lower(customer_email));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_phone_digits_idx
-                    ON bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
+                    ON public.bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_street_norm_idx
-                    ON bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
+                    ON public.bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
+}
 
-  console.log("[db] ready (schema ensured)");
+export async function initDB() {
+  if (!pool) {
+    console.warn("[db] DATABASE_URL not set; DB features disabled.");
+    return;
+  }
+  await ensureTable();
+  await ensureColumns();
+  await ensureIndexes();
+  console.log("[db] schema ensured (table, columns, indexes)");
 }
 
 export async function saveBooking(b) {
   if (!pool) return null;
   const res = await pool.query(
-    `INSERT INTO bookings
+    `INSERT INTO public.bookings
      (stripe_session_id, service_key, addons, start_time, end_time,
       customer_name, customer_email, customer_phone, customer_street, customer_postcode, has_tap)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
@@ -71,15 +92,18 @@ export async function saveBooking(b) {
 
 /** true if (email OR phone OR street) has appeared in any prior booking */
 export async function hasExistingCustomer({ email, phone, street }) {
-  if (!pool) return false; // no DB -> treat as first-time on UI; server will still charge full if needed
+  if (!pool) return false;
   try {
+    // Make sure columns are present before querying (covers first boot after deploy)
+    await ensureColumns();
+
     const e = (email || "").toLowerCase().trim();
     const p = String(phone || "");
     const s = (street || "").toLowerCase().trim();
 
     const q = `
       SELECT 1
-      FROM bookings
+      FROM public.bookings
       WHERE
         ($1 <> '' AND lower(customer_email) = $1)
         OR
