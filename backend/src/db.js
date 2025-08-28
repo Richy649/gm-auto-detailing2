@@ -1,4 +1,3 @@
-// backend/src/db.js
 import pkg from "pg";
 const { Pool } = pkg;
 
@@ -22,14 +21,13 @@ async function ensureTable() {
 }
 
 async function ensureColumns() {
-  // Add columns only if missing (works on all PG versions)
   const addCol = async (col, type, defaultSQL = "") => {
     await pool.query(`
       DO $$
       BEGIN
         IF NOT EXISTS (
           SELECT 1 FROM information_schema.columns
-          WHERE table_schema = 'public' AND table_name = 'bookings' AND column_name = '${col}'
+          WHERE table_schema='public' AND table_name='bookings' AND column_name='${col}'
         ) THEN
           EXECUTE 'ALTER TABLE public.bookings ADD COLUMN ${col} ${type} ${defaultSQL}';
         END IF;
@@ -37,7 +35,6 @@ async function ensureColumns() {
       $$;
     `);
   };
-
   await addCol("customer_email",   "TEXT");
   await addCol("customer_phone",   "TEXT");
   await addCol("customer_street",  "TEXT");
@@ -94,7 +91,7 @@ export async function saveBooking(b) {
 export async function hasExistingCustomer({ email, phone, street }) {
   if (!pool) return false;
   try {
-    // Make sure columns are present before querying (covers first boot after deploy)
+    // make sure columns exist before querying
     await ensureColumns();
 
     const e = (email || "").toLowerCase().trim();
