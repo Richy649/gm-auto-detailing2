@@ -1,3 +1,6 @@
+/* Import Raleway (light 300, medium 500, heavy 800 for emphasis) */
+@import url('https://fonts.googleapis.com/css2?family=Raleway:wght@300;500;800&display=swap');
+
 /* ===== Tokens ===== */
 :root{
   --bg:#ECE4DA;            /* Beige background */
@@ -13,13 +16,15 @@
   --radius-sm:10px;
   --shadow:0 8px 26px rgba(0,0,0,.06);
   --green:#34d399;         /* Selected day highlight */
+  --skeleton:#f3f4f6;
 }
 
 *{ box-sizing:border-box; }
 html,body,#root{ height:100%; }
 html,body{
   margin:0; background:var(--bg); color:var(--ink);
-  font:500 16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,Arial,"Apple Color Emoji","Segoe UI Emoji";
+  font-family: 'Raleway', system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+  font-weight:300; /* light default */
   -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
 }
 
@@ -33,6 +38,12 @@ html,body{
 .gm.panel.wider{ padding:20px 16px 16px; }
 .gm.panel.sub{ border-radius:var(--radius-sm); }
 
+/* Headings = Raleway Medium (500) */
+.gm.h2, .gm.card-title, .benefit-title, .monthtitle, .dow, .gm.total{
+  font-weight:500;
+}
+.gm.center{text-align:center;}
+
 /* Details layout */
 .gm.details-grid{
   display:grid; grid-template-columns:160px 1fr; gap:16px; align-items:start;
@@ -42,39 +53,35 @@ html,body{
 .gm.row{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
 .gm.row.one{ grid-template-columns:1fr; }
 .gm.input{ width:100%; padding:12px 13px; border-radius:10px; border:1px solid var(--line); background:#fff; color:var(--ink); }
-.gm.checklabel{ display:flex; align-items:center; gap:8px; font-weight:700; margin:6px 0 2px; }
+.gm.checklabel{ display:flex; align-items:center; gap:8px; font-weight:500; margin:6px 0 2px; }
 
 /* Buttons */
 .gm.btn{
   appearance:none; border:1px solid var(--line); background:#fff; color:var(--ink);
-  padding:11px 14px; border-radius:12px; font-weight:800;
+  padding:11px 14px; border-radius:12px; font-weight:800; /* heavier for buttons */
 }
 .gm.btn.primary{ background:var(--primary); color:var(--primary-ink); border-color:var(--primary); }
-.gm.btn.nav{ padding:8px 10px; font-weight:700; }
+.gm.btn.nav{ padding:8px 10px; }
 .gm.btn:disabled{ opacity:.55; cursor:not-allowed; }
 .gm.actions{ display:flex; justify-content:space-between; align-items:center; }
 .gm.actions.end{ justify-content:flex-end; gap:8px; }
 .gm.actions.space{ justify-content:space-between; }
 
-/* Price display (red strike then now) */
+/* Price display (discounted left, previous right red strike) */
 .gm.price-row{ display:flex; align-items:baseline; gap:10px; margin:2px 0 6px; }
 .gm.price-row.big{ gap:14px; }
+.gm.price-now{ font-weight:800; color:#111; }
 .gm.price-strike{ color:#dc2626; text-decoration:line-through; font-weight:800; opacity:.9; }
-.gm.price-now{ font-weight:900; color:#111; }
 
 /* Service cards */
-.gm.h2{ font-weight:900; font-size:22px; margin:2px 0 12px; }
-.gm.center{text-align:center;}
 .gm.cards{ display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:12px; margin:8px 0 12px; }
 .gm.card{ border:1px solid var(--line); border-radius:12px; padding:12px; text-align:left; background:#fff; }
-.gm.card-title{ font-weight:900; color:#111; margin-bottom:4px; }
 .gm.card.selected{ outline:3px solid #dbeafe; box-shadow:0 0 0 2px #93c5fd inset; }
 
 /* Add-ons */
 .gm.addon-benefits.two-col{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .gm.benefit{ border:1px dashed var(--line); background:#f9fafb; border-radius:12px; padding:12px; }
 .gm.benefit.on{ border:2px solid #86efac; background:#dcfce7; }
-.benefit-title{ display:flex; justify-content:space-between; font-weight:800; }
 .benefit-name{ color:#111; }
 .benefit-price{ color:#111; }
 .benefit-copy{ color:var(--ink); font-size:14px; line-height:1.45; margin:8px 0 6px; }
@@ -82,12 +89,10 @@ html,body{
 .benefit-actions.left{ justify-content:flex-start; }
 .benefit-actions.right{ justify-content:flex-end; }
 
-/* Sticky footer on Services — padding so nothing gets cut off */
+/* Sticky footer on Services */
 .bottom-stick{ position:sticky; bottom:0; background:var(--panel); padding-top:8px; }
 .gm.panel.wider { padding-bottom: 96px; }
-@media (max-width: 720px){
-  .gm.panel.wider { padding-bottom: 120px; }
-}
+@media (max-width: 720px){ .gm.panel.wider { padding-bottom: 120px; } }
 
 /* Calendar */
 .gm.monthbar-grid{
@@ -95,28 +100,27 @@ html,body{
 }
 .gm.monthnav-left{ display:flex; justify-content:flex-start; }
 .gm.monthnav-right{ display:flex; justify-content:flex-end; align-items:center; gap:8px; }
-.gm.monthtitle{ font-weight:900; font-size:20px; text-align:center; }
+.gm.monthtitle{ font-size:20px; text-align:center; }
 
 .gm.counter{
-  border-radius:999px; padding:4px 10px; font-weight:900; font-size:12px;
+  border-radius:999px; padding:4px 10px; font-weight:500; font-size:12px;
   background:#fff; border:1px solid var(--line); color:#111;
 }
 .gm.counter.warn{ background:#fff7ed; border-color:#fed7aa; }
 .gm.counter.ok{ background:#ecfdf5; border-color:#a7f3d0; }
 
 .gm.dowgrid{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; margin-bottom:6px; }
-.gm.dow{ text-align:center; font-weight:800; color:var(--muted); font-size:13px; }
+.gm.dow{ text-align:center; color:var(--muted); font-size:13px; }
 
 .gm.monthgrid{ display:grid; grid-template-columns:repeat(7,1fr); gap:8px; }
 .gm.dayblank{ height:56px; }
 .gm.daywrap{ position:relative; }
 .gm.daycell{
   width:100%; height:56px; border-radius:12px; border:1px solid var(--line);
-  background:#fff; font-weight:900; font-size:16px;
-  color:var(--date-ink);
+  background:#fff; font-weight:500; font-size:16px; color:var(--date-ink);
 }
 .gm.daycell.has{ background:#f8fafc; }
-/* GREEN selected day */
+/* GREEN selected day (persists for membership) */
 .gm.daycell.selected{ outline:3px solid var(--green); background:#ecfdf5; }
 
 /* Strong grey for unbookable days */
@@ -129,18 +133,24 @@ html,body{
   opacity:1;
 }
 
+/* Loading skeleton for month grid (when cache shows placeholder) */
+.gm-skeleton .gm.daycell{ background:var(--skeleton); border-color:var(--skeleton); color:transparent; }
+
 /* Times */
 .gm.timegrid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:10px; margin-top:6px; }
 .gm.timebox-wrap{ position:relative; }
 .gm.timebox{
   width:100%; height:56px; border-radius:12px; border:1px solid var(--line);
-  background:#fff; font-weight:900; font-size:16px;
+  background:#fff; font-weight:500; font-size:16px;
 }
 .gm.timebox-on{ outline:3px solid #fde68a; background:#fffbeb; }
 
 /* Confirm */
 .gm.twocol{ display:grid; grid-template-columns: 1fr 260px; gap:12px; margin:8px 0 4px; }
-.gm.total{ font-weight:900; font-size:36px; }
+.gm.total{ font-weight:800; font-size:36px; }
+
+/* Muted */
+.gm.muted{ color:var(--muted); }
 
 /* Responsive */
 @media (max-width: 720px){
