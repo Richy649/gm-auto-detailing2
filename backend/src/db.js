@@ -1,61 +1,59 @@
-import fs from 'fs';
-import path from 'path';
-import Database from 'better-sqlite3';
+// backend/src/db.js
+import pkg from "pg";
+const { Pool } = pkg;
 
-// Preferred path:
-// - If DATABASE_URL is set, use it (e.g. /data/data.db on Render)
-// - Else, if running on Render, try /data/data.db
-// - Else (local dev), use ./data/data.db
-function pickDbPath() {
-  const envPath = process.env.DATABASE_URL;
-  if (envPath) return envPath;
-  if (process.env.RENDER) return '/data/data.db';
-  return './data/data.db';
-}
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    })
+  : null;
 
-function ensureDirOrFallback(targetPath) {
-  let dbPath = targetPath;
-  const dir = path.dirname(dbPath);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-    return dbPath; // success
-  } catch (e) {
-    // If /data isn't available (no disk mounted), fall back to local ./data
-    if (dbPath.startsWith('/data')) {
-      dbPath = './data/data.db';
-      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-      return dbPath;
-    }
-    throw e;
+export async function initDB() {
+  if (!pool) {
+    console.warn("[db] DATABASE_URL not set; bookings will NOT be persisted.");
+    return;
   }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bookings (
+      id SERIAL PRIMARY KEY,
+      stripe_session_id TEXT,
+      service_key TEXT NOT NULL,
+      addons TEXT[] DEFAULT '{}',
+      start_time TIMESTAMPTZ NOT NULL,
+      end_time   TIMESTAMPTZ NOT NULL,
+      customer_name TEXT,
+      customer_email TEXT,
+      customer_phone TEXT,
+      customer_street TEXT,
+      customer_postcode TEXT,
+      has_tap BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )
+  `);
+  console.log("[db] ready");
 }
 
-let dbPath = ensureDirOrFallback(pickDbPath());
-export const db = new Database(dbPath);
-
-// Minimal schema
-const schema = `
-PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS customers (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL,
-  phone TEXT NOT NULL,
-  address TEXT NOT NULL,
-  area TEXT NOT NULL,
-  email TEXT
-);
-CREATE TABLE IF NOT EXISTS bookings (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id INTEGER NOT NULL,
-  service_key TEXT NOT NULL,
-  addons TEXT DEFAULT '[]',
-  start_iso TEXT NOT NULL,
-  end_iso TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'scheduled',
-  created_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY(customer_id) REFERENCES customers(id)
-);
-`;
-db.exec(schema);
-
-console.log(`[DB] Using SQLite at: ${dbPath}`);
+export async function saveBooking(b) {
+  if (!pool) return null;
+  const res = await pool.query(
+    `INSERT INTO bookings
+     (stripe_session_id, service_key, addons, start_time, end_time, customer_name, customer_email, customer_phone, customer_street, customer_postcode, has_tap)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING id`,
+    [
+      b.stripe_session_id || null,
+      b.service_key,
+      b.addons || [],
+      b.start_iso,
+      b.end_iso,
+      b.customer?.name || null,
+      b.customer?.email || null,
+      b.customer?.phone || null,
+      b.customer?.street || null,
+      b.customer?.postcode || null,
+      !!b.has_tap,
+    ]
+  );
+  return res.rows[0]?.id || null;
+}
