@@ -114,7 +114,7 @@ function Details({ state, setState, onNext }) {
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider">
-        <div className="gm h2 center heavy">Welcome to the gmautodetailing.uk booking app.</div>
+        <div className="gm h2 center kalam-title">Welcome to the gmautodetailing.uk booking app.</div>
 
         <div className="gm details-grid">
           {/* Logo column */}
