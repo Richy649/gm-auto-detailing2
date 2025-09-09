@@ -1,7 +1,7 @@
 // backend/src/memberships.js
 import Stripe from "stripe";
 import { Router } from "express";
-import { pool } from "./db.js";
+import { pool, saveBooking } from "./db.js";
 import { authMiddleware } from "./auth.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -11,9 +11,7 @@ const prices = {
   premium:  { intro: process.env.PREMIUM_INTRO_PRICE,  full: process.env.PREMIUM_PRICE  },
 };
 
-/* ---------- helpers ---------- */
 const one = async (q,p)=> (await pool.query(q,p)).rows[0]||null;
-const all = async (q,p)=> (await pool.query(q,p)).rows||[];
 
 function norm(s){ return String(s||"").trim().toLowerCase(); }
 function digits(s){ return String(s||"").replace(/[^0-9]+/g,""); }
@@ -72,13 +70,13 @@ async function grantCreditsFromInvoice({ user_id, tier, invoice_id, period_start
   await pool.query(
     `INSERT INTO public.credit_ledger
      (user_id, service_type, qty, kind, reason, valid_from, valid_until, stripe_invoice_id)
-     VALUES ($1,$2,$3,'grant',$4,to_timestamp($5),to_timestamp($6),$7)`,
-    [user_id, service_type, 2, `grant for ${tier} invoice ${invoice_id}`, period_start, period_end, invoice_id]
+     VALUES ($1,$2,2,'grant',$3,to_timestamp($4),to_timestamp($5),$6)`,
+    [user_id, service_type, `grant for ${tier} invoice ${invoice_id}`, period_start, period_end, invoice_id]
   );
 }
 
 async function ensureFullPriceNextCycle(subscriptionId, tier) {
-  const { intro, full } = prices[tier];
+  const intro = prices[tier].intro, full = prices[tier].full;
   const sub = await stripe.subscriptions.retrieve(subscriptionId, { expand: ["items.data.price"] });
   const item = sub.items.data[0];
   if (item.price.id === intro) {
@@ -88,22 +86,21 @@ async function ensureFullPriceNextCycle(subscriptionId, tier) {
 
 async function revokeRemainingForInvoice({ user_id, tier, invoice_id, period_start, period_end }) {
   const service_type = svcByTier[tier];
-  const grantRow = await one(
-    `SELECT COALESCE(SUM(qty),0) AS g
-     FROM public.credit_ledger WHERE user_id=$1 AND service_type=$2 AND kind='grant' AND stripe_invoice_id=$3`,
+  const g = await one(
+    `SELECT COALESCE(SUM(qty),0) AS v FROM public.credit_ledger
+     WHERE user_id=$1 AND service_type=$2 AND kind='grant' AND stripe_invoice_id=$3`,
     [user_id, service_type, invoice_id]
   );
-  const granted = Number(grantRow?.g || 0);
+  const granted = Number(g?.v || 0);
   if (granted <= 0) return;
 
-  const usedRow = await one(
-    `SELECT COALESCE(SUM(qty),0) AS u
-     FROM public.credit_ledger
+  const u = await one(
+    `SELECT COALESCE(SUM(qty),0) AS v FROM public.credit_ledger
      WHERE user_id=$1 AND service_type=$2 AND kind IN ('debit','adjust')
        AND created_at >= to_timestamp($3) AND created_at <= to_timestamp($4)`,
     [user_id, service_type, period_start, period_end]
   );
-  const used = Math.abs(Number(usedRow?.u || 0));
+  const used = Math.abs(Number(u?.v || 0));
   const remaining = granted - used;
   if (remaining > 0) {
     await pool.query(
@@ -114,12 +111,11 @@ async function revokeRemainingForInvoice({ user_id, tier, invoice_id, period_sta
   }
 }
 
-/* ---------- Public routes ---------- */
+/* -------- Public routes (start subscription, portal) -------- */
 export function membershipRoutes() {
   const r = Router();
   r.use(authMiddleware);
 
-  // Start subscription (server chooses intro vs full)
   r.post("/subscribe", async (req, res) => {
     try {
       if (!req.user) return res.status(401).json({ ok:false, error:"auth_required" });
@@ -127,21 +123,15 @@ export function membershipRoutes() {
       if (!tier || !customer?.email) return res.status(400).json({ ok:false, error:"missing_fields" });
       const cfg = prices[tier]; if (!cfg?.intro || !cfg?.full) return res.status(500).json({ ok:false, error:"price_env_missing" });
 
-      // load user
       const u = await one("SELECT * FROM public.users WHERE id=$1", [req.user.id]);
-      if (!u) return res.status(401).json({ ok:false, error:"auth_required" });
-
-      // save latest profile (optional)
       await pool.query(
         `UPDATE public.users SET name=COALESCE($2,name), phone=COALESCE($3,phone),
          street=COALESCE($4,street), postcode=COALESCE($5,postcode) WHERE id=$1`,
         [u.id, customer.name||null, customer.phone||null, customer.street||null, customer.postcode||null]
       );
 
-      // determine intro eligibility (street OR phone OR email has never appeared)
       const eligible = await firstTimeEligible({ email: customer.email, phone: customer.phone, street: customer.street });
 
-      // ensure stripe customer
       let stripeCustomerId = u.stripe_customer_id;
       if (!stripeCustomerId) {
         const sc = await stripe.customers.create({
@@ -169,7 +159,6 @@ export function membershipRoutes() {
     }
   });
 
-  // Customer portal
   r.get("/portal", async (req, res) => {
     try {
       if (!req.user) return res.status(401).json({ ok:false, error:"auth_required" });
@@ -189,14 +178,167 @@ export function membershipRoutes() {
   return r;
 }
 
-/* ---------- Admin cancel+refund now (refuse if credits used) ---------- */
+/* -------- Webhook: memberships & addons-only completions -------- */
+export async function membershipsWebhookHandler(req, res) {
+  try {
+    const sig = req.headers["stripe-signature"];
+    const event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
+    );
+
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const s = event.data.object;
+
+        // A) subscription flow
+        if (s.mode === "subscription") {
+          const user_id = Number(s.metadata?.user_id || 0);
+          const tier = s.metadata?.tier;
+          const subId = s.subscription;
+          if (user_id && tier && subId) {
+            const sub = await stripe.subscriptions.retrieve(subId);
+            await upsertSubscription({
+              user_id,
+              stripe_subscription_id: subId,
+              tier,
+              status: sub.status,
+              period_start: sub.current_period_start,
+              period_end: sub.current_period_end
+            });
+            if (s.customer) await linkUserStripeCustomer(user_id, s.customer);
+          }
+          break;
+        }
+
+        // B) addons-only with credit (mode=payment, we stored metadata)
+        if (s.mode === "payment" && s.metadata?.kind === "addons_only_with_credit") {
+          const user_id = Number(s.metadata.user_id || 0);
+          const service_key = s.metadata.service_key;
+          const start_iso = s.metadata.start_iso;
+          const end_iso = s.metadata.end_iso;
+          const addons = JSON.parse(s.metadata.addons || "[]");
+          const customer = JSON.parse(s.metadata.customer || "{}");
+          // Save the booking now (service was paid by credit; add-ons paid by this session)
+          const bookingId = await saveBooking({
+            stripe_session_id: s.id,
+            service_key,
+            addons,
+            start_iso,
+            end_iso,
+            customer,
+            has_tap: true
+          });
+          // Debit 1 credit
+          const service_type = service_key === "full" ? "full" : "exterior";
+          await pool.query(
+            `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason, related_booking_id)
+             VALUES ($1,$2,-1,'debit',$3,$4)`,
+            [user_id, service_type, `booking ${bookingId}`, bookingId]
+          );
+        }
+        break;
+      }
+
+      case "invoice.payment_succeeded": {
+        const inv = event.data.object;
+        if (!inv.subscription) break;
+
+        // find our sub/user
+        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+        if (!srow) break;
+
+        // Determine tier by price id at time of event
+        const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
+        const p = sub.items.data[0].price.id;
+        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
+
+        const line = inv.lines?.data?.[0];
+        if (line?.period) {
+          await grantCreditsFromInvoice({
+            user_id: srow.user_id,
+            tier,
+            invoice_id: inv.id,
+            period_start: line.period.start,
+            period_end: line.period.end
+          });
+        }
+
+        if (inv.billing_reason === "subscription_create") {
+          await ensureFullPriceNextCycle(inv.subscription, tier);
+          await pool.query("UPDATE public.users SET membership_intro_used=TRUE WHERE id=$1", [srow.user_id]);
+        }
+
+        await upsertSubscription({
+          user_id: srow.user_id,
+          stripe_subscription_id: inv.subscription,
+          tier,
+          status: sub.status,
+          period_start: sub.current_period_start,
+          period_end: sub.current_period_end
+        });
+        break;
+      }
+
+      case "customer.subscription.deleted": {
+        const sub = event.data.object;
+        await pool.query(
+          "UPDATE public.subscriptions SET status=$2, updated_at=now() WHERE stripe_subscription_id=$1",
+          [sub.id, sub.status || "canceled"]
+        );
+        break;
+      }
+
+      case "charge.refunded": {
+        const charge = event.data.object;
+        const invId = typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id;
+        if (!invId) break;
+        const inv = await stripe.invoices.retrieve(invId);
+        if (!inv?.subscription) break;
+
+        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+        if (!srow) break;
+
+        const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
+        const p = sub.items.data[0].price.id;
+        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
+
+        const line = inv.lines?.data?.[0];
+        if (!line?.period) break;
+
+        await revokeRemainingForInvoice({
+          user_id: srow.user_id,
+          tier,
+          invoice_id: invId,
+          period_start: line.period.start,
+          period_end: line.period.end
+        });
+        break;
+      }
+
+      default:
+        // ignore
+        break;
+    }
+    res.json({ received: true });
+  } catch (e) {
+    console.warn("[memberships webhook] err", e?.message);
+    res.status(400).send(`Webhook Error: ${e.message}`);
+  }
+}
+
+/* -------- Admin: cancel+refund now (deny if credits used) -------- */
 export function adminMembershipRoutes() {
   const r = Router();
   r.post("/subscriptions/:sid/cancel_refund_now", async (req, res) => {
     try {
-      if (req.query.token !== process.env.ADMIN_TOKEN) return res.status(401).json({ ok:false, error:"unauthorized" });
+      if (req.query.token !== process.env.ADMIN_TOKEN)
+        return res.status(401).json({ ok:false, error:"unauthorized" });
+
       const sid = req.params.sid;
       const sub = await stripe.subscriptions.retrieve(sid, { expand:["latest_invoice.payment_intent","items.data.price"] });
+
       const tier = (sub.items.data[0].price.id === prices.standard.full || sub.items.data[0].price.id === prices.standard.intro) ? "standard" : "premium";
       const start = sub.current_period_start, end = sub.current_period_end;
 
@@ -210,6 +352,7 @@ export function adminMembershipRoutes() {
         [srow.user_id, svcByTier[tier], start, end]
       );
       const granted = Number(grantedRow?.g || 0);
+
       const usedRow = await one(
         `SELECT COALESCE(SUM(qty),0) AS u FROM public.credit_ledger
          WHERE user_id=$1 AND service_type=$2 AND kind IN ('debit','adjust')
@@ -217,6 +360,7 @@ export function adminMembershipRoutes() {
         [srow.user_id, svcByTier[tier], start, end]
       );
       const used = Math.abs(Number(usedRow?.u || 0));
+
       if (used > 0) return res.status(409).json({ ok:false, error:"credits_already_used" });
 
       const invId = sub.latest_invoice;
@@ -242,108 +386,4 @@ export function adminMembershipRoutes() {
     }
   });
   return r;
-}
-
-/* ---------- Webhook endpoint (separate URL) ---------- */
-export async function membershipsWebhookHandler(req, res) {
-  try {
-    const sig = req.headers["stripe-signature"];
-    const event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS);
-
-    switch (event.type) {
-      case "checkout.session.completed": {
-        const s = event.data.object;
-        if (s.mode !== "subscription") break;
-        const user_id = Number(s.metadata?.user_id || 0);
-        const tier = s.metadata?.tier;
-        const subId = s.subscription;
-        if (!user_id || !tier || !subId) break;
-
-        const sub = await stripe.subscriptions.retrieve(subId);
-        await upsertSubscription({
-          user_id,
-          stripe_subscription_id: subId,
-          tier,
-          status: sub.status,
-          period_start: sub.current_period_start,
-          period_end: sub.current_period_end
-        });
-        if (s.customer) await linkUserStripeCustomer(user_id, s.customer);
-        break;
-      }
-
-      case "invoice.payment_succeeded": {
-        const inv = event.data.object;
-        if (!inv.subscription) break;
-        const subRow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
-        if (!subRow) break;
-
-        // Determine tier by price id at time of event
-        const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const p = sub.items.data[0].price.id;
-        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
-
-        const line = inv.lines?.data?.[0];
-        if (line?.period) {
-          await grantCreditsFromInvoice({
-            user_id: subRow.user_id, tier, invoice_id: inv.id,
-            period_start: line.period.start, period_end: line.period.end
-          });
-        }
-
-        if (inv.billing_reason === "subscription_create") {
-          await ensureFullPriceNextCycle(inv.subscription, tier);
-          await pool.query("UPDATE public.users SET membership_intro_used=TRUE WHERE id=$1", [subRow.user_id]);
-        }
-
-        await upsertSubscription({
-          user_id: subRow.user_id,
-          stripe_subscription_id: inv.subscription,
-          tier,
-          status: sub.status,
-          period_start: sub.current_period_start,
-          period_end: sub.current_period_end
-        });
-        break;
-      }
-
-      case "customer.subscription.deleted": {
-        const sub = event.data.object;
-        await pool.query("UPDATE public.subscriptions SET status=$2, updated_at=now() WHERE stripe_subscription_id=$1", [sub.id, sub.status || "canceled"]);
-        break;
-      }
-
-      case "charge.refunded": {
-        const charge = event.data.object;
-        const invId = typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id;
-        if (!invId) break;
-        const inv = await stripe.invoices.retrieve(invId);
-        if (!inv?.subscription) break;
-
-        const subRow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
-        if (!subRow) break;
-
-        const line = inv.lines?.data?.[0];
-        if (!line?.period) break;
-
-        const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const p = sub.items.data[0].price.id;
-        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
-
-        await revokeRemainingForInvoice({
-          user_id: subRow.user_id, tier, invoice_id: invId,
-          period_start: line.period.start, period_end: line.period.end
-        });
-        break;
-      }
-
-      default:
-        // ignore
-        break;
-    }
-    return res.json({ received: true });
-  } catch (e) {
-    console.warn("[memberships webhook] err", e?.message);
-    return res.status(400).send(`Webhook Error: ${e.message}`);
-  }
 }
