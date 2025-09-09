@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Register • GM Auto Detailing</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f3efe8; margin:0; padding:20px; }
+      .card { max-width:480px; margin:20px auto; background:#fff; border:1px solid #e3e0d7; border-radius:12px; padding:16px; }
+      .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+      .row { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+      input { padding:10px 12px; border:1px solid #ddd; border-radius:10px; font-size:16px; }
+      button { padding:10px 14px; border-radius:10px; border:0; background:#222; color:#fff; font-weight:700; cursor:pointer; }
+      .muted { color:#666; font-size:14px; }
+      @media (max-width:680px){ .grid{ grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h2>Create account</h2>
+      <div class="row"><label>Email</label><input id="email" type="email" /></div>
+      <div class="row"><label>Password</label><input id="password" type="password" /></div>
+      <div class="grid">
+        <div class="row"><label>Name</label><input id="name" /></div>
+        <div class="row"><label>Phone</label><input id="phone" /></div>
+      </div>
+      <div class="grid">
+        <div class="row"><label>Street</label><input id="street" /></div>
+        <div class="row"><label>Postcode</label><input id="postcode" /></div>
+      </div>
+      <button id="go">Register</button>
+      <p class="muted">Already have an account? <a href="/login.html">Login</a></p>
+    </div>
+    <script>
+      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
+        ? 'https://YOUR-RENDER-BACKEND.onrender.com' : '';
+      document.getElementById('go').onclick = async () => {
+        const payload = {
+          email: document.getElementById('email').value.trim(),
+          password: document.getElementById('password').value,
+          name: document.getElementById('name').value.trim(),
+          phone: document.getElementById('phone').value.trim(),
+          street: document.getElementById('street').value.trim(),
+          postcode: document.getElementById('postcode').value.trim(),
+        };
+        const r = await fetch(`${API}/api/auth/register`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const data = await r.json();
+        if (data.ok) {
+          localStorage.setItem('GM_TOKEN', data.token);
+          location.href = '/';
+        } else { alert(data.error || 'Register failed'); }
+      };
+    </script>
+  </body>
+</html>
