@@ -1,14 +1,13 @@
 // backend/src/credits.js
 import { Router } from "express";
 import Stripe from "stripe";
-import { pool } from "./db.js";
+import { pool, saveBooking } from "./db.js";
 import { authMiddleware } from "./auth.js";
-import { saveBooking } from "./db.js";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const router = Router();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-const serviceTypeByKey = { exterior: "exterior", full: "full" }; // map UI keys to credit type
+router.use(authMiddleware);
 
 async function availableCredits(user_id, service_type) {
   const r = await pool.query(
@@ -20,22 +19,6 @@ async function availableCredits(user_id, service_type) {
   return Number(r.rows[0]?.bal || 0);
 }
 
-async function debitOne(user_id, service_type, booking_id) {
-  await pool.query(
-    `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason, related_booking_id)
-     VALUES ($1,$2,-1,'debit',$3,$4)`,
-    [user_id, service_type, `booking ${booking_id}`, booking_id]
-  );
-}
-
-router.use(authMiddleware);
-
-/**
- * POST /api/credits/book-with-credit
- * Body: { service_key: 'exterior'|'full', slot: {start_iso,end_iso}, addons: ['wax','polish'], customer: {name,phone,email,street,postcode}, origin }
- * - If addons total > 0, returns { ok:true, checkout_url } (debit happens in webhook after success)
- * - If addons total == 0, creates booking + debits immediately and returns { ok:true, booked:true }
- */
 router.post("/book-with-credit", async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ ok:false, error:"auth_required" });
@@ -43,24 +26,22 @@ router.post("/book-with-credit", async (req, res) => {
     const { service_key, slot, addons = [], customer = {}, origin } = req.body || {};
     if (!service_key || !slot?.start_iso || !slot?.end_iso) return res.status(400).json({ ok:false, error:"missing_fields" });
 
-    const service_type = serviceTypeByKey[service_key];
-    if (!service_type) return res.status(400).json({ ok:false, error:"invalid_service" });
-
+    const service_type = service_key === "full" ? "full" : "exterior";
     const bal = await availableCredits(req.user.id, service_type);
     if (bal < 1) return res.status(402).json({ ok:false, error:"no_credits" });
 
-    // compute addons total using your /api/config prices (hard-code fallback)
+    // addons sum (fallback values)
     const addonsPrices = { wax: 10, polish: 22.5 };
     const addonsTotal = addons.reduce((s,k)=> s + (addonsPrices[k]||0), 0);
 
     if (addonsTotal > 0) {
-      // Create a lightweight checkout for add-ons only (service paid by credit)
+      // Pay add-ons only; service uses credit. Booking + debit happens in webhook.
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
         line_items: [{
           price_data: {
             currency: "gbp",
-            product_data: { name: `Add-ons for ${service_key} (credit)` },
+            product_data: { name: `Add-ons for ${service_key} (credit applied)` },
             unit_amount: Math.round(addonsTotal * 100),
           },
           quantity: 1
@@ -80,7 +61,7 @@ router.post("/book-with-credit", async (req, res) => {
       return res.json({ ok:true, url: session.url });
     }
 
-    // No addons -> book immediately and debit 1 credit
+    // No add-ons → save booking now and debit immediately
     const bookingId = await saveBooking({
       stripe_session_id: null,
       service_key,
@@ -90,11 +71,15 @@ router.post("/book-with-credit", async (req, res) => {
       customer,
       has_tap: true
     });
-    await debitOne(req.user.id, service_type, bookingId);
-    return res.json({ ok:true, booked:true, booking_id: bookingId });
+    await pool.query(
+      `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason, related_booking_id)
+       VALUES ($1,$2,-1,'debit',$3,$4)`,
+      [req.user.id, service_type, `booking ${bookingId}`, bookingId]
+    );
+    res.json({ ok:true, booked:true, booking_id: bookingId });
 
   } catch (e) {
-    console.error("[book-with-credit] err", e);
+    console.error("[book-with-credit]", e);
     res.status(500).json({ ok:false, error:"book_credit_failed" });
   }
 });
