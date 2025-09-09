@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import { pool } from "./db.js";
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 
 function signToken(user) {
   return jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: "30d" });
@@ -18,8 +18,8 @@ export async function authMiddleware(req, _res, next) {
     if (!m) return next();
     const payload = jwt.verify(m[1], JWT_SECRET);
     req.user = { id: payload.id, email: payload.email };
-  } catch {}
-  finally { next(); }
+  } catch { /* ignore */ }
+  next();
 }
 
 router.post("/register", async (req, res) => {
@@ -29,28 +29,14 @@ router.post("/register", async (req, res) => {
     const hash = await bcrypt.hash(password, 11);
 
     const existing = await pool.query("SELECT * FROM public.users WHERE lower(email)=lower($1)", [email]);
-    let user;
-    if (existing.rowCount) {
-      // If user exists but no password yet, set it; else reject duplicate
-      const u = existing.rows[0];
-      if (!u.password_hash) {
-        await pool.query(
-          "UPDATE public.users SET password_hash=$2, name=COALESCE($3,name), phone=COALESCE($4,phone), street=COALESCE($5,street), postcode=COALESCE($6,postcode) WHERE id=$1",
-          [u.id, hash, name||null, phone||null, street||null, postcode||null]
-        );
-        user = { ...u, password_hash: hash };
-      } else {
-        return res.status(409).json({ ok:false, error:"email_in_use" });
-      }
-    } else {
-      const r = await pool.query(
-        `INSERT INTO public.users (email, password_hash, name, phone, street, postcode)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [email, hash, name||null, phone||null, street||null, postcode||null]
-      );
-      user = r.rows[0];
-    }
-    return res.json({ ok:true, token: signToken(user) });
+    if (existing.rowCount) return res.status(409).json({ ok:false, error:"email_in_use" });
+
+    const r = await pool.query(
+      `INSERT INTO public.users (email,password_hash,name,phone,street,postcode)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [email, hash, name||null, phone||null, street||null, postcode||null]
+    );
+    res.json({ ok:true, token: signToken(r.rows[0]) });
   } catch (e) {
     console.error("[auth/register]", e);
     res.status(500).json({ ok:false, error:"register_failed" });
@@ -64,10 +50,9 @@ router.post("/login", async (req, res) => {
     const r = await pool.query("SELECT * FROM public.users WHERE lower(email)=lower($1)", [email]);
     if (!r.rowCount) return res.status(401).json({ ok:false, error:"invalid_creds" });
     const u = r.rows[0];
-    if (!u.password_hash) return res.status(401).json({ ok:false, error:"invalid_creds" });
-    const ok = await bcrypt.compare(password, u.password_hash);
+    const ok = await bcrypt.compare(password, u.password_hash || "");
     if (!ok) return res.status(401).json({ ok:false, error:"invalid_creds" });
-    return res.json({ ok:true, token: signToken(u) });
+    res.json({ ok:true, token: signToken(u) });
   } catch (e) {
     console.error("[auth/login]", e);
     res.status(500).json({ ok:false, error:"login_failed" });
@@ -77,10 +62,10 @@ router.post("/login", async (req, res) => {
 router.get("/me", async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ ok:false, error:"auth_required" });
-    const u = await pool.query("SELECT id,email,name,phone,street,postcode,stripe_customer_id FROM public.users WHERE id=$1", [req.user.id]);
+    const u = await pool.query("SELECT id,email,name,phone,street,postcode FROM public.users WHERE id=$1", [req.user.id]);
     if (!u.rowCount) return res.status(404).json({ ok:false, error:"not_found" });
 
-    // credits summary
+    // live credits summary
     const c = await pool.query(
       `SELECT service_type, COALESCE(SUM(qty),0) AS bal
        FROM public.credit_ledger
