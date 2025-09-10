@@ -101,6 +101,9 @@ function AuthGate({ state, setState }) {
 
   const continueToServices = () => setState(s=> ({ ...s, step: "services" }));
 
+  const signedIn = !!state.token;
+  const known = !!(state.user && state.user.email);
+
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider" style={{textAlign:"center"}}>
@@ -109,9 +112,11 @@ function AuthGate({ state, setState }) {
           You’ll use your account to manage bookings and membership credits.
         </div>
 
-        {state.token && state.user ? (
+        {signedIn ? (
           <>
-            <div style={{margin:"8px 0"}}>Signed in as <strong>{state.user.email}</strong></div>
+            <div style={{margin:"8px 0"}}>
+              {known ? <>Signed in as <strong>{state.user.email}</strong></> : <>Signed in. Loading profile…</>}
+            </div>
             <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
               <PrimaryButton onClick={continueToServices}>Continue</PrimaryButton>
               <Button onClick={logout}>Logout</Button>
@@ -137,7 +142,6 @@ function Services({ state, setState, onNext, cfg }) {
   const sCfg = cfg.services || {};
   const aCfg = cfg.addons || {};
 
-  // First-time discount check (based on stored profile)
   React.useEffect(() => {
     const { email, phone, street } = state.customer || {};
     if (!email && !phone && !street) return;
@@ -317,7 +321,7 @@ function Calendar({ state, setState }) {
     if (!k) return;
     const hasAny = Array.isArray(daysMap[k]) && daysMap[k].some(s => s.available);
     if (!hasAny) return;
-    setState((s)=> ({ ...s, selectedDayKey: k, step: "times" }));
+    setState((s)=> ({ ...s, selectedDayKey: k, selectedSlot: null, step: "times" }));
   }
 
   function dayHasChosenTime(k){
@@ -356,7 +360,7 @@ function Calendar({ state, setState }) {
                 const hasFree = arr.some(s => s.available);
                 const disabled = !hasFree;
                 const green = dayHasChosenTime(k);
-                const orange = !green && state.selectedDayKey === k; // selected but no time chosen
+                const orange = !green && state.selectedDayKey === k;
                 return (
                   <div key={k} className="gm daywrap">
                     <button
@@ -604,7 +608,7 @@ function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const token0 = localStorage.getItem('GM_TOKEN') || "";
 
-  // Always gate on auth, regardless of token, unless arriving from success redirects.
+  // Always gate on auth, unless returning from success redirects.
   let initialStep = "auth_gate";
   if (urlParams.get("paid")) initialStep = "thankyou";
   else if (urlParams.get("sub")) initialStep = "sub_success";
@@ -648,7 +652,6 @@ function App(){
       .finally(()=> setTimeout(reportHeight,60));
   }, [state.token]);
 
-  // Route to the correct screen
   if (state.step === "auth_gate")   return <AuthGate state={state} setState={setState} />;
   if (state.step === "thankyou")    return <ThankYou />;
   if (state.step === "sub_success") return <SubSuccess onBook={()=> setState(s=> ({ ...s, step:"services" }))} />;
