@@ -79,55 +79,22 @@ function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
   );
 }
 
-/* ================== AUTH GATE (always first) ================== */
-function AuthGate({ state, setState }) {
+/* ================== AUTH GATE (only shown if no token) ================== */
+function AuthGate() {
   React.useEffect(()=> setTimeout(reportHeight,60),[]);
-
   const goLogin  = () => { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } };
   const goRegister = () => { try { window.top.location.href = "/register.html"; } catch { window.location.href = "/register.html"; } };
-
-  const logout = () => {
-    localStorage.removeItem("GM_TOKEN");
-    setState(s=> ({
-      ...s,
-      token: "",
-      user: null,
-      credits: { exterior: 0, full: 0 },
-      customer: { },
-      step: "auth_gate"
-    }));
-    setTimeout(reportHeight,60);
-  };
-
-  const continueToServices = () => setState(s=> ({ ...s, step: "services" }));
-
-  const signedIn = !!state.token;
-  const known = !!(state.user && state.user.email);
-
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider" style={{textAlign:"center"}}>
         <div className="gm h2 center">Sign in to book or subscribe</div>
         <div className="gm muted" style={{marginBottom:10}}>
-          You’ll use your account to manage bookings and membership credits.
+          You will use your account to manage bookings and membership credits.
         </div>
-
-        {signedIn ? (
-          <>
-            <div style={{margin:"8px 0"}}>
-              {known ? <>Signed in as <strong>{state.user.email}</strong></> : <>Signed in. Loading profile…</>}
-            </div>
-            <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
-              <PrimaryButton onClick={continueToServices}>Continue</PrimaryButton>
-              <Button onClick={logout}>Logout</Button>
-            </div>
-          </>
-        ) : (
-          <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
-            <PrimaryButton onClick={goLogin}>Login</PrimaryButton>
-            <Button onClick={goRegister}>Create account</Button>
-          </div>
-        )}
+        <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
+          <PrimaryButton onClick={goLogin}>Login</PrimaryButton>
+          <Button onClick={goRegister}>Create account</Button>
+        </div>
       </div>
     </div>
   );
@@ -136,12 +103,13 @@ function AuthGate({ state, setState }) {
 /* ================== SERVICES ================== */
 function Services({ state, setState, onNext, cfg }) {
   const [svc, setSvc] = React.useState(state.service_key || "");
-  const [addons, setAddons] = React.useState(state.addons || []);
+  const [addons, setAddons] = React.useState([]); // start empty; may be disabled entirely
   const [firstTime, setFirstTime] = React.useState(false);
 
   const sCfg = cfg.services || {};
   const aCfg = cfg.addons || {};
 
+  // Detect first-time for discount (only matters when NOT using credits and NOT choosing membership)
   React.useEffect(() => {
     const { email, phone, street } = state.customer || {};
     if (!email && !phone && !street) return;
@@ -159,16 +127,14 @@ function Services({ state, setState, onNext, cfg }) {
   function basePrice(k){ return (typeof sCfg[k]?.price === "number") ? sCfg[k].price : (DEFAULT_PRICES[k] || 0); }
   function effPrice(k){ return firstTime ? basePrice(k) * 0.5 : basePrice(k); }
 
-  const profileLoaded = !!(state.user && (state.customer?.email || state.user.email));
+  // Business rule: if user has credits, we don't allow add-ons and we should NOT be here normally (App auto-routes to Calendar).
+  const hasFullCredit = (state.credits?.full || 0) > 0;
+  const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
+  const usingCredits = hasFullCredit || hasExteriorCredit;
 
   async function subscribeNow(tierKey){
     if (!state.token) {
-      alert("Please log in to subscribe.");
       try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
-      return;
-    }
-    if (!profileLoaded) {
-      alert("Loading your profile. Please try again in a moment.");
       return;
     }
     const tier = tierKey === "standard_membership" ? "standard" : "premium";
@@ -187,49 +153,38 @@ function Services({ state, setState, onNext, cfg }) {
       alert("Your account is missing an email address. Please re-login or re-register.");
       return;
     }
-    try {
-      const r = await fetch(`${API}/memberships/subscribe`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${state.token}`,
-        },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json().catch(()=> ({}));
-      if (!d?.ok || !d?.url) {
-        alert(d?.error || "Unable to start subscription.");
-        return;
-      }
-      try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
-    } catch {
-      alert("Network error. Please try again.");
-    }
+    const r = await fetch(`${API}/memberships/subscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(()=> ({}));
+    if (!d?.ok || !d?.url) { alert(d?.error || "Unable to start subscription."); return; }
+    try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
   function go() {
     if (!svc) return alert("Please choose a service.");
     if (svc === "standard_membership" || svc === "premium_membership") {
+      // Membership: go straight to Stripe subscription (no add-ons)
       subscribeNow(svc);
       return;
     }
+    // Normal single booking: allow only if not using credits
     setState((s) => ({
       ...s,
       service_key: svc,
-      addons,
+      addons: usingCredits ? [] : addons,
       selectedDayKey: null,
       selectedSlot: null,
-      first_time: firstTime
+      first_time: firstTime,
+      step: "calendar",
     }));
     setTimeout(reportHeight, 60);
-    onNext();
   }
 
   const toggleWax    = () => setAddons((arr) => (arr.includes("wax")    ? arr.filter((x) => x !== "wax")    : [...arr, "wax"]));
   const togglePolish = () => setAddons((arr) => (arr.includes("polish") ? arr.filter((x) => x !== "polish") : [...arr, "polish"]));
-
-  const creditNoteExterior = state.credits?.exterior > 0 ? "Use 1 credit" : "";
-  const creditNoteFull     = state.credits?.full > 0 ? "Use 1 credit" : "";
 
   return (
     <div className="gm page-section gm-booking wrap">
@@ -239,10 +194,10 @@ function Services({ state, setState, onNext, cfg }) {
         <div className="gm cards">
           <ServiceCard title={sCfg.exterior?.name || "Exterior Detail"}
             price={effPrice("exterior")} strike={firstTime ? basePrice("exterior") : undefined}
-            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} note={creditNoteExterior}/>
+            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} />
           <ServiceCard title={sCfg.full?.name || "Full Detail"}
             price={effPrice("full")} strike={firstTime ? basePrice("full") : undefined}
-            selected={svc==="full"} onClick={()=>setSvc("full")} note={creditNoteFull}/>
+            selected={svc==="full"} onClick={()=>setSvc("full")} />
           <ServiceCard title={sCfg.standard_membership?.name || "Standard Membership (2 Exterior)"}
             price={effPrice("standard_membership")} strike={firstTime ? basePrice("standard_membership") : undefined}
             selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} />
@@ -251,20 +206,27 @@ function Services({ state, setState, onNext, cfg }) {
             selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
         </div>
 
-        <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
-        <div className="gm addon-benefits two-col">
-          <AddonCard title={aCfg.wax?.name || "Ceramic Wax"}
-            price={typeof aCfg.wax?.price === "number" ? aCfg.wax.price : DEFAULT_ADDONS.wax}
-            desc="Adds gloss and water beading. Light protection between washes."
-            align="left" selected={addons.includes("wax")} onToggle={toggleWax} />
-          <AddonCard title={aCfg.polish?.name || "Hand Polish"}
-            price={typeof aCfg.polish?.price === "number" ? aCfg.polish.price : DEFAULT_ADDONS.polish}
-            desc="Hand-finished shine. Softens light marks and brightens the paint."
-            align="right" selected={addons.includes("polish")} onToggle={togglePolish} />
-        </div>
+        {/* Add-ons only when NOT choosing membership and NOT using credits */}
+        {!(svc==="standard_membership" || svc==="premium_membership" || usingCredits) && (
+          <>
+            <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
+            <div className="gm addon-benefits two-col">
+              <AddonCard title={aCfg.wax?.name || "Ceramic Wax"}
+                price={typeof aCfg.wax?.price === "number" ? aCfg.wax.price : DEFAULT_ADDONS.wax}
+                desc="Adds gloss and water beading. Light protection between washes."
+                align="left" selected={addons.includes("wax")} onToggle={toggleWax} />
+              <AddonCard title={aCfg.polish?.name || "Hand Polish"}
+                price={typeof aCfg.polish?.price === "number" ? aCfg.polish.price : DEFAULT_ADDONS.polish}
+                desc="Hand-finished shine. Softens light marks and brightens the paint."
+                align="right" selected={addons.includes("polish")} onToggle={togglePolish} />
+            </div>
+          </>
+        )}
 
         <div className="gm actions space bottom-stick">
-          <PrimaryButton onClick={go}>{(svc==="standard_membership"||svc==="premium_membership") ? "Subscribe" : "See times"}</PrimaryButton>
+          <PrimaryButton onClick={go}>
+            {(svc==="standard_membership"||svc==="premium_membership") ? "Subscribe" : "Continue"}
+          </PrimaryButton>
         </div>
       </div>
     </div>
@@ -319,7 +281,8 @@ function Calendar({ state, setState }) {
 
   function pickDay(k){
     if (!k) return;
-    const hasAny = Array.isArray(daysMap[k]) && daysMap[k].some(s => s.available);
+    const arr = daysMap[k] || [];
+    const hasAny = Array.isArray(arr) && arr.some(s => s.available);
     if (!hasAny) return;
     setState((s)=> ({ ...s, selectedDayKey: k, selectedSlot: null, step: "times" }));
   }
@@ -462,41 +425,28 @@ function Confirm({ state, setState }) {
     if (!state.customer || !state.service_key) return;
 
     if (usingCredit) {
-      if (!state.token) {
-        alert("Please log in to use your credits.");
-        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
-        return;
-      }
+      // Enforce: no add-ons when using membership credits
       const payload = {
         service_key: state.service_key,
         slot: state.selectedSlot,
-        addons: state.addons || [],
+        addons: [], // force empty
         customer: state.customer,
         origin: window.location.origin
       };
+      if (!state.token) {
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        return;
+      }
       try {
         const r = await fetch(`${API}/credits/book-with-credit`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${state.token}`
-          },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` },
           body: JSON.stringify(payload)
         });
         const d = await r.json().catch(()=> ({}));
-        if (!d?.ok) {
-          alert(d?.error || "Credit booking failed");
-          return;
-        }
-        if (d.url) {
-          try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
-          return;
-        }
-        if (d.booked) {
-          setState(s=> ({ ...s, step: "thankyou" }));
-          setTimeout(reportHeight, 60);
-          return;
-        }
+        if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
+        if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; }
+        if (d.booked) { setState(s=> ({ ...s, step: "thankyou" })); setTimeout(reportHeight, 60); return; }
         alert("Unexpected response.");
       } catch {
         alert("Network error. Please try again.");
@@ -504,6 +454,7 @@ function Confirm({ state, setState }) {
       return;
     }
 
+    // Normal paid booking
     const payload = {
       customer: state.customer,
       has_tap: true,
@@ -544,7 +495,10 @@ function Confirm({ state, setState }) {
               <div className="gm card-title">Booking</div>
               <div style={{ fontWeight: 500, marginBottom: 6 }}>{(state.config?.services?.[state.service_key]?.name) || state.service_key}</div>
               {slotLine}
-              {!!(state.addons || []).length && (
+              {!!(state.addons || []).length && !(
+                (state.service_key === "exterior" && (state.credits?.exterior || 0) > 0) ||
+                (state.service_key === "full"     && (state.credits?.full     || 0) > 0)
+              ) && (
                 <div style={{ marginTop: 6 }}>
                   <div style={{ fontWeight: 500 }}>Add-ons</div>
                   <div>{state.addons.map((k)=> (state.config?.addons?.[k]?.name || k)).join(", ")}</div>
@@ -557,8 +511,8 @@ function Confirm({ state, setState }) {
             <div className="gm card-title">Amount due</div>
             {usingCredit ? (
               <>
-                <div className="gm total">{fmtGBP((state.addons||[]).reduce((s,k)=> s + (typeof addonsCfg[k]?.price === "number" ? addonsCfg[k].price : (DEFAULT_ADDONS[k] || 0)), 0))}</div>
-                <div className="gm muted" style={{marginTop:6}}>Service paid with 1 credit</div>
+                <div className="gm total">{fmtGBP(0)}</div>
+                <div className="gm muted" style={{marginTop:6}}>Service paid with 1 membership credit</div>
               </>
             ) : firstTime ? (
               <div className="gm price-row big">
@@ -608,10 +562,15 @@ function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const token0 = localStorage.getItem('GM_TOKEN') || "";
 
-  // Always gate on auth, unless returning from success redirects.
+  // Decide initial step:
+  // - Returning from Stripe payment: ?paid=1 → Thank You
+  // - Returning from subscription: ?sub=1 → Subscription Success
+  // - Logged-in users: go straight to Services (App will auto-skip to Calendar if credits exist)
+  // - Otherwise show Auth Gate
   let initialStep = "auth_gate";
   if (urlParams.get("paid")) initialStep = "thankyou";
   else if (urlParams.get("sub")) initialStep = "sub_success";
+  else if (token0) initialStep = "services";
 
   const [state, setState] = React.useState({
     step: initialStep,
@@ -630,32 +589,60 @@ function App(){
       .finally(()=> setTimeout(reportHeight,60));
   },[]);
 
-  // If authenticated, fetch profile & credits and pre-fill details (do NOT auto-advance from auth_gate)
+  // If authenticated, fetch profile & credits and auto-route:
+  // - if credits exist, infer service (full > exterior) and go directly to Calendar
+  // - else remain on Services
   React.useEffect(() => {
     if (!state.token) return;
     fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${state.token}` } })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(d => {
-        if (d.ok && d.user) {
-          const user = d.user;
-          const customer = {
-            name: user.name || "",
-            phone: user.phone || "",
-            email: user.email || "",
-            street: user.street || "",
-            postcode: user.postcode || "",
-          };
-          setState(s => ({ ...s, user, credits: d.credits || { exterior:0, full:0 }, customer }));
+        if (!(d.ok && d.user)) return;
+        const user = d.user;
+        const customer = {
+          name: user.name || "",
+          phone: user.phone || "",
+          email: user.email || "",
+          street: user.street || "",
+          postcode: user.postcode || "",
+        };
+        const credits = d.credits || { exterior:0, full:0 };
+
+        // Decide path
+        if (state.step !== "thankyou" && state.step !== "sub_success") {
+          if ((credits.full||0) > 0 || (credits.exterior||0) > 0) {
+            const inferred = (credits.full||0) > 0 ? "full" : "exterior";
+            setState(s => ({
+              ...s,
+              user, credits, customer,
+              service_key: inferred,
+              addons: [],               // disallow add-ons with credits
+              step: "calendar"
+            }));
+            return;
+          } else {
+            setState(s => ({ ...s, user, credits, customer, step: "services" }));
+            return;
+          }
+        } else {
+          // On thankyou/sub_success, just store profile
+          setState(s => ({ ...s, user, credits, customer }));
         }
       })
       .catch(()=>{/* non-fatal */})
       .finally(()=> setTimeout(reportHeight,60));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.token]);
 
-  if (state.step === "auth_gate")   return <AuthGate state={state} setState={setState} />;
+  if (!state.token && state.step === "auth_gate") return <AuthGate />;
   if (state.step === "thankyou")    return <ThankYou />;
-  if (state.step === "sub_success") return <SubSuccess onBook={()=> setState(s=> ({ ...s, step:"services" }))} />;
-  if (state.step === "services")    return <Services state={state} setState={setState} cfg={state.config||{}} onNext={()=> setState(s=> ({ ...s, step:"calendar" }))} />;
+  if (state.step === "sub_success") return <SubSuccess onBook={()=>{
+    // After subscription, we expect credits soon; send to Services, the auth/me effect will auto-skip to Calendar when credits appear.
+    setState(s=> ({ ...s, step:"services" }));
+  }} />;
+  if (state.step === "services")    return <Services state={state} setState={setState} cfg={state.config||{}} onNext={()=>{
+    setState(s=> ({ ...s, step: "calendar" }));
+  }} />;
   if (state.step === "calendar")    return <Calendar state={state} setState={setState} />;
   if (state.step === "times")       return <Times    state={state} setState={setState} />;
   if (state.step === "confirm")     return <Confirm  state={state} setState={setState} />;
