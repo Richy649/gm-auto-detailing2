@@ -3,51 +3,40 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Register • GM Auto Detailing</title>
+    <title>Create account • GM Auto Detailing</title>
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f3efe8; margin:0; padding:20px; }
-      .card { max-width:480px; margin:20px auto; background:#fff; border:1px solid #e3e0d7; border-radius:12px; padding:16px; }
+      .card { max-width:520px; margin:20px auto; background:#fff; border:1px solid #e3e0d7; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
       .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
       .row { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
       input { padding:10px 12px; border:1px solid #ddd; border-radius:10px; font-size:16px; }
       button { padding:10px 14px; border-radius:10px; border:0; background:#222; color:#fff; font-weight:700; cursor:pointer; }
       .muted { color:#666; font-size:14px; }
-      .err { color:#a00; margin-top:8px; }
+      .logo { display:block; width:160px; margin:6px auto 12px; }
       @media (max-width:680px){ .grid{ grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
-    <div id="form" class="card">
-      <h2>Create account</h2>
-      <div class="row"><label>Email</label><input id="email" type="email" autocomplete="email"/></div>
-      <div class="row"><label>Password</label><input id="password" type="password" autocomplete="new-password"/></div>
+    <div class="card">
+      <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
+      <h2 style="text-align:center;margin-top:0">Create account</h2>
+      <div class="row"><label>Email</label><input id="email" type="email" autocomplete="email" /></div>
+      <div class="row"><label>Password</label><input id="password" type="password" autocomplete="new-password" /></div>
       <div class="grid">
-        <div class="row"><label>Name</label><input id="name" autocomplete="name"/></div>
-        <div class="row"><label>Phone</label><input id="phone" autocomplete="tel"/></div>
+        <div class="row"><label>Name</label><input id="name" autocomplete="name" /></div>
+        <div class="row"><label>Phone</label><input id="phone" autocomplete="tel" /></div>
       </div>
       <div class="grid">
-        <div class="row"><label>Street</label><input id="street" autocomplete="address-line1"/></div>
-        <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code"/></div>
+        <div class="row"><label>Street</label><input id="street" autocomplete="address-line1" /></div>
+        <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code" /></div>
       </div>
       <button id="go">Register</button>
-      <p class="muted">Already have an account? <a href="/login.html">Login</a></p>
-      <div id="err" class="err" style="display:none;"></div>
+      <p class="muted" style="text-align:center;margin-top:10px;">Already have an account? <a href="/login.html">Login</a></p>
     </div>
-
-    <div id="done" class="card" style="display:none; text-align:center;">
-      <h2>Account created</h2>
-      <p class="muted">Thank you. Please sign in to continue.</p>
-      <button id="toLogin">Go to Login</button>
-    </div>
-
     <script>
-      const API = 'https://gm-auto-detailing2.onrender.com';
-      const errBox = document.getElementById('err');
-      const form = document.getElementById('form');
-      const done = document.getElementById('done');
-
+      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
+        ? 'https://gm-auto-detailing2.onrender.com' : '';
       document.getElementById('go').onclick = async () => {
-        errBox.style.display = 'none';
         const payload = {
           email: document.getElementById('email').value.trim(),
           password: document.getElementById('password').value,
@@ -56,27 +45,16 @@
           street: document.getElementById('street').value.trim(),
           postcode: document.getElementById('postcode').value.trim(),
         };
-        try {
-          const r = await fetch(`${API}/api/auth/register`, {
-            method:'POST', headers:{'Content-Type':'application/json'},
-            body: JSON.stringify(payload)
-          });
-          const data = await r.json();
-          if (data.ok) {
-            // Do NOT auto-login. Show thank you, then push to login.
-            form.style.display = 'none';
-            done.style.display = 'block';
-          } else {
-            errBox.textContent = data.error || 'Register failed';
-            errBox.style.display = 'block';
-          }
-        } catch (e) {
-          errBox.textContent = 'Network error';
-          errBox.style.display = 'block';
-        }
-      };
-      document.getElementById('toLogin').onclick = ()=> {
-        try { window.top.location.href = '/login.html'; } catch { window.location.href = '/login.html'; }
+        const r = await fetch(`${API}/api/auth/register`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        const data = await r.json();
+        if (data.ok) {
+          localStorage.setItem('GM_TOKEN', data.token);
+          // show a quick thank you, then go through the gate into services
+          location.href = '/?afterLogin=1';
+        } else { alert(data.error || 'Register failed'); }
       };
     </script>
   </body>
