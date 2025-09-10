@@ -1,17 +1,17 @@
 {
-  "name": "gm-booking-backend",
-  "version": "1.0.0",
+  "name": "gm-backend",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20.0.0" },
+  "engines": { "node": ">=20" },
   "scripts": {
     "start": "node src/server.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "stripe": "^14.0.0",
-    "googleapis": "140.0.1",
-    "pg": "^8.12.0"
+    "cors": "^2.8.5",
+    "pg": "^8.11.5",
+    "stripe": "^16.6.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2"
   }
 }
