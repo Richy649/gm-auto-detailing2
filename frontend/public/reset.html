@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Reset password • GM Auto Detailing</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f3efe8; margin:0; padding:20px; }
+      .card { max-width:480px; margin:20px auto; background:#fff; border:1px solid #e3e0d7; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+      .row { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
+      input { padding:10px 12px; border:1px solid #ddd; border-radius:10px; font-size:16px; }
+      button { padding:10px 14px; border-radius:10px; border:0; background:#222; color:#fff; font-weight:700; cursor:pointer; }
+      .muted { color:#666; font-size:14px; }
+      .logo { display:block; width:160px; margin:6px auto 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
+      <h2 style="text-align:center;margin-top:0">Reset password</h2>
+      <div id="req">
+        <div class="row"><label>Your account email</label><input id="email" type="email" autocomplete="email"></div>
+        <button id="send">Email me a reset link</button>
+        <p class="muted">If this email exists, we’ll send a reset link. Check your inbox and spam folder.</p>
+        <div id="dev" class="muted"></div>
+      </div>
+      <div id="perform" style="display:none;">
+        <div class="row"><label>New password</label><input id="newp" type="password" autocomplete="new-password"></div>
+        <button id="doreset">Set new password</button>
+      </div>
+      <div style="text-align:center;margin-top:10px;"><button onclick="location.href='/'">Back</button></div>
+    </div>
+    <script>
+      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
+        ? 'https://gm-auto-detailing2.onrender.com' : '';
+      const url = new URL(location.href);
+      const token = url.searchParams.get('token');
+
+      const req = document.getElementById('req');
+      const perf = document.getElementById('perform');
+
+      if (token) { req.style.display='none'; perf.style.display='block'; }
+
+      document.getElementById('send').onclick = async () => {
+        const email = document.getElementById('email').value.trim();
+        const r = await fetch(`${API}/api/auth/request-reset`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ email })
+        });
+        const d = await r.json();
+        if (d.ok) {
+          alert('If the email exists, a reset link has been sent.');
+          if (d.reset_link) {
+            const dev = document.getElementById('dev');
+            dev.innerHTML = `DEV reset link: <a href="${d.reset_link}">${d.reset_link}</a>`;
+          }
+        } else {
+          alert(d.error || 'Unable to start reset');
+        }
+      };
+
+      document.getElementById('doreset').onclick = async () => {
+        const new_password = document.getElementById('newp').value;
+        const r = await fetch(`${API}/api/auth/perform-reset`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ token, new_password })
+        });
+        const d = await r.json();
+        if (d.ok) {
+          alert('Password has been reset. Please login.');
+          location.href = '/login.html';
+        } else {
+          alert(d.error || 'Reset failed');
+        }
+      };
+    </script>
+  </body>
+</html>
