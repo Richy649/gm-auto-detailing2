@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./calendar.css";
 
 /* ================== CONFIG ================== */
-const API_ROOT = "https://gm-auto-detailing2.onrender.com"; // backend origin
+const API_ROOT = "https://gm-auto-detailing2.onrender.com"; // Render backend
 const API = `${API_ROOT}/api`;
 const TZ = "Europe/London";
 const CURRENCY = "£";
@@ -79,17 +79,24 @@ function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
   );
 }
 
-/* ================== AUTH GATE (only shown if no token) ================== */
-function AuthGate() {
-  React.useEffect(()=> setTimeout(reportHeight,60),[]);
+/* ================== AUTH GATE (always first) ================== */
+function AuthGate({ onReadyWithProfile }) {
+  React.useEffect(() => {
+    setTimeout(reportHeight, 60);
+    // If a token is already present, immediately proceed by loading profile and moving on.
+    const token = localStorage.getItem("GM_TOKEN");
+    if (token) onReadyWithProfile(token);
+  }, [onReadyWithProfile]);
+
   const goLogin  = () => { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } };
   const goRegister = () => { try { window.top.location.href = "/register.html"; } catch { window.location.href = "/register.html"; } };
+
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider" style={{textAlign:"center"}}>
-        <div className="gm h2 center">Sign in to book or subscribe</div>
+        <div className="gm h2 center">Login or create an account</div>
         <div className="gm muted" style={{marginBottom:10}}>
-          You will use your account to manage bookings and membership credits.
+          Use your account to manage bookings and your membership credits.
         </div>
         <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
           <PrimaryButton onClick={goLogin}>Login</PrimaryButton>
@@ -101,15 +108,14 @@ function AuthGate() {
 }
 
 /* ================== SERVICES ================== */
-function Services({ state, setState, onNext, cfg }) {
+function Services({ state, setState, cfg }) {
   const [svc, setSvc] = React.useState(state.service_key || "");
-  const [addons, setAddons] = React.useState([]); // start empty; may be disabled entirely
+  const [addons, setAddons] = React.useState([]);
   const [firstTime, setFirstTime] = React.useState(false);
 
   const sCfg = cfg.services || {};
   const aCfg = cfg.addons || {};
 
-  // Detect first-time for discount (only matters when NOT using credits and NOT choosing membership)
   React.useEffect(() => {
     const { email, phone, street } = state.customer || {};
     if (!email && !phone && !street) return;
@@ -124,19 +130,16 @@ function Services({ state, setState, onNext, cfg }) {
 
   React.useEffect(() => { setTimeout(reportHeight, 60); }, [svc, addons]);
 
-  function basePrice(k){ return (typeof sCfg[k]?.price === "number") ? sCfg[k].price : (DEFAULT_PRICES[k] || 0); }
-  function effPrice(k){ return firstTime ? basePrice(k) * 0.5 : basePrice(k); }
+  const basePrice = (k)=> (typeof sCfg[k]?.price === "number") ? sCfg[k].price : (DEFAULT_PRICES[k] || 0);
+  const effPrice  = (k)=> firstTime ? basePrice(k) * 0.5 : basePrice(k);
 
-  // Business rule: if user has credits, we don't allow add-ons and we should NOT be here normally (App auto-routes to Calendar).
   const hasFullCredit = (state.credits?.full || 0) > 0;
   const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
   const usingCredits = hasFullCredit || hasExteriorCredit;
 
   async function subscribeNow(tierKey){
-    if (!state.token) {
-      try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
-      return;
-    }
+    const token = state.token;
+    if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
     const tier = tierKey === "standard_membership" ? "standard" : "premium";
     const payload = {
       tier,
@@ -149,13 +152,10 @@ function Services({ state, setState, onNext, cfg }) {
       },
       origin: window.location.origin,
     };
-    if (!payload.customer.email) {
-      alert("Your account is missing an email address. Please re-login or re-register.");
-      return;
-    }
+    if (!payload.customer.email) { alert("Your account is missing an email address."); return; }
     const r = await fetch(`${API}/memberships/subscribe`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
     const d = await r.json().catch(()=> ({}));
@@ -163,18 +163,16 @@ function Services({ state, setState, onNext, cfg }) {
     try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
-  function go() {
+  function continueFlow() {
     if (!svc) return alert("Please choose a service.");
     if (svc === "standard_membership" || svc === "premium_membership") {
-      // Membership: go straight to Stripe subscription (no add-ons)
-      subscribeNow(svc);
+      subscribeNow(svc); // memberships skip add-ons and jump to Stripe
       return;
     }
-    // Normal single booking: allow only if not using credits
     setState((s) => ({
       ...s,
       service_key: svc,
-      addons: usingCredits ? [] : addons,
+      addons: usingCredits ? [] : addons, // disallow add-ons with credits
       selectedDayKey: null,
       selectedSlot: null,
       first_time: firstTime,
@@ -206,7 +204,7 @@ function Services({ state, setState, onNext, cfg }) {
             selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
         </div>
 
-        {/* Add-ons only when NOT choosing membership and NOT using credits */}
+        {/* Add-ons only if NOT membership and NOT using credits */}
         {!(svc==="standard_membership" || svc==="premium_membership" || usingCredits) && (
           <>
             <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -224,7 +222,7 @@ function Services({ state, setState, onNext, cfg }) {
         )}
 
         <div className="gm actions space bottom-stick">
-          <PrimaryButton onClick={go}>
+          <PrimaryButton onClick={continueFlow}>
             {(svc==="standard_membership"||svc==="premium_membership") ? "Subscribe" : "Continue"}
           </PrimaryButton>
         </div>
@@ -281,12 +279,10 @@ function Calendar({ state, setState }) {
 
   function pickDay(k){
     if (!k) return;
-    const arr = daysMap[k] || [];
-    const hasAny = Array.isArray(arr) && arr.some(s => s.available);
-    if (!hasAny) return;
+    const arr = (daysMap[k] || []);
+    if (!arr.some(s => s.available)) return;
     setState((s)=> ({ ...s, selectedDayKey: k, selectedSlot: null, step: "times" }));
   }
-
   function dayHasChosenTime(k){
     if (!state.selectedSlot) return false;
     return keyFromISO(state.selectedSlot.start_iso) === k;
@@ -425,33 +421,26 @@ function Confirm({ state, setState }) {
     if (!state.customer || !state.service_key) return;
 
     if (usingCredit) {
-      // Enforce: no add-ons when using membership credits
+      // Disallow add-ons with credits
+      const token = state.token;
+      if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
       const payload = {
         service_key: state.service_key,
         slot: state.selectedSlot,
-        addons: [], // force empty
+        addons: [],
         customer: state.customer,
         origin: window.location.origin
       };
-      if (!state.token) {
-        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
-        return;
-      }
-      try {
-        const r = await fetch(`${API}/credits/book-with-credit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.token}` },
-          body: JSON.stringify(payload)
-        });
-        const d = await r.json().catch(()=> ({}));
-        if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
-        if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; }
-        if (d.booked) { setState(s=> ({ ...s, step: "thankyou" })); setTimeout(reportHeight, 60); return; }
-        alert("Unexpected response.");
-      } catch {
-        alert("Network error. Please try again.");
-      }
-      return;
+      const r = await fetch(`${API}/credits/book-with-credit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload)
+      });
+      const d = await r.json().catch(()=> ({}));
+      if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
+      if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; }
+      if (d.booked) { setState(s=> ({ ...s, step: "thankyou" })); setTimeout(reportHeight, 60); return; }
+      alert("Unexpected response."); return;
     }
 
     // Normal paid booking
@@ -533,7 +522,7 @@ function Confirm({ state, setState }) {
   );
 }
 
-/* ================== THANK YOU ================== */
+/* ================== THANK YOU / SUB SUCCESS ================== */
 function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); return (
   <div className="gm page-section gm-booking wrap"><div className="gm panel wider" style={{textAlign:"center"}}>
     <div className="gm h2 center">Thanks for your booking!</div>
@@ -541,7 +530,6 @@ function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); retur
   </div></div>
 ); }
 
-/* ================== SUBSCRIPTION SUCCESS ================== */
 function SubSuccess({ onBook }) {
   React.useEffect(()=> setTimeout(reportHeight,60),[]);
   return (
@@ -557,20 +545,15 @@ function SubSuccess({ onBook }) {
   );
 }
 
-/* ================== APP FLOW ================== */
+/* ================== APP ================== */
 function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const token0 = localStorage.getItem('GM_TOKEN') || "";
 
-  // Decide initial step:
-  // - Returning from Stripe payment: ?paid=1 → Thank You
-  // - Returning from subscription: ?sub=1 → Subscription Success
-  // - Logged-in users: go straight to Services (App will auto-skip to Calendar if credits exist)
-  // - Otherwise show Auth Gate
+  // Always start on the auth gate unless returning from Stripe states
   let initialStep = "auth_gate";
   if (urlParams.get("paid")) initialStep = "thankyou";
-  else if (urlParams.get("sub")) initialStep = "sub_success";
-  else if (token0) initialStep = "services";
+  if (urlParams.get("sub"))  initialStep = "sub_success";
 
   const [state, setState] = React.useState({
     step: initialStep,
@@ -589,15 +572,12 @@ function App(){
       .finally(()=> setTimeout(reportHeight,60));
   },[]);
 
-  // If authenticated, fetch profile & credits and auto-route:
-  // - if credits exist, infer service (full > exterior) and go directly to Calendar
-  // - else remain on Services
-  React.useEffect(() => {
-    if (!state.token) return;
-    fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${state.token}` } })
+  // Centralized profile loader + routing after login or refresh
+  const loadProfileAndRoute = React.useCallback((token) => {
+    fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then(d => {
-        if (!(d.ok && d.user)) return;
+        if (!(d.ok && d.user)) throw new Error("profile_failed");
         const user = d.user;
         const customer = {
           name: user.name || "",
@@ -607,42 +587,39 @@ function App(){
           postcode: user.postcode || "",
         };
         const credits = d.credits || { exterior:0, full:0 };
+        const hasFull = (credits.full||0) > 0;
+        const hasExt  = (credits.exterior||0) > 0;
 
-        // Decide path
-        if (state.step !== "thankyou" && state.step !== "sub_success") {
-          if ((credits.full||0) > 0 || (credits.exterior||0) > 0) {
-            const inferred = (credits.full||0) > 0 ? "full" : "exterior";
-            setState(s => ({
-              ...s,
-              user, credits, customer,
-              service_key: inferred,
-              addons: [],               // disallow add-ons with credits
-              step: "calendar"
-            }));
-            return;
-          } else {
-            setState(s => ({ ...s, user, credits, customer, step: "services" }));
-            return;
-          }
+        if (hasFull || hasExt) {
+          const inferred = hasFull ? "full" : "exterior";
+          setState(s => ({
+            ...s,
+            token, user, credits, customer,
+            service_key: inferred,
+            addons: [],               // no add-ons with credits
+            step: "calendar"
+          }));
         } else {
-          // On thankyou/sub_success, just store profile
-          setState(s => ({ ...s, user, credits, customer }));
+          setState(s => ({ ...s, token, user, credits, customer, step: "services" }));
         }
       })
-      .catch(()=>{/* non-fatal */})
+      .catch(()=> {
+        // If token is bad, drop to auth_gate
+        setState(s => ({ ...s, token: "", step: "auth_gate" }));
+      })
       .finally(()=> setTimeout(reportHeight,60));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.token]);
+  }, []);
 
-  if (!state.token && state.step === "auth_gate") return <AuthGate />;
+  // If we land on the app with a token and we are at the auth gate (e.g. back from login.html), fetch and route
+  React.useEffect(() => {
+    if (state.step === "auth_gate" && state.token) loadProfileAndRoute(state.token);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.step, state.token]);
+
+  if (state.step === "auth_gate")   return <AuthGate onReadyWithProfile={loadProfileAndRoute} />;
   if (state.step === "thankyou")    return <ThankYou />;
-  if (state.step === "sub_success") return <SubSuccess onBook={()=>{
-    // After subscription, we expect credits soon; send to Services, the auth/me effect will auto-skip to Calendar when credits appear.
-    setState(s=> ({ ...s, step:"services" }));
-  }} />;
-  if (state.step === "services")    return <Services state={state} setState={setState} cfg={state.config||{}} onNext={()=>{
-    setState(s=> ({ ...s, step: "calendar" }));
-  }} />;
+  if (state.step === "sub_success") return <SubSuccess onBook={() => setState(s=> ({ ...s, step:"services" }))} />;
+  if (state.step === "services")    return <Services state={state} setState={setState} cfg={state.config||{}} />;
   if (state.step === "calendar")    return <Calendar state={state} setState={setState} />;
   if (state.step === "times")       return <Times    state={state} setState={setState} />;
   if (state.step === "confirm")     return <Confirm  state={state} setState={setState} />;
