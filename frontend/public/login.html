@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Login • GM Auto Detailing</title>
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#f3efe8; margin:0; padding:20px; }
+      body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial; background:#f3efe8; margin:0; padding:20px; }
       .card { max-width:420px; margin:20px auto; background:#fff; border:1px solid #e3e0d7; border-radius:12px; padding:16px; }
       .row { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; }
       input { padding:10px 12px; border:1px solid #ddd; border-radius:10px; font-size:16px; }
@@ -27,13 +27,12 @@
       </div>
       <button id="go">Login</button>
       <div id="err" class="err"></div>
-      <p class="muted">No account? <a href="/register.html">Register</a></p>
+      <p class="muted">No account? <a href="/register.html">Create one</a></p>
     </div>
     <script>
-      // Use Render in production; allow same-origin for local full-stack dev.
       const API_BASE =
         (location.hostname === "localhost" || location.hostname === "127.0.0.1")
-          ? "" // same-origin, e.g. http://localhost:5173 proxy or same backend host
+          ? ""
           : "https://gm-auto-detailing2.onrender.com";
 
       document.getElementById('go').onclick = async () => {
@@ -50,8 +49,8 @@
           const data = await r.json();
           if (data.ok && data.token) {
             localStorage.setItem('GM_TOKEN', data.token);
-            // Go straight back to app root. The app will route based on credits.
-            location.href = '/';
+            const dest = '/';
+            try { window.top.location.href = dest; } catch { window.location.href = dest; }
           } else {
             errEl.textContent = data.error || 'Login failed';
           }
