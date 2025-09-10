@@ -1,5 +1,4 @@
 // backend/src/gcal.js
-import { google } from "googleapis";
 import { createHash } from "crypto";
 
 const TZ = "Europe/London";
@@ -9,12 +8,36 @@ const cfg = {
   calId: process.env.GCAL_CALENDAR_ID,
 };
 
+let googleCached = null;
 let calendar = null;
 
-function ready() { return Boolean(cfg.email && cfg.key && cfg.calId); }
-function client() {
-  if (!ready()) return null;
+function ready() {
+  return Boolean(cfg.email && cfg.key && cfg.calId);
+}
+
+async function getGoogle() {
+  if (googleCached) return googleCached;
+  try {
+    // Lazy import so the process does not crash if the module is missing
+    const mod = await import("googleapis");
+    googleCached = mod.google;
+    return googleCached;
+  } catch (e) {
+    console.warn("[gcal] 'googleapis' not available; calendar sync disabled.");
+    return null;
+  }
+}
+
+async function client() {
+  if (!ready()) {
+    console.warn("[gcal] not configured; skipping");
+    return null;
+  }
   if (calendar) return calendar;
+
+  const google = await getGoogle();
+  if (!google) return null;
+
   const jwt = new google.auth.JWT({
     email: cfg.email,
     key: cfg.key,
@@ -23,15 +46,17 @@ function client() {
   calendar = google.calendar({ version: "v3", auth: jwt });
   return calendar;
 }
+
 function eventId(sessionId, index) {
   // Make a-z0-9 only, start with a letter, >= 5 chars
-  const hex = createHash("sha1").update(String(sessionId) + ":" + String(index)).digest("hex"); // a-f0-9
-  return `g${hex.slice(0, 23)}${index}`; // e.g. g3f2e…7
+  const hex = createHash("sha1").update(String(sessionId) + ":" + String(index)).digest("hex");
+  return `g${hex.slice(0, 23)}${index}`;
 }
 
 export async function createCalendarEvents(sessionId, items = []) {
-  if (!ready()) { console.warn("[gcal] not configured; skipping"); return; }
-  const api = client();
+  const api = await client();
+  if (!api) return; // not configured or module missing
+
   for (let i = 0; i < items.length; i++) {
     const evId = eventId(sessionId, i + 1);
     const it = items[i];
