@@ -74,35 +74,6 @@ function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
   );
 }
 
-/* ================== AUTH GATE ================== */
-function AuthGate({ onContinueIfSignedIn }) {
-  React.useEffect(() => setTimeout(reportHeight, 60), []);
-
-  const login = () => { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } };
-  const register = () => { try { window.top.location.href = "/register.html"; } catch { window.location.href = "/register.html"; } };
-  const token = localStorage.getItem("GM_TOKEN") || "";
-
-  return (
-    <div className="gm page-section gm-booking wrap">
-      <div className="gm panel wider" style={{ textAlign: "center" }}>
-        <img src="/logo.png" alt="GM Auto Detailing" className="gm logo-big" style={{ margin: "8px auto 12px" }} />
-        <div className="gm h2 center">Login or create an account</div>
-        <div className="gm muted" style={{ marginBottom: 10 }}>
-          Manage bookings, membership credits, and your details.
-        </div>
-        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-          <PrimaryButton onClick={login}>Login</PrimaryButton>
-          <Button onClick={register}>Create account</Button>
-          {token ? <Button onClick={onContinueIfSignedIn}>Continue</Button> : null}
-        </div>
-        <div className="gm muted" style={{ marginTop: 8 }}>
-          Forgot your password? <a href="/reset.html">Reset it here</a>.
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ================== SERVICES ================== */
 function Services({ state, setState }) {
   const cfg = state.config || { services:{}, addons:{} };
@@ -499,7 +470,7 @@ function Confirm({ state, setState }) {
   );
 }
 
-/* ================== THANK YOU / SUB SUCCESS ================== */
+/* ================== THANK YOU / SUB SUCCESS (kept for redirects) ================== */
 function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); return (
   <div className="gm page-section gm-booking wrap"><div className="gm panel wider" style={{textAlign:"center"}}>
     <div className="gm h2 center">Thanks for your booking!</div>
@@ -507,29 +478,14 @@ function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); retur
   </div></div>
 ); }
 
-function SubSuccess({ onBook }) {
-  React.useEffect(()=> setTimeout(reportHeight,60),[]);
-  return (
-    <div className="gm page-section gm-booking wrap">
-      <div className="gm panel wider" style={{textAlign:"center"}}>
-        <div className="gm h2 center">Subscription active</div>
-        <div className="gm muted" style={{marginBottom:10}}>
-          Your monthly credits have been issued. You can book your visits now.
-        </div>
-        <PrimaryButton onClick={onBook}>Book now</PrimaryButton>
-      </div>
-    </div>
-  );
-}
-
-/* ================== APP ================== */
+/* ================== APP (NO WHITE GATE) ================== */
 function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const afterLogin = urlParams.get("afterLogin") === "1";
   const fromSub = urlParams.get("sub") === "1";
 
   const [state, setState] = React.useState({
-    step: fromSub ? "sub_success" : "auth_gate",
+    step: "loading",
     token: localStorage.getItem('GM_TOKEN') || "",
     user: null,
     credits: { exterior: 0, full: 0 },
@@ -538,7 +494,7 @@ function App(){
     availability:null, monthKey: toDateKey(new Date()).slice(0,7), config:null, first_time:false,
   });
 
-  // Load config
+  // Load config early
   React.useEffect(()=>{
     fetch(`${API}/config`).then(r=>r.json()).then(cfg=> setState(s=> ({...s, config:cfg})))
       .finally(()=> setTimeout(reportHeight,60));
@@ -561,56 +517,53 @@ function App(){
     return { user, customer, credits };
   }, []);
 
-  const continueIfSignedIn = React.useCallback(async () => {
-    try {
-      const token = state.token;
-      if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
-      const { user, customer, credits } = await loadProfile(token);
-      const hasFull = (credits.full||0) > 0;
-      const hasExt  = (credits.exterior||0) > 0;
-      if (hasFull || hasExt) {
-        const inferred = hasFull ? "full" : "exterior";
-        setState(s => ({ ...s, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
-      } else {
-        setState(s => ({ ...s, user, customer, credits, step: "services" }));
-      }
-    } catch {
-      setState(s => ({ ...s, token:"" })); // invalid token; stay on gate
-    }
-  }, [state.token, loadProfile]);
-
-  // If we have just returned from login (afterLogin=1), auto-advance now. Otherwise never auto-advance.
+  // Boot logic: if not returning from login, redirect to login.html.
   React.useEffect(() => {
-    if (state.step === "auth_gate" && afterLogin && state.token) continueIfSignedIn();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.step, afterLogin, state.token]);
-
-  const onBookAfterSub = React.useCallback(async () => {
-    try {
-      const token = state.token;
-      if (!token) { setState(s=> ({ ...s, step:"auth_gate" })); return; }
-      const { user, customer, credits } = await loadProfile(token);
-      const hasFull = (credits.full||0) > 0;
-      const hasExt  = (credits.exterior||0) > 0;
-      if (hasFull || hasExt) {
-        const inferred = hasFull ? "full" : "exterior";
-        setState(s => ({ ...s, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
-      } else {
-        // Credits not visible yet; let them pick service.
-        setState(s => ({ ...s, user, customer, credits, step: "services" }));
+    (async () => {
+      if (!afterLogin && !fromSub) {
+        // Always start at the login page (your requirement)
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        return;
       }
-    } catch {
-      setState(s=> ({ ...s, step:"auth_gate" }));
-    }
-  }, [state.token, loadProfile]);
 
-  if (state.step === "auth_gate")   return <AuthGate onContinueIfSignedIn={continueIfSignedIn} />;
-  if (state.step === "sub_success") return <SubSuccess onBook={onBookAfterSub} />;
-  if (state.step === "services")    return <Services state={state} setState={setState} />;
-  if (state.step === "calendar")    return <Calendar state={state} setState={setState} />;
-  if (state.step === "times")       return <Times    state={state} setState={setState} />;
-  if (state.step === "confirm")     return <Confirm  state={state} setState={setState} />;
-  if (state.step === "thankyou")    return <ThankYou />;
+      // Must have a token when coming back
+      const token = localStorage.getItem('GM_TOKEN') || "";
+      if (!token) {
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        return;
+      }
+
+      try {
+        const { user, customer, credits } = await loadProfile(token);
+
+        // If coming back from subscription success, try to route into calendar if credits exist
+        if (fromSub) {
+          const hasFull = (credits.full||0) > 0;
+          const hasExt  = (credits.exterior||0) > 0;
+          if (hasFull || hasExt) {
+            const inferred = hasFull ? "full" : "exterior";
+            setState(s => ({ ...s, token, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
+            return;
+          }
+        }
+
+        // Normal: go straight to Services (your requirement)
+        setState(s => ({ ...s, token, user, customer, credits, step: "services" }));
+      } catch {
+        // Token invalid → back to login
+        localStorage.removeItem('GM_TOKEN');
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (state.step === "loading")   return null; // short-lived; we immediately redirect or advance
+  if (state.step === "services")  return <Services state={state} setState={setState} />;
+  if (state.step === "calendar")  return <Calendar state={state} setState={setState} />;
+  if (state.step === "times")     return <Times    state={state} setState={setState} />;
+  if (state.step === "confirm")   return <Confirm  state={state} setState={setState} />;
+  if (state.step === "thankyou")  return <ThankYou />;
 
   return null;
 }
