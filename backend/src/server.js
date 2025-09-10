@@ -7,7 +7,6 @@ import authRoutes from "./auth.js";
 import creditsRoutes from "./credits.js";
 import { membershipRoutes, adminMembershipRoutes, membershipsWebhookHandler } from "./memberships.js";
 import { mountPayments } from "./payments.js";
-import { mountMigrationRoute } from "./migrations-temp.js";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
