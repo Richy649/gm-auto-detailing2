@@ -79,20 +79,50 @@ function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
   );
 }
 
-/* ================== AUTH GATE ================== */
-function AuthGate() {
+/* ================== AUTH GATE (always first) ================== */
+function AuthGate({ state, setState }) {
   React.useEffect(()=> setTimeout(reportHeight,60),[]);
+
   const goLogin  = () => { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } };
   const goRegister = () => { try { window.top.location.href = "/register.html"; } catch { window.location.href = "/register.html"; } };
+
+  const logout = () => {
+    localStorage.removeItem("GM_TOKEN");
+    setState(s=> ({
+      ...s,
+      token: "",
+      user: null,
+      credits: { exterior: 0, full: 0 },
+      customer: { },
+      step: "auth_gate"
+    }));
+    setTimeout(reportHeight,60);
+  };
+
+  const continueToServices = () => setState(s=> ({ ...s, step: "services" }));
+
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider" style={{textAlign:"center"}}>
         <div className="gm h2 center">Sign in to book or subscribe</div>
-        <div className="gm muted" style={{marginBottom:10}}>You’ll use your account to manage bookings and membership credits.</div>
-        <div style={{display:"flex", gap:10, justifyContent:"center"}}>
-          <PrimaryButton onClick={goLogin}>Login</PrimaryButton>
-          <Button onClick={goRegister}>Create account</Button>
+        <div className="gm muted" style={{marginBottom:10}}>
+          You’ll use your account to manage bookings and membership credits.
         </div>
+
+        {state.token && state.user ? (
+          <>
+            <div style={{margin:"8px 0"}}>Signed in as <strong>{state.user.email}</strong></div>
+            <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
+              <PrimaryButton onClick={continueToServices}>Continue</PrimaryButton>
+              <Button onClick={logout}>Logout</Button>
+            </div>
+          </>
+        ) : (
+          <div style={{display:"flex", gap:10, justifyContent:"center", flexWrap:"wrap"}}>
+            <PrimaryButton onClick={goLogin}>Login</PrimaryButton>
+            <Button onClick={goRegister}>Create account</Button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -125,8 +155,7 @@ function Services({ state, setState, onNext, cfg }) {
   function basePrice(k){ return (typeof sCfg[k]?.price === "number") ? sCfg[k].price : (DEFAULT_PRICES[k] || 0); }
   function effPrice(k){ return firstTime ? basePrice(k) * 0.5 : basePrice(k); }
 
-  // Strictly require authentication before allowing membership
-  const profileLoaded = !!(state.user && state.customer && (state.customer.email || state.user.email));
+  const profileLoaded = !!(state.user && (state.customer?.email || state.user.email));
 
   async function subscribeNow(tierKey){
     if (!state.token) {
@@ -240,10 +269,8 @@ function Services({ state, setState, onNext, cfg }) {
 
 /* ================== CALENDAR ================== */
 let reqCounter = 0;
-
-function Calendar({ state, setState, onBack, onGoTimes }) {
+function Calendar({ state, setState }) {
   const monthKey = state.monthKey;
-
   const todayKey = toDateKey(new Date());
   const plus1 = new Date(); plus1.setMonth(plus1.getMonth() + 1);
   const limitKey = toDateKey(plus1);
@@ -253,7 +280,6 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
   const canNext = monthKey < latestMonth;
 
   const daysMap = state.availability?.days || {};
-
   const [loading, setLoading] = React.useState(false);
   const [loadErr, setLoadErr] = React.useState(null);
 
@@ -291,8 +317,7 @@ function Calendar({ state, setState, onBack, onGoTimes }) {
     if (!k) return;
     const hasAny = Array.isArray(daysMap[k]) && daysMap[k].some(s => s.available);
     if (!hasAny) return;
-    setState((s)=> ({ ...s, selectedDayKey: k }));
-    onGoTimes?.();
+    setState((s)=> ({ ...s, selectedDayKey: k, step: "times" }));
   }
 
   function dayHasChosenTime(k){
@@ -579,10 +604,10 @@ function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const token0 = localStorage.getItem('GM_TOKEN') || "";
 
-  const initialStep =
-    urlParams.get("paid") ? "thankyou" :
-    urlParams.get("sub")  ? "sub_success" :
-    (token0 ? "services" : "auth_gate");
+  // Always gate on auth, regardless of token, unless arriving from success redirects.
+  let initialStep = "auth_gate";
+  if (urlParams.get("paid")) initialStep = "thankyou";
+  else if (urlParams.get("sub")) initialStep = "sub_success";
 
   const [state, setState] = React.useState({
     step: initialStep,
@@ -601,47 +626,34 @@ function App(){
       .finally(()=> setTimeout(reportHeight,60));
   },[]);
 
-  // If authenticated, fetch profile & credits and pre-fill details
+  // If authenticated, fetch profile & credits and pre-fill details (do NOT auto-advance from auth_gate)
   React.useEffect(() => {
     if (!state.token) return;
-    fetch(`${API}/auth/me`, {
-      headers: { Authorization: `Bearer ${state.token}` }
-    })
-    .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-    .then(d => {
-      if (d.ok && d.user) {
-        const user = d.user;
-        const customer = {
-          name: user.name || "",
-          phone: user.phone || "",
-          email: user.email || "",
-          street: user.street || "",
-          postcode: user.postcode || "",
-        };
-        setState(s => ({
-          ...s,
-          user,
-          credits: d.credits || { exterior:0, full:0 },
-          customer
-        }));
-        if (s.step === "auth_gate") {
-          // If they arrived with a token already, move into services.
-          setState(ss => ({ ...ss, step: "services" }));
+    fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${state.token}` } })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => {
+        if (d.ok && d.user) {
+          const user = d.user;
+          const customer = {
+            name: user.name || "",
+            phone: user.phone || "",
+            email: user.email || "",
+            street: user.street || "",
+            postcode: user.postcode || "",
+          };
+          setState(s => ({ ...s, user, credits: d.credits || { exterior:0, full:0 }, customer }));
         }
-      }
-    })
-    .catch(()=>{/* non-fatal */})
-    .finally(()=> setTimeout(reportHeight,60));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      })
+      .catch(()=>{/* non-fatal */})
+      .finally(()=> setTimeout(reportHeight,60));
   }, [state.token]);
 
   // Route to the correct screen
-  if (state.step === "auth_gate")   return <AuthGate />;
+  if (state.step === "auth_gate")   return <AuthGate state={state} setState={setState} />;
   if (state.step === "thankyou")    return <ThankYou />;
   if (state.step === "sub_success") return <SubSuccess onBook={()=> setState(s=> ({ ...s, step:"services" }))} />;
   if (state.step === "services")    return <Services state={state} setState={setState} cfg={state.config||{}} onNext={()=> setState(s=> ({ ...s, step:"calendar" }))} />;
-
-  if (state.step === "calendar")    return <Calendar state={state} setState={setState} onGoTimes={()=> setState(s=> ({ ...s, step:"times" }))} />;
+  if (state.step === "calendar")    return <Calendar state={state} setState={setState} />;
   if (state.step === "times")       return <Times    state={state} setState={setState} />;
   if (state.step === "confirm")     return <Confirm  state={state} setState={setState} />;
 
