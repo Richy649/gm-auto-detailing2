@@ -1,4 +1,3 @@
-// backend/src/memberships.js
 import Stripe from "stripe";
 import { Router } from "express";
 import { pool, saveBooking } from "./db.js";
@@ -147,7 +146,8 @@ export function membershipRoutes() {
         mode: "subscription",
         customer: stripeCustomerId,
         line_items: [{ price: eligible ? cfg.intro : cfg.full, quantity: 1 }],
-        success_url: `${(origin || process.env.PUBLIC_FRONTEND_ORIGIN)}/account?sub=1`,
+        // Return to root so the app can show a "Book now" CTA and route into the credit flow
+        success_url: `${(origin || process.env.PUBLIC_FRONTEND_ORIGIN)}/?sub=1`,
         cancel_url:  (origin || process.env.PUBLIC_FRONTEND_ORIGIN),
         metadata: { tier, user_id: String(u.id), intro_used: String(eligible) }
       });
@@ -192,7 +192,6 @@ export async function membershipsWebhookHandler(req, res) {
       case "checkout.session.completed": {
         const s = event.data.object;
 
-        // A) subscription flow
         if (s.mode === "subscription") {
           const user_id = Number(s.metadata?.user_id || 0);
           const tier = s.metadata?.tier;
@@ -212,7 +211,6 @@ export async function membershipsWebhookHandler(req, res) {
           break;
         }
 
-        // B) addons-only with credit (mode=payment, we stored metadata)
         if (s.mode === "payment" && s.metadata?.kind === "addons_only_with_credit") {
           const user_id = Number(s.metadata.user_id || 0);
           const service_key = s.metadata.service_key;
@@ -220,7 +218,6 @@ export async function membershipsWebhookHandler(req, res) {
           const end_iso = s.metadata.end_iso;
           const addons = JSON.parse(s.metadata.addons || "[]");
           const customer = JSON.parse(s.metadata.customer || "{}");
-          // Save the booking now (service was paid by credit; add-ons paid by this session)
           const bookingId = await saveBooking({
             stripe_session_id: s.id,
             service_key,
@@ -230,7 +227,6 @@ export async function membershipsWebhookHandler(req, res) {
             customer,
             has_tap: true
           });
-          // Debit 1 credit
           const service_type = service_key === "full" ? "full" : "exterior";
           await pool.query(
             `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason, related_booking_id)
@@ -245,11 +241,9 @@ export async function membershipsWebhookHandler(req, res) {
         const inv = event.data.object;
         if (!inv.subscription) break;
 
-        // find our sub/user
         const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
         if (!srow) break;
 
-        // Determine tier by price id at time of event
         const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
         const p = sub.items.data[0].price.id;
         const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
@@ -318,7 +312,6 @@ export async function membershipsWebhookHandler(req, res) {
       }
 
       default:
-        // ignore
         break;
     }
     res.json({ received: true });
