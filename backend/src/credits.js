@@ -3,7 +3,6 @@ import { Router } from "express";
 import Stripe from "stripe";
 import { pool, saveBooking } from "./db.js";
 import { authMiddleware } from "./auth.js";
-import { createCalendarEvents } from "./gcal.js";
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -22,21 +21,22 @@ async function availableCredits(user_id, service_type) {
 
 router.post("/book-with-credit", async (req, res) => {
   try {
-    if (!req.user) return res.status(401).json({ ok:false, error:"auth_required" });
+    if (!req.user) return res.status(401).json({ ok:false, error:"Authentication required." });
 
     const { service_key, slot, addons = [], customer = {}, origin } = req.body || {};
-    if (!service_key || !slot?.start_iso || !slot?.end_iso) return res.status(400).json({ ok:false, error:"missing_fields" });
+    if (!service_key || !slot?.start_iso || !slot?.end_iso) return res.status(400).json({ ok:false, error:"Please fill out all required fields." });
 
     const service_type = service_key === "full" ? "full" : "exterior";
     const bal = await availableCredits(req.user.id, service_type);
-    if (bal < 1) return res.status(402).json({ ok:false, error:"no_credits" });
+    if (bal < 1) return res.status(402).json({ ok:false, error:"No credits available." });
 
     // addons sum (fallback values)
     const addonsPrices = { wax: 10, polish: 22.5 };
     const addonsTotal = addons.reduce((s,k)=> s + (addonsPrices[k]||0), 0);
 
     if (addonsTotal > 0) {
-      // Pay add-ons only; service uses credit. Booking + debit happens in webhook.
+      // Pay add-ons only; service uses credit.
+      const successBase = (origin || process.env.PUBLIC_FRONTEND_ORIGIN || "").replace(/\/+$/,"");
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
         line_items: [{
@@ -47,8 +47,9 @@ router.post("/book-with-credit", async (req, res) => {
           },
           quantity: 1
         }],
-        success_url: `${(origin || process.env.PUBLIC_FRONTEND_ORIGIN)}?paid=1`,
-        cancel_url:  (origin || process.env.PUBLIC_FRONTEND_ORIGIN),
+        // flow=credit so the frontend chooses the correct Thank You variant
+        success_url: `${successBase}?paid=1&flow=credit`,
+        cancel_url:  (successBase),
         metadata: {
           kind: "addons_only_with_credit",
           user_id: String(req.user.id),
@@ -62,9 +63,8 @@ router.post("/book-with-credit", async (req, res) => {
       return res.json({ ok:true, url: session.url });
     }
 
-    // No add-ons → save booking now and debit immediately; also sync to Google Calendar
+    // No add-ons → save booking now and debit immediately → FE should show thank-you
     const bookingId = await saveBooking({
-      user_id: req.user.id,
       stripe_session_id: null,
       service_key,
       addons,
@@ -78,31 +78,11 @@ router.post("/book-with-credit", async (req, res) => {
        VALUES ($1,$2,-1,'debit',$3,$4)`,
       [req.user.id, service_type, `booking ${bookingId}`, bookingId]
     );
-
-    try {
-      await createCalendarEvents(`credit-${bookingId}`, [{
-        start_iso: slot.start_iso,
-        end_iso: slot.end_iso,
-        summary: `GM Auto Detailing — ${service_key === "full" ? "Full Detail" : "Exterior Detail"}`,
-        location: `${customer?.street || ""}, ${customer?.postcode || ""}`.trim(),
-        description: [
-          `Name: ${customer?.name || ""}`,
-          `Phone: ${customer?.phone || ""}`,
-          `Email: ${customer?.email || ""}`,
-          `Address: ${customer?.street || ""}, ${customer?.postcode || ""}`,
-          `Outhouse tap: Yes`,
-          `Paid with membership credit`,
-        ].join("\n"),
-      }]);
-    } catch (e) {
-      console.warn("[gcal] credit booking calendar create failed", e?.message || e);
-    }
-
     res.json({ ok:true, booked:true, booking_id: bookingId });
 
   } catch (e) {
     console.error("[book-with-credit]", e);
-    res.status(500).json({ ok:false, error:"book_credit_failed" });
+    res.status(500).json({ ok:false, error:"Unable to complete credit booking." });
   }
 });
 
