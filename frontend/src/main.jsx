@@ -54,7 +54,7 @@ function ServiceCard({ title, price, strike, selected, onClick }) {
           <span className="gm price-strike">{fmtGBP(strike)}</span>
         </div>
       ) : (
-        <div className="gm muted" style={{ fontWeight: 500, marginBottom: 6 }}>{fmtGBP(price)}</div>
+        <div className="gm muted" style={{ fontWeight: 600, marginBottom: 6 }}>{fmtGBP(price)}</div>
       )}
     </div>
   );
@@ -147,9 +147,32 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
+  // Header: credits + quick actions
+  const CreditsHeader = () => (
+    <div className="gm card" style={{ marginBottom: 12 }}>
+      <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", justifyContent:"space-between" }}>
+        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+          <span className="gm counter ok">Exterior credits: {state.credits?.exterior || 0}</span>
+          <span className="gm counter ok">Full credits: {state.credits?.full || 0}</span>
+        </div>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {(state.credits?.exterior||0) > 0 && (
+            <Button onClick={()=> setState(s=> ({ ...s, service_key:"exterior", addons:[], step:"calendar" }))}>Book exterior</Button>
+          )}
+          {(state.credits?.full||0) > 0 && (
+            <Button onClick={()=> setState(s=> ({ ...s, service_key:"full", addons:[], step:"calendar" }))}>Book full</Button>
+          )}
+          <Button onClick={()=> window.location.href="/account.html"}>Account</Button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider">
+        <CreditsHeader />
+
         <div className="gm h2 center">Choose your service</div>
 
         <div className="gm cards">
@@ -167,7 +190,7 @@ function Services({ state, setState }) {
             selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
         </div>
 
-        {/* Add-ons at the bottom, and only for non-credit, non-membership flows */}
+        {/* Add-ons at the bottom; hidden when using credits or selecting membership */}
         {!(svc==="standard_membership" || svc==="premium_membership" || usingCredits) && (
           <>
             <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -367,8 +390,8 @@ function Confirm({ state, setState }) {
   const finalTotal = serviceAfter + addonsTotal;
 
   const usingCredit =
-    (state.service_key === "exterior" && (state.credits?.exterior || 0) > 0) ||
-    (state.service_key === "full"     && (state.credits?.full     || 0) > 0);
+    (state.credits?.exterior||0) > 0 && state.service_key === "exterior" ||
+    (state.credits?.full||0)     > 0 && state.service_key === "full";
 
   async function pay(){
     if (!state.customer || !state.service_key) return;
@@ -433,11 +456,11 @@ function Confirm({ state, setState }) {
 
             <div className="gm card">
               <div className="gm card-title">Booking</div>
-              <div style={{ fontWeight: 500, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
               {slotLine}
               {!!(state.addons || []).length && !usingCredit && (
                 <div style={{ marginTop: 6 }}>
-                  <div style={{ fontWeight: 500 }}>Add-ons</div>
+                  <div style={{ fontWeight: 600 }}>Add-ons</div>
                   <div>{state.addons.map((k)=> (cfg.addons?.[k]?.name || k)).join(", ")}</div>
                 </div>
               )}
@@ -470,7 +493,7 @@ function Confirm({ state, setState }) {
   );
 }
 
-/* ================== THANK YOU / SUB SUCCESS (kept for redirects) ================== */
+/* ================== THANK YOU ================== */
 function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); return (
   <div className="gm page-section gm-booking wrap"><div className="gm panel wider" style={{textAlign:"center"}}>
     <div className="gm h2 center">Thanks for your booking!</div>
@@ -478,7 +501,7 @@ function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); retur
   </div></div>
 ); }
 
-/* ================== APP (NO WHITE GATE) ================== */
+/* ================== APP ================== */
 function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const afterLogin = urlParams.get("afterLogin") === "1";
@@ -517,26 +540,18 @@ function App(){
     return { user, customer, credits };
   }, []);
 
-  // Boot logic: if not returning from login, redirect to login.html.
   React.useEffect(() => {
     (async () => {
       if (!afterLogin && !fromSub) {
-        // Always start at the login page (your requirement)
         try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
         return;
       }
-
-      // Must have a token when coming back
       const token = localStorage.getItem('GM_TOKEN') || "";
-      if (!token) {
-        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
-        return;
-      }
+      if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
 
       try {
         const { user, customer, credits } = await loadProfile(token);
 
-        // If coming back from subscription success, try to route into calendar if credits exist
         if (fromSub) {
           const hasFull = (credits.full||0) > 0;
           const hasExt  = (credits.exterior||0) > 0;
@@ -546,19 +561,15 @@ function App(){
             return;
           }
         }
-
-        // Normal: go straight to Services (your requirement)
         setState(s => ({ ...s, token, user, customer, credits, step: "services" }));
       } catch {
-        // Token invalid → back to login
         localStorage.removeItem('GM_TOKEN');
         try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line
 
-  if (state.step === "loading")   return null; // short-lived; we immediately redirect or advance
+  if (state.step === "loading")   return null;
   if (state.step === "services")  return <Services state={state} setState={setState} />;
   if (state.step === "calendar")  return <Calendar state={state} setState={setState} />;
   if (state.step === "times")     return <Times    state={state} setState={setState} />;
