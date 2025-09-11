@@ -6,7 +6,7 @@
     <title>Your Account • GM Auto Detailing</title>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
-      :root { --bg:#f3efe8; --card:#fff; --border:#e3e0d7; --text:#111; --muted:#666; --accent:#222; }
+      :root { --bg:#ffffff; --card:#fff; --border:#e3e0d7; --text:#111; --muted:#666; --accent:#222; }
       * { box-sizing: border-box; }
       body { font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); margin:0; padding:20px; color:var(--text); }
       .container { max-width:960px; margin:0 auto; }
@@ -25,33 +25,28 @@
       h2 { margin:8px 0 12px; font-weight:800; text-align:center; }
       .credits { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
       .pill { padding:10px 16px; border:2px solid #ddd; border-radius:999px; font-weight:800; background:#fff; }
-      .small-note { font-size:13px; color:#555; text-align:center; margin-top:6px; }
+      .small-note { font-size:13px; color:#444; text-align:center; margin-top:6px; }
       @media (max-width:800px){ .stack{ grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
     <div class="container">
-      <!-- Top: centered logo -->
       <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
 
-      <!-- Single centered action -->
       <div class="center" style="margin-bottom:12px;">
         <button id="portal" class="btn equal">Manage subscription</button>
       </div>
 
-      <!-- Credits -->
       <div class="card" style="margin-bottom:12px;">
         <h2>Your credits</h2>
         <div id="credits" class="credits"></div>
       </div>
 
-      <!-- Upcoming booking -->
       <div class="card" style="margin-bottom:12px;">
         <h2>Upcoming booking</h2>
         <div id="upcoming" class="center muted">Loading…</div>
       </div>
 
-      <!-- Profile -->
       <div class="card">
         <h2>Your details</h2>
         <div class="stack">
@@ -78,7 +73,6 @@
     </div>
 
     <script>
-      // Resize for Squarespace iframe
       function reportHeight(){
         const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
         try { window.parent.postMessage({ type:"GM_HEIGHT", height:h }, "*"); } catch {}
@@ -126,7 +120,6 @@
         if (!r.ok) { localStorage.removeItem('GM_TOKEN'); location.href="/login.html"; return; }
         const d = await r.json();
 
-        // Credits
         const credits = d.credits || { exterior:0, full:0 };
         const c = el("credits");
         c.innerHTML = "";
@@ -134,14 +127,12 @@
         const p2 = document.createElement("div"); p2.className="pill"; p2.textContent = `Full Detail credits: ${credits.full||0}`;
         c.appendChild(p1); c.appendChild(p2);
 
-        // Profile fields
         el("name").value = d.user?.name || "";
         el("phone").value = d.user?.phone || "";
         el("email").value = d.user?.email || "";
         el("street").value = d.user?.street || "";
         el("postcode").value = d.user?.postcode || "";
 
-        // Subs label
         const subsText = (d.subscriptions||[]).map(s=>{
           if (!s?.tier) return null;
           const label = s.tier === "premium" ? "Premium membership" : "Standard membership";
@@ -150,7 +141,6 @@
         }).filter(Boolean).join(" • ");
         el("subs").textContent = subsText || "No active membership.";
 
-        // Manage subscription
         el("portal").onclick = async () => {
           const rr = await fetch(`${API}/api/memberships/portal`, { method:"GET", headers: { Authorization:`Bearer ${token}` }});
           const pd = await rr.json().catch(()=> ({}));
@@ -161,7 +151,6 @@
           }
         };
 
-        // Sign out
         el("signout").onclick = () => {
           localStorage.removeItem('GM_TOKEN');
           location.href = '/login.html';
@@ -170,7 +159,6 @@
         reportHeight();
       }
 
-      // View/Hide toggle for new password field
       el("togglepw").onclick = (e) => {
         e.preventDefault();
         const inp = el("password");
@@ -179,7 +167,6 @@
         el("togglepw").textContent = showing ? "View" : "Hide";
       };
 
-      // Save profile (and optional new password), then return to login page
       el("save").onclick = async () => {
         const payload = {
           name: el("name").value.trim(),
