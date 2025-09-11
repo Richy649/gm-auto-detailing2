@@ -25,10 +25,41 @@ async function isNotNull(table, column) {
 }
 
 /* ---------- bootstrap schema ---------- */
-async function ensureTable() {
+async function ensureTables() {
+  // users
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.users (
+      id SERIAL PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      name TEXT,
+      phone TEXT,
+      street TEXT,
+      postcode TEXT,
+      has_tap BOOLEAN DEFAULT FALSE,
+      stripe_customer_id TEXT,
+      membership_intro_used BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // password reset tokens
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.password_resets (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      token TEXT UNIQUE NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // bookings
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.bookings (
       id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES public.users(id),
       stripe_session_id TEXT,
       service_key TEXT,
       addons TEXT[] DEFAULT '{}',
@@ -47,10 +78,43 @@ async function ensureTable() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+
+  // credit ledger
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.credit_ledger (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+      service_type TEXT NOT NULL CHECK (service_type IN ('exterior','full')),
+      qty INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('grant','debit','adjust')),
+      reason TEXT,
+      related_booking_id INTEGER,
+      stripe_invoice_id TEXT,
+      valid_from TIMESTAMPTZ,
+      valid_until TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+
+  // subscriptions
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+      stripe_subscription_id TEXT UNIQUE NOT NULL,
+      tier TEXT NOT NULL CHECK (tier IN ('standard','premium')),
+      status TEXT NOT NULL,
+      current_period_start TIMESTAMPTZ,
+      current_period_end TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
 }
 
 async function ensureColumnsAndConstraints() {
+  // Ensure all expected columns on bookings exist and legacy constraints are sane
   const need = [
+    ["user_id", "INTEGER", "REFERENCES public.users(id)"],
     ["stripe_session_id", "TEXT", ""],
     ["service_key", "TEXT", ""],
     ["addons", "TEXT[]", "DEFAULT '{}'::text[]"],
@@ -71,7 +135,7 @@ async function ensureColumnsAndConstraints() {
     }
   }
 
-  // Make sure legacy text fields are nullable (some old schemas set NOT NULL)
+  // Make sure legacy text fields are nullable
   if (await isNotNull("bookings", "start_iso")) {
     await pool.query(`ALTER TABLE public.bookings ALTER COLUMN start_iso DROP NOT NULL;`);
   }
@@ -79,7 +143,7 @@ async function ensureColumnsAndConstraints() {
     await pool.query(`ALTER TABLE public.bookings ALTER COLUMN end_iso DROP NOT NULL;`);
   }
 
-  // One-time backfill canonical timestamptz from legacy strings where missing
+  // Backfill canonical timestamptz from legacy strings where missing
   await pool
     .query(`UPDATE public.bookings
             SET start_time = COALESCE(start_time, NULLIF(start_iso,'')::timestamptz),
@@ -99,6 +163,12 @@ async function ensureIndexes() {
                     ON public.bookings ((regexp_replace(customer_phone,'[^0-9]+','','g')));`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_street_norm_idx
                     ON public.bookings ((regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')));`);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS users_email_idx ON public.users (lower(email));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS ledger_user_idx ON public.credit_ledger (user_id, service_type, created_at);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS subs_stripe_idx ON public.subscriptions (stripe_subscription_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS pwres_email_idx ON public.password_resets (lower(email));`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS pwres_token_idx ON public.password_resets (token);`);
 }
 
 export async function initDB() {
@@ -106,50 +176,44 @@ export async function initDB() {
     console.warn("[db] DATABASE_URL not set; DB features disabled.");
     return;
   }
-  await ensureTable();
+  await ensureTables();
   await ensureColumnsAndConstraints();
   await ensureIndexes();
   console.log("[db] schema ensured");
 }
 
 /* ---------- writes & reads ---------- */
-/**
- * Save a booking row.
- * We bind each param ONCE with a single type:
- *   - start_iso/end_iso: plain strings
- *   - start_time/end_time: the same ISO strings; PG will cast text -> timestamptz
- */
 export async function saveBooking(b) {
   if (!pool) {
     console.warn("[db] saveBooking skipped: no pool (DATABASE_URL missing)");
     return null;
   }
 
-  // Prefer ISO strings; if caller provided explicit timestamptz, fall back to those.
   const startISO = b.start_iso || b.start_time || null;
   const endISO   = b.end_iso   || b.end_time   || null;
 
   const sql = `
     INSERT INTO public.bookings
-      (stripe_session_id, service_key, addons,
+      (user_id, stripe_session_id, service_key, addons,
        start_iso, end_iso,
        start_time, end_time,
        customer_name, customer_email, customer_phone, customer_street, customer_postcode, has_tap)
     VALUES
-      ($1,$2,$3,
-       $4,$5,
-       $6,$7,
-       $8,$9,$10,$11,$12,$13)
+      ($1,$2,$3,$4,
+       $5,$6,
+       $7,$8,
+       $9,$10,$11,$12,$13,$14)
     RETURNING id
   `;
   const params = [
+    b.user_id || null,
     b.stripe_session_id || null,
     b.service_key || null,
     b.addons || [],
-    startISO,                  // $4 -> start_iso (TEXT)
-    endISO,                    // $5 -> end_iso (TEXT)
-    startISO,                  // $6 -> start_time (TIMESTAMPTZ via implicit cast)
-    endISO,                    // $7 -> end_time   (TIMESTAMPTZ via implicit cast)
+    startISO,
+    endISO,
+    startISO,
+    endISO,
     b.customer?.name || null,
     (b.customer?.email || null),
     (b.customer?.phone || null),
@@ -160,11 +224,10 @@ export async function saveBooking(b) {
 
   const res = await pool.query(sql, params);
   const id = res.rows[0]?.id || null;
-  console.log(`[saveBooking] inserted id=${id} service=${b.service_key} start=${startISO} end=${endISO}`);
+  console.log(`[saveBooking] inserted id=${id} service=${b.service_key} start=${startISO} end=${endISO} user_id=${b.user_id ?? "null"}`);
   return id;
 }
 
-/** availability masking: get rows overlapping [startISO, endISO) using canonical timestamptz */
 export async function getBookingsBetween(startISO, endISO) {
   if (!pool) return [];
   const q = `
