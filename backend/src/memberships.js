@@ -1,7 +1,7 @@
 // backend/src/memberships.js
 import Stripe from "stripe";
 import { Router } from "express";
-import { pool, saveBooking } from "./db.js";
+import { pool } from "./db.js";
 import { authMiddleware } from "./auth.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -11,7 +11,7 @@ const prices = {
   premium:  { intro: process.env.PREMIUM_INTRO_PRICE,  full: process.env.PREMIUM_PRICE  },
 };
 
-const one = async (q,p)=> (await pool.query(q,p)).rows[0]||null;
+const one = async (q, p) => (await pool.query(q, p)).rows[0] || null;
 
 function norm(s){ return String(s||"").trim().toLowerCase(); }
 function digits(s){ return String(s||"").replace(/[^0-9]+/g,""); }
@@ -183,7 +183,7 @@ export function membershipRoutes() {
   return r;
 }
 
-/* -------- Webhook: memberships & addons-only completions -------- */
+/* -------- Webhook: memberships & robustness for credits grant -------- */
 export async function membershipsWebhookHandler(req, res) {
   try {
     const sig = req.headers["stripe-signature"];
@@ -198,8 +198,6 @@ export async function membershipsWebhookHandler(req, res) {
     switch (event.type) {
       case "checkout.session.completed": {
         const s = event.data.object;
-
-        // A) subscription flow
         if (s.mode === "subscription") {
           const user_id = Number(s.metadata?.user_id || 0);
           const tier = s.metadata?.tier;
@@ -218,9 +216,6 @@ export async function membershipsWebhookHandler(req, res) {
             if (s.customer) await linkUserStripeCustomer(user_id, s.customer);
           }
         }
-
-        // B) addons-only with credit (mode=payment) handled in credits route on its own webhook,
-        // but we still debit credit there after booking creation (already implemented).
         break;
       }
 
@@ -229,30 +224,59 @@ export async function membershipsWebhookHandler(req, res) {
         console.log("[memberships] invoice.payment_succeeded", JSON.stringify({ invoice_id: inv.id, customer: inv.customer }));
         if (!inv.subscription) break;
 
-        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
-        if (!srow) break;
-
         const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const p = sub.items.data[0].price.id;
-        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
+        const subscriptionPriceId = sub.items.data?.[0]?.price?.id;
+        const tier = (subscriptionPriceId === prices.standard.full || subscriptionPriceId === prices.standard.intro) ? "standard" : "premium";
 
-        const line = inv.lines?.data?.[0];
-        if (line?.period) {
+        // Try to find our local subscription row; handle out-of-order webhooks
+        const customerId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id || null;
+        let srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+
+        if (!srow && customerId) {
+          // Map Stripe customer -> user
+          const u = await one("SELECT id FROM public.users WHERE stripe_customer_id=$1", [customerId]);
+          if (u) {
+            await upsertSubscription({
+              user_id: u.id,
+              stripe_subscription_id: inv.subscription,
+              tier,
+              status: sub.status,
+              period_start: sub.current_period_start,
+              period_end: sub.current_period_end
+            });
+            srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+          }
+        }
+        if (!srow) {
+          console.warn("[memberships] no local subscription row for", inv.subscription);
+          break;
+        }
+
+        // Robustly choose the subscription line (avoid tax/proration lines)
+        const lines = inv.lines?.data || [];
+        const subLine =
+          lines.find(l => l.type === "subscription") ||
+          lines.find(l => l.price?.recurring) ||
+          lines[0];
+
+        if (subLine?.period?.start && subLine?.period?.end) {
           await grantCreditsFromInvoice({
             user_id: srow.user_id,
             tier,
             invoice_id: inv.id,
-            period_start: line.period.start,
-            period_end: line.period.end
+            period_start: subLine.period.start,
+            period_end: subLine.period.end
           });
           console.log("[memberships] credits granted", JSON.stringify({
             user_id: srow.user_id,
             service_type: svcByTier[tier],
             qty: 2,
             invoice_id: inv.id,
-            period_start: line.period.start,
-            period_end: line.period.end
+            period_start: subLine.period.start,
+            period_end: subLine.period.end
           }));
+        } else {
+          console.warn("[memberships] no usable subscription line period in invoice", inv.id);
         }
 
         if (inv.billing_reason === "subscription_create") {
@@ -297,8 +321,7 @@ export function adminMembershipRoutes() {
     try {
       if (req.query.token !== process.env.ADMIN_TOKEN)
         return res.status(401).json({ ok:false, error:"unauthorized" });
-
-      // ... unchanged admin logic ...
+      // Implement as needed.
       res.json({ ok:true });
     } catch (e) {
       console.error("[admin cancel_refund_now]", e);
