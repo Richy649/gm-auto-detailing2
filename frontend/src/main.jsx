@@ -43,7 +43,17 @@ setInterval(reportHeight, 900);
 const Button = ({ children, className, ...props }) => <button className={cx("gm btn", className)} {...props}>{children}</button>;
 const PrimaryButton = (props) => <Button className="primary" {...props} />;
 
-/* Simple top bar with “View account” */
+/* Head icon (SVG, no emoji) */
+function HeadIcon({ size = 16, style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">
+      <circle cx="12" cy="8" r="4" fill="currentColor"></circle>
+      <path d="M4 20c0-4 4-6 8-6s8 2 8 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+/* Simple top bar with “View account” (SVG head + text) */
 function TopBar() {
   return (
     <div style={{ display:"flex", justifyContent:"flex-end", alignItems:"center", marginBottom:8 }}>
@@ -52,9 +62,10 @@ function TopBar() {
         onClick={()=> { try { window.top.location.href = "/account.html"; } catch { window.location.href = "/account.html"; } }}
         aria-label="View account"
         title="View account"
+        style={{ display:"inline-flex", alignItems:"center", gap:8, fontWeight:800 }}
       >
-        <span style={{ marginRight:6, fontWeight:800 }}>👤</span>
-        View account
+        <HeadIcon size={18} />
+        <span>View account</span>
       </button>
     </div>
   );
@@ -163,7 +174,7 @@ function Services({ state, setState }) {
     setState((s) => ({
       ...s,
       service_key: svc,
-      addons: [], // never carry add-ons into services selection header
+      addons: [],
       selectedDayKey: null,
       selectedSlot: null,
       step: "calendar",
@@ -172,7 +183,7 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
-  // Block seeing memberships again if active sub exists
+  // Hide memberships user already has
   const hasStandardSub = (state.subscriptions||[]).some(s => s.tier === "standard");
   const hasPremiumSub  = (state.subscriptions||[]).some(s => s.tier === "premium");
 
@@ -200,23 +211,6 @@ function Services({ state, setState }) {
               selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
           )}
         </div>
-
-        {/* Add-ons hidden when selecting membership or using credits */}
-        {!(svc==="standard_membership" || svc==="premium_membership" || usingCredits) && (
-          <>
-            <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
-            <div className="gm addon-benefits two-col">
-              <AddonCard title={aCfg.wax?.name || "Ceramic Wax"}
-                price={typeof aCfg.wax?.price === "number" ? aCfg.wax.price : 10}
-                desc="Adds gloss and water beading. Light protection between washes."
-                align="left" selected={addons.includes("wax")} onToggle={toggleWax} />
-              <AddonCard title={aCfg.polish?.name || "Hand Polish"}
-                price={typeof aCfg.polish?.price === "number" ? aCfg.polish.price : 22.5}
-                desc="Hand-finished shine. Softens light marks and brightens the paint."
-                align="right" selected={addons.includes("polish")} onToggle={togglePolish} />
-            </div>
-          </>
-        )}
 
         <div className="gm actions space bottom-stick">
           <PrimaryButton onClick={continueFlow}>
@@ -291,7 +285,7 @@ function Calendar({ state, setState }) {
       <div className="gm panel wider">
         <div className="gm monthbar-grid">
           <div className="gm monthnav-left">
-            <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}>Previous</Button>
+            <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}>Back</Button>
           </div>
           <div className="gm monthtitle">{monthLabel(monthKey)}</div>
           <div className="gm monthnav-right">
@@ -507,13 +501,42 @@ function Confirm({ state, setState }) {
   );
 }
 
-/* ================== THANK YOU ================== */
-function ThankYou(){ React.useEffect(()=> setTimeout(reportHeight,60),[]); return (
-  <div className="gm page-section gm-booking wrap"><div className="gm panel wider" style={{textAlign:"center"}}>
-    <div className="gm h2 center">Thanks for your booking!</div>
-    <div>We’ve sent a confirmation to your email.</div>
-  </div></div>
-); }
+/* ================== THANK YOU (redesigned) ================== */
+function InstagramIcon({ size = 18, style = {} }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">
+      <rect x="3" y="3" width="18" height="18" rx="5" ry="5" fill="none" stroke="currentColor" strokeWidth="2"/>
+      <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="2"/>
+      <circle cx="17.5" cy="6.5" r="1.5" fill="currentColor"/>
+    </svg>
+  );
+}
+
+function ThankYou(){
+  React.useEffect(()=> setTimeout(reportHeight,60),[]);
+  const goAccount = () => { try { window.top.location.href = "/account.html"; } catch { window.location.href = "/account.html"; } };
+  return (
+    <div className="gm page-section gm-booking wrap">
+      <div className="gm panel wider" style={{textAlign:"center"}}>
+        <div className="gm h2 center" style={{ fontSize: 24, marginBottom: 8 }}>Thank you so much for booking with me!</div>
+        <div style={{ marginBottom: 14 }}>
+          If you want to see your booking, view your account dashboard.
+        </div>
+        <div style={{ display:"flex", justifyContent:"center", marginBottom: 18 }}>
+          <button className="gm btn primary" onClick={goAccount} style={{ display:"inline-flex", alignItems:"center", gap:8, fontWeight:800 }}>
+            <HeadIcon size={18} />
+            <span>View account</span>
+          </button>
+        </div>
+        <div style={{ marginTop: 6, color:"#444", fontWeight:700 }}>In the meantime, check out my socials!</div>
+        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginTop:8 }}>
+          <InstagramIcon />
+          <span style={{ fontWeight:800 }}>gmautodetailing.uk</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ================== APP ================== */
 function App(){
