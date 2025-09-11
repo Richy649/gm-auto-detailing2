@@ -80,7 +80,7 @@ async function persistAndSync(sessionId, payload) {
   const itemsForCalendar = [];
 
   for (const sl of (payload.slots || [])) {
-    // Save to DB (writes legacy start_iso/end_iso and backfills timestamptz)
+    // Save to DB
     try {
       await saveBooking({
         stripe_session_id: sessionId,
@@ -93,7 +93,6 @@ async function persistAndSync(sessionId, payload) {
       });
     } catch (e) {
       console.warn("[saveBooking] failed", e?.message || e);
-      // continue; Calendar sync remains idempotent, but availability mask depends on DB save
     }
 
     // Prepare Calendar item
@@ -103,7 +102,7 @@ async function persistAndSync(sessionId, payload) {
       `Email: ${payload.customer?.email || ""}`,
       `Address: ${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`,
       `Outhouse tap: ${payload.has_tap ? "Yes" : "No"}`,
-      (payload.addons?.length ? `Add-ons: ${payload.addons.map(k => (addons[k]?.name || k)).join(", ")}` : null),
+      (payload.addons?.length ? `Add-ons: ${payload.addons.join(", ")}` : null),
       `Stripe session: ${sessionId}`,
     ].filter(Boolean).join("\n");
 
@@ -131,17 +130,16 @@ export function mountPayments(app) {
   app.post("/api/pay/create-checkout-session", express.json(), async (req, res) => {
     try {
       const { customer, has_tap, service_key, addons: addonKeys = [], slot, membershipSlots = [], origin } = req.body || {};
-      if (!customer || !service_key) return res.status(400).json({ ok: false, error: "missing_fields" });
+      if (!customer || !service_key) return res.status(400).json({ ok: false, error: "Please fill out all required fields." });
 
       // Build price lines + first-time flag (server-side authoritative)
-      const { firstTime, line_items } = await buildLineItemsAndFirstTime(customer, service_key, addonKeys);
+      const { line_items } = await buildLineItemsAndFirstTime(customer, service_key, addonKeys);
 
       // Serialize minimal payload for webhook / confirm endpoint
       const payload = {
         service_key,
         addons: addonKeys,
         has_tap: !!has_tap,
-        first_time: !!firstTime, // informational
         customer: {
           name: cleanStr(customer.name),
           email: normalizeEmail(customer.email),
@@ -152,20 +150,21 @@ export function mountPayments(app) {
         slots: (service_key.includes("membership") ? (membershipSlots || []) : (slot ? [slot] : [])),
       };
 
+      const successBase = (origin || FRONTEND_ORIGIN).replace(/\/+$/, "");
       const sess = await stripe.checkout.sessions.create({
         mode: "payment",
         line_items,
-        // include session id in success url so FE can call /api/pay/confirm if webhook lags
-        success_url: `${(origin || FRONTEND_ORIGIN)}?paid=1&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: (origin || FRONTEND_ORIGIN),
+        // flow=oneoff so the frontend knows which Thank You variant to show
+        success_url: `${successBase}?paid=1&flow=oneoff&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: (successBase),
         metadata: { payload: JSON.stringify(payload) },
       });
 
-      if (!sess?.url) return res.status(500).json({ ok: false, error: "no_checkout_url" });
+      if (!sess?.url) return res.status(500).json({ ok: false, error: "Unable to start checkout." });
       return res.json({ ok: true, url: sess.url });
     } catch (e) {
       console.error("[checkout] error", e?.message || e);
-      return res.status(500).json({ ok: false, error: "checkout_failed" });
+      return res.status(500).json({ ok: false, error: "Payment initialisation failed." });
     }
   });
 
@@ -206,24 +205,24 @@ export function mountPayments(app) {
   app.post("/api/pay/confirm", express.json(), async (req, res) => {
     try {
       const { session_id } = req.body || {};
-      if (!session_id) return res.status(400).json({ ok: false, error: "missing_session_id" });
+      if (!session_id) return res.status(400).json({ ok: false, error: "Missing session id." });
 
       const sess = await stripe.checkout.sessions.retrieve(session_id);
       if (!sess || (sess.payment_status !== "paid" && sess.status !== "complete")) {
-        return res.status(409).json({ ok: false, error: "session_not_paid" });
+        return res.status(409).json({ ok: false, error: "Session not paid yet." });
       }
 
       let payload = {};
       try { payload = JSON.parse(sess.metadata?.payload || "{}"); } catch { payload = {}; }
       if (!payload?.service_key || !Array.isArray(payload?.slots)) {
-        return res.status(400).json({ ok: false, error: "invalid_session_payload" });
+        return res.status(400).json({ ok: false, error: "Invalid session payload." });
       }
 
       await persistAndSync(sess.id, payload);
       return res.json({ ok: true });
     } catch (e) {
       console.warn("[confirm] failed", e?.message || e);
-      return res.status(500).json({ ok: false, error: "confirm_failed" });
+      return res.status(500).json({ ok: false, error: "Confirm failed." });
     }
   });
 }
