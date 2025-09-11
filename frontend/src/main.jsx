@@ -43,7 +43,7 @@ setInterval(reportHeight, 900);
 const Button = ({ children, className, ...props }) => <button className={cx("gm btn", className)} {...props}>{children}</button>;
 const PrimaryButton = (props) => <Button className="primary" {...props} />;
 
-/* Mini icon */
+/* Head icon */
 const HeadIcon = ({ size=16 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign:"middle" }}>
     <circle cx="12" cy="8" r="4" fill="#222" />
@@ -173,7 +173,7 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
-  // Hide Standard/Premium tiles if the user already has an active sub (credits will be granted next cycle)
+  // Hide Standard/Premium tiles if the user already has an active sub (credits will renew)
   const hideStandard = state.subscriptions?.some?.(x => x.tier === "standard" && x.status === "active");
   const hidePremium  = state.subscriptions?.some?.(x => x.tier === "premium"  && x.status === "active");
 
@@ -203,7 +203,7 @@ function Services({ state, setState }) {
           )}
         </div>
 
-        {/* Show add-ons ONLY for one-off selections (Exterior/Full). Hide for memberships. */}
+        {/* Show add-ons ONLY for Exterior/Full. Hide for memberships. */}
         {(svc==="exterior" || svc==="full") && !usingCredits && (
           <>
             <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -512,39 +512,24 @@ function Confirm({ state, setState }) {
 }
 
 /* ================== THANK YOU ================== */
-function InstagramRow() {
-  return (
-    <div style={{ marginTop: 18, textAlign:"center" }}>
-      <div className="gm muted" style={{ marginBottom: 6 }}>In the meantime, check out my socials</div>
-      <div style={{ display:"inline-flex", gap:8, alignItems:"center", fontWeight:700 }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="2" y="2" width="20" height="20" rx="5" fill="#222" />
-          <circle cx="12" cy="12" r="5" fill="#fff" />
-          <circle cx="17.5" cy="6.5" r="1.5" fill="#fff" />
-        </svg>
-        <span>@gmautodetailing.uk</span>
-      </div>
-    </div>
-  );
-}
-
 function ThankYou({ kind, onBook, onAccount }) {
   const isSub  = kind === "sub";
-  const title  = isSub ? "Thank you for subscribing!" : "Thank you for your booking!";
-  const subtxt = isSub ? "You now have 2 credits to use this month." : "Your booking details have been sent to your email.";
+  const title  = isSub ? "Thank you for subscribing!" : "Thank you so much for booking with me!";
+  const body   = isSub
+    ? "You now have two credits on your account. I can’t wait to get your vehicle looking its best. Pick a time that suits you."
+    : "Your booking is confirmed. I’m looking forward to seeing you and taking great care of your car. You’ll receive an email with the details.";
 
   return (
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider" style={{ textAlign:"center" }}>
-        <div className="gm h2 center" style={{ fontSize:22 }}>{title}</div>
-        <div>{subtxt}</div>
+        <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
+        <div className="gm h2 center" style={{ fontSize:22, marginTop:10 }}>{title}</div>
+        <div style={{ maxWidth: 600, margin: "8px auto 0" }}>{body}</div>
 
-        <div style={{ marginTop: 14, display:"inline-flex", gap:10 }}>
+        <div style={{ marginTop: 16, display:"inline-flex", gap:10 }}>
           {isSub && <PrimaryButton onClick={onBook}>Book now</PrimaryButton>}
           <Button onClick={onAccount}><span style={{ marginRight:6 }}>View account</span><HeadIcon /></Button>
         </div>
-
-        <InstagramRow />
       </div>
     </div>
   );
@@ -602,7 +587,6 @@ function App(){
 
       // If a payment success redirect occurred, ensure persistence (confirm) then show Thank You
       if (paid) {
-        // Optional confirm when session_id is present (one-off)
         if (sessionId) {
           await fetch(`${API}/pay/confirm`, { method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify({ session_id: sessionId }) }).catch(()=>{});
         }
@@ -622,20 +606,17 @@ function App(){
 
       try {
         const { user, customer, credits } = await loadProfile(token);
-        // Basic subscriptions array not fetched via API in this app; leave empty or populate if you add route
-        if (fromSub) {
-          const hasFull = (credits.full||0) > 0;
-          const hasExt  = (credits.exterior||0) > 0;
-          if (thankyouFlag && flow === "sub") {
-            // go to thank you for subscription
-            setState(s => ({ ...s, token, user, customer, credits, step: "thankyou", thankyouKind: "sub" }));
-            return;
-          }
-          if (hasFull || hasExt) {
-            const inferred = hasFull ? "full" : "exterior";
-            setState(s => ({ ...s, token, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
-            return;
-          }
+        if (fromSub && thankyouFlag && flow === "sub") {
+          setState(s => ({ ...s, token, user, customer, credits, step: "thankyou", thankyouKind: "sub" }));
+          return;
+        }
+        // If user has credits, take them straight to calendar
+        const hasFull = (credits.full||0) > 0;
+        const hasExt  = (credits.exterior||0) > 0;
+        if (hasFull || hasExt) {
+          const inferred = hasFull ? "full" : "exterior";
+          setState(s => ({ ...s, token, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
+          return;
         }
         setState(s => ({ ...s, token, user, customer, credits, step: "services" }));
       } catch {
