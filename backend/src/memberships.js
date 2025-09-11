@@ -65,21 +65,21 @@ async function linkUserStripeCustomer(userId, stripeCustomerId) {
  * If missing or invalid in the current mode, create a new customer in this mode and persist it.
  */
 async function getOrCreateCustomerSafely({ user, customerPayload }) {
-  // Try existing id
+  // Try existing id first
   if (user.stripe_customer_id) {
     try {
       const sc = await stripe.customers.retrieve(user.stripe_customer_id);
-      if (sc && !sc.deleted) return sc.id; // ok in this mode
+      if (sc && !sc.deleted) return sc.id;
     } catch (e) {
-      // resource_missing → fall through to create a new one in this mode
       const code = e?.code || e?.raw?.code;
+      // resource_missing → invalid for this mode or deleted — we will recreate
       if (code !== "resource_missing") {
         console.warn("[memberships] retrieve customer failed:", e?.message || e);
       }
     }
   }
 
-  // Create new test/live customer aligned with current API key
+  // Create a new customer in the mode of current API key (test or live)
   const created = await stripe.customers.create({
     email: customerPayload.email,
     name: customerPayload.name || undefined,
@@ -158,7 +158,7 @@ export function membershipRoutes() {
 
       const u = await one("SELECT * FROM public.users WHERE id=$1", [req.user.id]);
 
-      // Ensure we have a valid Stripe customer in THIS mode (test/live)
+      // Ensure a valid customer in the current Stripe mode (self-heal if stale)
       const stripeCustomerId = await getOrCreateCustomerSafely({
         user: u,
         customerPayload: {
@@ -169,7 +169,7 @@ export function membershipRoutes() {
         }
       });
 
-      // Store latest profile details for convenience
+      // Update profile fields for convenience
       await pool.query(
         `UPDATE public.users SET name=COALESCE($2,name), phone=COALESCE($3,phone),
          street=COALESCE($4,street), postcode=COALESCE($5,postcode) WHERE id=$1`,
@@ -223,6 +223,7 @@ export async function membershipsWebhookHandler(req, res) {
       process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
     );
 
+    // Guard against live/test mismatch
     const isLiveKey = (process.env.STRIPE_SECRET_KEY || "").startsWith("sk_live_");
     if (typeof event.livemode === "boolean" && event.livemode !== isLiveKey) {
       console.warn("[memberships webhook] mode mismatch; dropping event");
@@ -233,6 +234,7 @@ export async function membershipsWebhookHandler(req, res) {
       case "checkout.session.completed": {
         const s = event.data.object;
 
+        // Subscription flow
         if (s.mode === "subscription") {
           const user_id = Number(s.metadata?.user_id || 0);
           const tier = s.metadata?.tier;
@@ -252,6 +254,7 @@ export async function membershipsWebhookHandler(req, res) {
           break;
         }
 
+        // Addons-only with credit (mode=payment)
         if (s.mode === "payment" && s.metadata?.kind === "addons_only_with_credit") {
           const user_id = Number(s.metadata.user_id || 0);
           const service_key = s.metadata.service_key;
@@ -259,18 +262,10 @@ export async function membershipsWebhookHandler(req, res) {
           const end_iso = s.metadata.end_iso;
           const addons = JSON.parse(s.metadata.addons || "[]");
           const customer = JSON.parse(s.metadata.customer || "{}");
-
           const bookingId = await saveBooking({
             user_id,
-            stripe_session_id: s.id,
-            service_key,
-            addons,
-            start_iso,
-            end_iso,
-            customer,
-            has_tap: true
+            stripe_session_id: s.id, service_key, addons, start_iso, end_iso, customer, has_tap: true
           });
-
           const service_type = service_key === "full" ? "full" : "exterior";
           await pool.query(
             `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason, related_booking_id)
@@ -401,8 +396,7 @@ export function adminMembershipRoutes() {
       const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [sid]);
       if (!srow) return res.status(404).json({ ok:false, error:"sub_not_found" });
 
-      const svcByTierLocal = { standard: "exterior", premium: "full" };
-      const svc = svcByTierLocal[tier];
+      const svc = svcByTier[tier];
 
       const grantedRow = await one(
         `SELECT COALESCE(SUM(qty),0) AS g FROM public.credit_ledger
