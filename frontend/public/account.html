@@ -4,45 +4,47 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Your Account • GM Auto Detailing</title>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
-      :root { --bg:#f3efe8; --card:#fff; --border:#e3e0d7; --text:#111; --muted:#666; --accent:#222; --green:#23a35a; }
+      :root { --bg:#f3efe8; --card:#fff; --border:#e3e0d7; --text:#111; --muted:#666; --accent:#222; }
       * { box-sizing: border-box; }
       body { font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); margin:0; padding:20px; color:var(--text); }
       .container { max-width:960px; margin:0 auto; }
       .card { background:#fff; border:1px solid var(--border); border-radius:18px; padding:18px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+      .center { text-align:center; }
+      .logo { width:200px; height:auto; display:block; margin: 8px auto 10px; }
+      .btn { padding:14px 20px; border-radius:999px; border:2px solid #ddd; background:#fff; font-weight:800; font-size:18px; letter-spacing:.2px; cursor:pointer; }
+      .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+      .actions-row { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
+      .equal { min-width:220px; }
       .stack { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
       .row { display:flex; flex-direction:column; gap:6px; }
-      label { font-size:14px; font-weight:600; color:#333; }
+      label { font-size:14px; font-weight:700; color:#333; }
       input { padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px; }
       .muted { color:var(--muted); font-size:14px; }
-      h2 { margin:8px 0 12px; font-weight:700; text-align:center; }
-      .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-      .logo { width:180px; height:auto; }
-      .btn { padding:14px 18px; border-radius:999px; border:2px solid #ddd; background:#fff; font-weight:700; cursor:pointer; }
-      .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-      .btn.alt { background:#fff; color:#222; }
-      .credits { display:flex; gap:10px; flex-wrap:wrap; }
-      .pill { padding:8px 14px; border:1px solid #ddd; border-radius:999px; font-weight:700; background:#e9f8f0; border-color:#bde8cd; color:#0b6b37; }
-      .actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+      h2 { margin:8px 0 12px; font-weight:800; text-align:center; }
+      .credits { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+      .pill { padding:10px 16px; border:2px solid #ddd; border-radius:999px; font-weight:800; background:#fff; }
       @media (max-width:800px){ .stack{ grid-template-columns:1fr; } }
     </style>
   </head>
   <body>
     <div class="container">
-      <div class="topbar">
-        <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
-        <div class="actions">
-          <button class="btn" onclick="location.href='/'">Book</button>
-          <button id="portal" class="btn alt">Manage subscription</button>
-        </div>
+      <!-- Top: centered logo -->
+      <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
+
+      <!-- Single centered action -->
+      <div class="center" style="margin-bottom:12px;">
+        <button id="portal" class="btn equal">Manage subscription</button>
       </div>
 
+      <!-- Credits -->
       <div class="card" style="margin-bottom:12px;">
         <h2>Your credits</h2>
         <div id="credits" class="credits"></div>
       </div>
 
+      <!-- Profile -->
       <div class="card">
         <h2>Your details</h2>
         <div class="stack">
@@ -52,11 +54,11 @@
           <div class="row"><label>Street</label><input id="street" autocomplete="address-line1"/></div>
           <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code"/></div>
         </div>
-        <div style="display:flex;justify-content:flex-end;margin-top:12px;gap:10px;">
-          <button id="save" class="btn primary">Save changes</button>
-          <button class="btn" onclick="localStorage.removeItem('GM_TOKEN'); location.href='/login.html'">Sign out</button>
+        <p class="muted" id="subs" style="margin-top:10px; text-align:center;"></p>
+        <div class="actions-row" style="margin-top:12px;">
+          <button id="save" class="btn primary equal">Save changes</button>
+          <button id="signout" class="btn equal">Sign out</button>
         </div>
-        <p class="muted" id="subs" style="margin-top:10px;"></p>
       </div>
     </div>
 
@@ -83,8 +85,8 @@
         const credits = d.credits || { exterior:0, full:0 };
         const c = el("credits");
         c.innerHTML = "";
-        const p1 = document.createElement("div"); p1.className="pill"; p1.textContent = `Exterior credits: ${credits.exterior||0}`;
-        const p2 = document.createElement("div"); p2.className="pill"; p2.textContent = `Full credits: ${credits.full||0}`;
+        const p1 = document.createElement("div"); p1.className="pill"; p1.textContent = `Exterior Detail credits: ${credits.exterior||0}`;
+        const p2 = document.createElement("div"); p2.className="pill"; p2.textContent = `Full Detail credits: ${credits.full||0}`;
         c.appendChild(p1); c.appendChild(p2);
 
         el("name").value = d.user?.name || "";
@@ -108,6 +110,11 @@
           else { alert(pd?.error || "Portal unavailable."); }
         };
 
+        el("signout").onclick = () => {
+          localStorage.removeItem('GM_TOKEN');
+          location.href = '/login.html';
+        };
+
         reportHeight();
       }
 
@@ -124,8 +131,13 @@
           body: JSON.stringify(payload)
         });
         const d = await r.json().catch(()=> ({}));
-        if (d?.ok) { alert("Saved."); load(); }
-        else { alert(d?.error || "Failed to save"); }
+        if (d?.ok) {
+          // After saving, return to the first login page as requested
+          localStorage.removeItem('GM_TOKEN');
+          location.href = '/login.html';
+        } else {
+          alert(d?.error || "Failed to save");
+        }
       };
 
       load().catch(()=> { alert("Failed to load account."); });
