@@ -13,14 +13,13 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 /* CORS */
-const allow = (process.env.ALLOW_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean);
-// If not configured, allow Vercel preview and your prod host minimally
+const allowFromEnv = (process.env.ALLOW_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean);
 const vercelPreview = /\.vercel\.app$/i;
 app.use(cors({
   origin(origin, cb) {
     if (!origin) return cb(null, true);
-    if (allow.includes("*")) return cb(null, true);
-    if (allow.includes(origin)) return cb(null, true);
+    if (allowFromEnv.includes("*")) return cb(null, true);
+    if (allowFromEnv.includes(origin)) return cb(null, true);
     if (vercelPreview.test(origin)) return cb(null, true);
     return cb(new Error("CORS blocked: " + origin));
   },
