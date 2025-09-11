@@ -43,9 +43,25 @@ setInterval(reportHeight, 900);
 const Button = ({ children, className, ...props }) => <button className={cx("gm btn", className)} {...props}>{children}</button>;
 const PrimaryButton = (props) => <Button className="primary" {...props} />;
 
+/* Simple top bar with “View account” */
+function TopBar() {
+  return (
+    <div style={{ display:"flex", justifyContent:"flex-end", alignItems:"center", marginBottom:8 }}>
+      <button
+        className="gm btn"
+        onClick={()=> { try { window.top.location.href = "/account.html"; } catch { window.location.href = "/account.html"; } }}
+        aria-label="View account"
+        title="View account"
+      >
+        <span style={{ marginRight:6, fontWeight:800 }}>👤</span>
+        View account
+      </button>
+    </div>
+  );
+}
+
 /* Cards */
-function ServiceCard({ title, price, strike, selected, onClick, hidden }) {
-  if (hidden) return null;
+function ServiceCard({ title, price, strike, selected, onClick }) {
   return (
     <div className={cx("gm card", selected && "selected")} onClick={onClick} role="button">
       <div className="gm card-title">{title}</div>
@@ -55,7 +71,7 @@ function ServiceCard({ title, price, strike, selected, onClick, hidden }) {
           <span className="gm price-strike">{fmtGBP(strike)}</span>
         </div>
       ) : (
-        <div className="gm muted" style={{ fontWeight: 800, marginBottom: 6 }}>{fmtGBP(price)}</div>
+        <div className="gm muted" style={{ fontWeight: 600, marginBottom: 6 }}>{fmtGBP(price)}</div>
       )}
     </div>
   );
@@ -76,17 +92,6 @@ function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
 }
 
 /* ================== SERVICES ================== */
-function TopBar() {
-  return (
-    <div className="gm topbar">
-      <a className="gm account-link" href="/account.html">
-        <span className="head" aria-hidden="true"></span>
-        <span>View Account</span>
-      </a>
-    </div>
-  );
-}
-
 function Services({ state, setState }) {
   const cfg = state.config || { services:{}, addons:{} };
   const [svc, setSvc] = React.useState(state.service_key || "");
@@ -114,10 +119,13 @@ function Services({ state, setState }) {
   const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
   const usingCredits = hasFullCredit || hasExteriorCredit;
 
-  // Hide membership the user already has active
-  const activeTiers = new Set((state.subscriptions || []).map(s => s.tier));
-  const hideStandardMembership = activeTiers.has("standard");
-  const hidePremiumMembership  = activeTiers.has("premium");
+  // If user has any credits, skip services and force straight to calendar for the matching service
+  React.useEffect(() => {
+    if (usingCredits) {
+      const inferred = hasFullCredit ? "full" : "exterior";
+      setState(s => ({ ...s, service_key: inferred, addons: [], step: "calendar" }));
+    }
+  }, []); // run once on mount
 
   async function subscribeNow(tierKey){
     const token = state.token;
@@ -141,7 +149,7 @@ function Services({ state, setState }) {
       body: JSON.stringify(payload),
     });
     const d = await r.json().catch(()=> ({}));
-    if (!d?.ok || !d?.url) { alert(d?.error || "Unable to start subscription."); return; }
+    if (!d?.ok || !d?.url) { alert("We couldn’t start your subscription. Please try again."); return; }
     try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
@@ -155,7 +163,7 @@ function Services({ state, setState }) {
     setState((s) => ({
       ...s,
       service_key: svc,
-      addons: usingCredits ? [] : addons,
+      addons: [], // never carry add-ons into services selection header
       selectedDayKey: null,
       selectedSlot: null,
       step: "calendar",
@@ -164,50 +172,36 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
-  // Quick header: credits + account
-  const CreditsHeader = () => (
-    <div className="gm card" style={{ marginBottom: 12 }}>
-      <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", justifyContent:"space-between" }}>
-        <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-          <span className="gm counter ok">Exterior credits: {state.credits?.exterior || 0}</span>
-          <span className="gm counter ok">Full credits: {state.credits?.full || 0}</span>
-        </div>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {(state.credits?.exterior||0) > 0 && (
-            <Button onClick={()=> setState(s=> ({ ...s, service_key:"exterior", addons:[], step:"calendar" }))}>Book exterior</Button>
-          )}
-          {(state.credits?.full||0) > 0 && (
-            <Button onClick={()=> setState(s=> ({ ...s, service_key:"full", addons:[], step:"calendar" }))}>Book full</Button>
-          )}
-          <Button onClick={()=> window.location.href="/account.html"}>Account</Button>
-        </div>
-      </div>
-    </div>
-  );
+  // Block seeing memberships again if active sub exists
+  const hasStandardSub = (state.subscriptions||[]).some(s => s.tier === "standard");
+  const hasPremiumSub  = (state.subscriptions||[]).some(s => s.tier === "premium");
 
   return (
     <div className="gm page-section gm-booking wrap">
       <TopBar />
       <div className="gm panel wider">
-        <CreditsHeader />
-
         <div className="gm h2 center">Choose your service</div>
 
         <div className="gm cards">
           <ServiceCard title={cfg.services?.exterior?.name || "Exterior Detail"}
             price={effPrice("exterior")} strike={firstTime ? basePrice("exterior") : undefined}
-            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} hidden={false} />
+            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} />
           <ServiceCard title={cfg.services?.full?.name || "Full Detail"}
             price={effPrice("full")} strike={firstTime ? basePrice("full") : undefined}
-            selected={svc==="full"} onClick={()=>setSvc("full")} hidden={false} />
-          <ServiceCard title={cfg.services?.standard_membership?.name || "Standard Membership (2 Exterior)"}
-            price={effPrice("standard_membership")} strike={firstTime ? basePrice("standard_membership") : undefined}
-            selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} hidden={hideStandardMembership} />
-          <ServiceCard title={cfg.services?.premium_membership?.name || "Premium Membership (2 Full)"}
-            price={effPrice("premium_membership")} strike={firstTime ? basePrice("premium_membership") : undefined}
-            selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} hidden={hidePremiumMembership} />
+            selected={svc==="full"} onClick={()=>setSvc("full")} />
+          {!hasStandardSub && (
+            <ServiceCard title={cfg.services?.standard_membership?.name || "Standard Membership (2 Exterior)"}
+              price={effPrice("standard_membership")} strike={firstTime ? basePrice("standard_membership") : undefined}
+              selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} />
+          )}
+          {!hasPremiumSub && (
+            <ServiceCard title={cfg.services?.premium_membership?.name || "Premium Membership (2 Full)"}
+              price={effPrice("premium_membership")} strike={firstTime ? basePrice("premium_membership") : undefined}
+              selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
+          )}
         </div>
 
+        {/* Add-ons hidden when selecting membership or using credits */}
         {!(svc==="standard_membership" || svc==="premium_membership" || usingCredits) && (
           <>
             <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -301,6 +295,7 @@ function Calendar({ state, setState }) {
           </div>
           <div className="gm monthtitle">{monthLabel(monthKey)}</div>
           <div className="gm monthnav-right">
+            <div style={{ width: 1 }} />
             <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, +1) }))}>Next</Button>
           </div>
         </div>
@@ -340,11 +335,7 @@ function Calendar({ state, setState }) {
         ) : null}
 
         <div className="gm actions space" style={{ marginTop: 12 }}>
-          {(state.credits?.exterior||0) + (state.credits?.full||0) === 0 ? (
-            <Button onClick={()=> setState(s=> ({ ...s, step: "services" }))}>Back</Button>
-          ) : (
-            <div className="gm muted">You have credits to use.</div>
-          )}
+          <Button onClick={()=> setState(s=> ({ ...s, step: "services" }))}>Back</Button>
         </div>
       </div>
     </div>
@@ -434,7 +425,7 @@ function Confirm({ state, setState }) {
         body: JSON.stringify(payload)
       });
       const d = await r.json().catch(()=> ({}));
-      if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
+      if (!d?.ok) { alert("We couldn’t book this credit. Please try again."); return; }
       if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; }
       if (d.booked) { setState(s=> ({ ...s, step: "thankyou" })); setTimeout(reportHeight, 60); return; }
       alert("Unexpected response."); return;
@@ -452,7 +443,7 @@ function Confirm({ state, setState }) {
       method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
     });
     const d = await r.json().catch(()=> ({}));
-    if (!d?.ok || !d?.url) { alert(d?.error || "Payment failed to initialize."); return; }
+    if (!d?.ok || !d?.url) { alert("Payment could not be started. Please try again."); return; }
     try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
@@ -479,11 +470,11 @@ function Confirm({ state, setState }) {
 
             <div className="gm card">
               <div className="gm card-title">Booking</div>
-              <div style={{ fontWeight: 800, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
               {slotLine}
               {!!(state.addons || []).length && !usingCredit && (
                 <div style={{ marginTop: 6 }}>
-                  <div style={{ fontWeight: 800 }}>Add-ons</div>
+                  <div style={{ fontWeight: 600 }}>Add-ons</div>
                   <div>{state.addons.map((k)=> (cfg.addons?.[k]?.name || k)).join(", ")}</div>
                 </div>
               )}
@@ -534,8 +525,8 @@ function App(){
     step: "loading",
     token: localStorage.getItem('GM_TOKEN') || "",
     user: null,
-    subscriptions: [],
     credits: { exterior: 0, full: 0 },
+    subscriptions: [],
     customer:{}, has_tap:true, service_key:"", addons:[],
     selectedDayKey:null, selectedSlot:null,
     availability:null, monthKey: toDateKey(new Date()).slice(0,7), config:null, first_time:false,
@@ -577,24 +568,16 @@ function App(){
       try {
         const { user, customer, credits, subscriptions } = await loadProfile(token);
 
-        // If user has any credits, force them into the calendar with the appropriate service.
-        const fullC = credits.full || 0;
-        const extC  = credits.exterior || 0;
-        if (fullC > 0 || extC > 0) {
-          const inferred = fullC > 0 ? "full" : "exterior";
-          setState(s => ({ ...s, token, user, customer, credits, subscriptions, service_key: inferred, addons: [], step: "calendar" }));
-          return;
-        }
-
-        // Coming back from subscription success: try to move to calendar if credits exist
+        // If coming from subscription success and credits are present, jump to calendar
         if (fromSub) {
-          const inferred = (credits.full||0) > 0 ? "full" : ((credits.exterior||0) > 0 ? "exterior" : "");
-          if (inferred) {
+          const hasFull = (credits.full||0) > 0;
+          const hasExt  = (credits.exterior||0) > 0;
+          if (hasFull || hasExt) {
+            const inferred = hasFull ? "full" : "exterior";
             setState(s => ({ ...s, token, user, customer, credits, subscriptions, service_key: inferred, addons: [], step: "calendar" }));
             return;
           }
         }
-
         setState(s => ({ ...s, token, user, customer, credits, subscriptions, step: "services" }));
       } catch {
         localStorage.removeItem('GM_TOKEN');
