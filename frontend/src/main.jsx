@@ -55,7 +55,7 @@ function ServiceCard({ title, price, strike, selected, onClick, hidden }) {
           <span className="gm price-strike">{fmtGBP(strike)}</span>
         </div>
       ) : (
-        <div className="gm muted" style={{ fontWeight: 700, marginBottom: 6 }}>{fmtGBP(price)}</div>
+        <div className="gm muted" style={{ fontWeight: 800, marginBottom: 6 }}>{fmtGBP(price)}</div>
       )}
     </div>
   );
@@ -300,6 +300,9 @@ function Calendar({ state, setState }) {
             <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}>Previous</Button>
           </div>
           <div className="gm monthtitle">{monthLabel(monthKey)}</div>
+          <div className="gm monthnav-right">
+            <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, +1) }))}>Next</Button>
+          </div>
         </div>
 
         {loading && <div className="gm alert">Loading availability…</div>}
@@ -476,11 +479,11 @@ function Confirm({ state, setState }) {
 
             <div className="gm card">
               <div className="gm card-title">Booking</div>
-              <div style={{ fontWeight: 700, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
+              <div style={{ fontWeight: 800, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
               {slotLine}
               {!!(state.addons || []).length && !usingCredit && (
                 <div style={{ marginTop: 6 }}>
-                  <div style={{ fontWeight: 700 }}>Add-ons</div>
+                  <div style={{ fontWeight: 800 }}>Add-ons</div>
                   <div>{state.addons.map((k)=> (cfg.addons?.[k]?.name || k)).join(", ")}</div>
                 </div>
               )}
