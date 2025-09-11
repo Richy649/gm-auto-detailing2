@@ -21,7 +21,6 @@ const prices = {
   },
 };
 
-// tiny helper to read 1 row
 const one = async (q, p) => (await pool.query(q, p)).rows[0] || null;
 const safeJson = (x) => { try { return JSON.stringify(x); } catch { return String(x); } };
 
@@ -35,7 +34,6 @@ async function firstTimeEligible({ email, phone, street }) {
   try {
     const e = norm(email), p = digits(phone), s = norm(street);
 
-    // Any existing user with same email/phone/street? If yes -> not eligible
     const u = await one(
       `SELECT 1 FROM public.users
         WHERE (lower(email) = NULLIF($1,''))
@@ -46,7 +44,6 @@ async function firstTimeEligible({ email, phone, street }) {
     );
     if (u) return false;
 
-    // Any historical booking matching those keys? If yes -> not eligible
     const b = await one(
       `SELECT 1 FROM public.bookings
         WHERE (lower(customer_email) = NULLIF($1,''))
@@ -203,7 +200,6 @@ export function membershipRoutes() {
 
       const u = await one("SELECT * FROM public.users WHERE id=$1", [req.user.id]);
 
-      // update stored profile with any missing fields
       await pool.query(
         `UPDATE public.users
             SET name=COALESCE(NULLIF($2,''),name),
@@ -230,10 +226,8 @@ export function membershipRoutes() {
         await linkUserStripeCustomer(u.id, sc.id);
         console.log("[memberships] created stripe customer", safeJson({ user_id: u.id, customer_id: sc.id }));
       } else {
-        // sanity check that it exists in Stripe (avoid "No such customer")
-        try {
-          await stripe.customers.retrieve(stripeCustomerId);
-        } catch {
+        try { await stripe.customers.retrieve(stripeCustomerId); }
+        catch {
           const sc = await stripe.customers.create({
             email: customer.email,
             name: customer.name || undefined,
@@ -285,7 +279,7 @@ export function membershipRoutes() {
 }
 
 /* ------------------------------------------------------------
-   Webhook handler (Stripe sends: checkout.session.completed, invoice.payment_succeeded, charge.refunded, customer.subscription.deleted)
+   Webhook handler
    ------------------------------------------------------------ */
 export async function membershipsWebhookHandler(req, res) {
   try {
@@ -299,11 +293,9 @@ export async function membershipsWebhookHandler(req, res) {
     console.log("[memberships] webhook received", event.type);
 
     switch (event.type) {
-      /* -------- After checkout creates the subscription -------- */
       case "checkout.session.completed": {
         const s = event.data.object;
 
-        // A) Subscription flow
         if (s.mode === "subscription") {
           const user_id = Number(s.metadata?.user_id || 0);
           const tier = s.metadata?.tier;
@@ -324,7 +316,6 @@ export async function membershipsWebhookHandler(req, res) {
           }
         }
 
-        // B) Addons-only with credit via generic checkout (not used in /memberships route)
         if (s.mode === "payment" && s.metadata?.kind === "addons_only_with_credit") {
           const user_id = Number(s.metadata.user_id || 0);
           const service_key = s.metadata.service_key;
@@ -347,84 +338,100 @@ export async function membershipsWebhookHandler(req, res) {
         break;
       }
 
-      /* -------- The invoice is paid each cycle -> grant credits -------- */
       case "invoice.payment_succeeded": {
-        const inv = event.data.object;
-        const invId = inv.id;
-        console.log("[memberships] invoice.payment_succeeded", safeJson({ invoice_id: invId, subscription: inv.subscription, customer: inv.customer }));
+        const rawInv = event.data.object;
+        console.log("[memberships] invoice.payment_succeeded", safeJson({ invoice_id: rawInv.id, customer: rawInv.customer }));
 
-        if (!inv.subscription) break;
+        // Re-retrieve invoice with expansions to make sure we have subscription and price details.
+        const inv = await stripe.invoices.retrieve(rawInv.id, {
+          expand: ["subscription", "lines.data.price", "lines.data.subscription_item"]
+        });
 
-        // 1) Find subscription row; if missing, reconstruct via customer->user
-        let srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+        // Try to resolve subscription id
+        let subscriptionId =
+          (typeof inv.subscription === "string" ? inv.subscription : inv.subscription?.id) ||
+          inv.lines?.data?.[0]?.subscription ||
+          null;
 
-        let user_id = srow?.user_id || null;
-        if (!user_id) {
+        // If still missing, derive from customer's active subscriptions
+        if (!subscriptionId) {
           const custId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id;
           if (custId) {
-            const u = await one("SELECT id FROM public.users WHERE stripe_customer_id=$1", [custId]);
-            if (u?.id) {
-              user_id = u.id;
-              // retrieve stripe sub to fill tier/status/periods then upsert row
-              const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-              const activePriceId = sub.items.data[0]?.price?.id || null;
-              const inferredTier = tierFromPriceId(activePriceId) || "standard";
-              await upsertSubscription({
-                user_id,
-                stripe_subscription_id: inv.subscription,
-                tier: inferredTier,
-                status: sub.status,
-                period_start: sub.current_period_start,
-                period_end: sub.current_period_end
-              });
-              srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
-              console.log("[memberships] reconstructed subscription row", safeJson({ user_id, inferredTier }));
-            }
+            const subs = await stripe.subscriptions.list({ customer: custId, status: "active", limit: 3 });
+            if (subs?.data?.length) subscriptionId = subs.data[0].id;
+          }
+        }
+
+        if (!subscriptionId) {
+          console.warn("[memberships] invoice has no resolvable subscription; skipping grant", safeJson({ invoice_id: inv.id }));
+          break;
+        }
+
+        // Pull subscription and infer tier from price id
+        const sub = await stripe.subscriptions.retrieve(subscriptionId, { expand: ["items.data.price"] });
+        const priceId = sub.items.data[0]?.price?.id || inv.lines?.data?.[0]?.price?.id || null;
+
+        let tier = tierFromPriceId(priceId);
+        if (!tier) {
+          // final fallback
+          const unitAmount = sub.items.data[0]?.price?.unit_amount || inv.lines?.data?.[0]?.price?.unit_amount || 0;
+          if (unitAmount) {
+            // Compare to known full/intro amounts if you want; here we default to standard
+            tier = "standard";
+          } else {
+            tier = "standard";
+          }
+        }
+
+        // Find or build subscription row and user_id
+        let srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [subscriptionId]);
+        let user_id = srow?.user_id || null;
+
+        if (!user_id) {
+          const custId = typeof inv.customer === "string" ? inv.customer : inv.customer?.id;
+          const u = custId ? await one("SELECT id FROM public.users WHERE stripe_customer_id=$1", [custId]) : null;
+          if (u?.id) {
+            user_id = u.id;
+            await upsertSubscription({
+              user_id,
+              stripe_subscription_id: subscriptionId,
+              tier,
+              status: sub.status,
+              period_start: sub.current_period_start,
+              period_end: sub.current_period_end
+            });
+            srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [subscriptionId]);
+            console.log("[memberships] reconstructed subscription row", safeJson({ user_id, tier }));
           }
         }
 
         if (!srow?.user_id) {
-          console.warn("[memberships] invoice paid but no subscription/user found; skipping grant", safeJson({ invId }));
+          console.warn("[memberships] invoice paid but no subscription/user found; skipping grant", safeJson({ invoice_id: inv.id }));
           break;
         }
 
-        // 2) Decide tier
-        //   Prefer subscription item price, fall back to invoice line item price
-        const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const subPriceId = sub.items.data[0]?.price?.id || null;
-        let tier = tierFromPriceId(subPriceId);
-
-        if (!tier) {
-          const line = inv.lines?.data?.[0];
-          const linePriceId = line?.price?.id || null;
-          tier = tierFromPriceId(linePriceId) || (subPriceId ? (tierFromPriceId(subPriceId) || "standard") : "standard");
-        }
-
-        // 3) Determine period bounds (credits valid for current billing period)
+        // Determine period bounds (prefer invoice line period)
         const line = inv.lines?.data?.[0];
         const pStart = line?.period?.start || sub.current_period_start;
         const pEnd   = line?.period?.end   || sub.current_period_end;
 
-        // 4) Grant credits
         await grantCreditsFromInvoice({
           user_id: srow.user_id,
           tier,
-          invoice_id: invId,
+          invoice_id: inv.id,
           period_start: pStart,
           period_end: pEnd
         });
 
-        // 5) If this was the first invoice after subscription_create -> flip to full price for next cycle
         if (inv.billing_reason === "subscription_create") {
-          await ensureFullPriceNextCycle(inv.subscription, tier);
+          await ensureFullPriceNextCycle(subscriptionId, tier);
           await pool.query("UPDATE public.users SET membership_intro_used=TRUE WHERE id=$1", [srow.user_id])
             .catch((e)=> console.warn("[memberships] failed to mark membership_intro_used", e?.message));
         }
 
-        // 6) Keep subscription row fresh
         await upsertSubscription({
           user_id: srow.user_id,
-          stripe_subscription_id: inv.subscription,
+          stripe_subscription_id: subscriptionId,
           tier,
           status: sub.status,
           period_start: sub.current_period_start,
@@ -448,18 +455,19 @@ export async function membershipsWebhookHandler(req, res) {
         const charge = event.data.object;
         const invId = typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id;
         if (!invId) break;
-        const inv = await stripe.invoices.retrieve(invId);
-        if (!inv?.subscription) break;
+        const inv = await stripe.invoices.retrieve(invId, { expand:["subscription","lines.data.price"] });
+        const subId = (typeof inv.subscription === "string" ? inv.subscription : inv.subscription?.id) || null;
+        if (!subId) break;
 
-        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [subId]);
         if (!srow) break;
 
-        const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const line = inv.lines?.data?.[0];
-        if (!line?.period) break;
-
+        const sub = await stripe.subscriptions.retrieve(subId, { expand:["items.data.price"] });
         const activePriceId = sub.items.data[0]?.price?.id || null;
         const tier = tierFromPriceId(activePriceId) || "standard";
+
+        const line = inv.lines?.data?.[0];
+        if (!line?.period) break;
 
         await revokeRemainingForInvoice({
           user_id: srow.user_id,
@@ -473,7 +481,6 @@ export async function membershipsWebhookHandler(req, res) {
       }
 
       default:
-        // quiet log for visibility
         console.log("[memberships] webhook unhandled type", event.type);
         break;
     }
