@@ -3,6 +3,7 @@ import { Router } from "express";
 import Stripe from "stripe";
 import { pool, saveBooking } from "./db.js";
 import { authMiddleware } from "./auth.js";
+import { createCalendarEvents } from "./gcal.js";
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -61,8 +62,9 @@ router.post("/book-with-credit", async (req, res) => {
       return res.json({ ok:true, url: session.url });
     }
 
-    // No add-ons → save booking now and debit immediately
+    // No add-ons → save booking now and debit immediately; also sync to Google Calendar
     const bookingId = await saveBooking({
+      user_id: req.user.id,
       stripe_session_id: null,
       service_key,
       addons,
@@ -76,6 +78,26 @@ router.post("/book-with-credit", async (req, res) => {
        VALUES ($1,$2,-1,'debit',$3,$4)`,
       [req.user.id, service_type, `booking ${bookingId}`, bookingId]
     );
+
+    try {
+      await createCalendarEvents(`credit-${bookingId}`, [{
+        start_iso: slot.start_iso,
+        end_iso: slot.end_iso,
+        summary: `GM Auto Detailing — ${service_key === "full" ? "Full Detail" : "Exterior Detail"}`,
+        location: `${customer?.street || ""}, ${customer?.postcode || ""}`.trim(),
+        description: [
+          `Name: ${customer?.name || ""}`,
+          `Phone: ${customer?.phone || ""}`,
+          `Email: ${customer?.email || ""}`,
+          `Address: ${customer?.street || ""}, ${customer?.postcode || ""}`,
+          `Outhouse tap: Yes`,
+          `Paid with membership credit`,
+        ].join("\n"),
+      }]);
+    } catch (e) {
+      console.warn("[gcal] credit booking calendar create failed", e?.message || e);
+    }
+
     res.json({ ok:true, booked:true, booking_id: bookingId });
 
   } catch (e) {
