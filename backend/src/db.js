@@ -10,14 +10,6 @@ export const pool = process.env.DATABASE_URL
   : null;
 
 /* ----------------------------- helpers ----------------------------- */
-async function tableExists(schema, table) {
-  const r = await pool.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_schema=$1 AND table_name=$2 LIMIT 1`,
-    [schema, table]
-  );
-  return r.rowCount > 0;
-}
-
 async function columnExists(table, column) {
   const r = await pool.query(
     `SELECT 1 FROM information_schema.columns
@@ -178,26 +170,35 @@ async function ensureColumnsAndConstraints() {
   } catch {}
 
   // Safer one-time backfill canonical timestamptz from legacy strings where missing.
-  // Only cast ISO-looking strings; skip blanks/invalids to avoid errors.
+  // We ONLY cast values that look ISO-like; heavily guard with ::text predicates.
+  // Accept both "YYYY-MM-DDT..." and "YYYY-MM-DD ..." formats.
   await pool
     .query(`
       UPDATE public.bookings
-      SET start_time = start_iso::timestamptz
-      WHERE start_time IS NULL
-        AND start_iso IS NOT NULL
-        AND btrim(start_iso) <> ''
-        AND start_iso ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T';
+      SET start_time = CASE
+        WHEN start_time IS NULL
+         AND start_iso IS NOT NULL
+         AND length(btrim(start_iso::text)) > 0
+         AND (start_iso::text) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T]'
+        THEN (start_iso::text)::timestamptz
+        ELSE start_time
+      END
+      WHERE start_time IS NULL;
     `)
     .catch(() => {});
 
   await pool
     .query(`
       UPDATE public.bookings
-      SET end_time = end_iso::timestamptz
-      WHERE end_time IS NULL
-        AND end_iso IS NOT NULL
-        AND btrim(end_iso) <> ''
-        AND end_iso ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T';
+      SET end_time = CASE
+        WHEN end_time IS NULL
+         AND end_iso IS NOT NULL
+         AND length(btrim(end_iso::text)) > 0
+         AND (end_iso::text) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T]'
+        THEN (end_iso::text)::timestamptz
+        ELSE end_time
+      END
+      WHERE end_time IS NULL;
     `)
     .catch(() => {});
 }
