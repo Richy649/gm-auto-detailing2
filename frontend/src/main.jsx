@@ -43,33 +43,13 @@ setInterval(reportHeight, 900);
 const Button = ({ children, className, ...props }) => <button className={cx("gm btn", className)} {...props}>{children}</button>;
 const PrimaryButton = (props) => <Button className="primary" {...props} />;
 
-/* Head icon (SVG, no emoji) */
-function HeadIcon({ size = 16, style = {} }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">
-      <circle cx="12" cy="8" r="4" fill="currentColor"></circle>
-      <path d="M4 20c0-4 4-6 8-6s8 2 8 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-    </svg>
-  );
-}
-
-/* Simple top bar with “View account” (SVG head + text) */
-function TopBar() {
-  return (
-    <div style={{ display:"flex", justifyContent:"flex-end", alignItems:"center", marginBottom:8 }}>
-      <button
-        className="gm btn"
-        onClick={()=> { try { window.top.location.href = "/account.html"; } catch { window.location.href = "/account.html"; } }}
-        aria-label="View account"
-        title="View account"
-        style={{ display:"inline-flex", alignItems:"center", gap:8, fontWeight:800 }}
-      >
-        <HeadIcon size={18} />
-        <span>View account</span>
-      </button>
-    </div>
-  );
-}
+/* Mini icon */
+const HeadIcon = ({ size=16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ verticalAlign:"middle" }}>
+    <circle cx="12" cy="8" r="4" fill="#222" />
+    <path d="M4 20c0-4 4-6 8-6s8 2 8 6" fill="#222" />
+  </svg>
+);
 
 /* Cards */
 function ServiceCard({ title, price, strike, selected, onClick }) {
@@ -109,6 +89,15 @@ function Services({ state, setState }) {
   const [addons, setAddons] = React.useState([]);
   const [firstTime, setFirstTime] = React.useState(false);
 
+  // top right "View account"
+  const TopRight = () => (
+    <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
+      <Button onClick={()=> window.location.href="/account.html"}>
+        <span style={{ marginRight:6 }}>View account</span><HeadIcon />
+      </Button>
+    </div>
+  );
+
   React.useEffect(() => {
     const { email, phone, street } = state.customer || {};
     if (!email && !phone && !street) return;
@@ -130,13 +119,14 @@ function Services({ state, setState }) {
   const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
   const usingCredits = hasFullCredit || hasExteriorCredit;
 
-  // If user has any credits, skip services and force straight to calendar for the matching service
+  // If the user has credits, force them to booking calendar immediately (no services page)
   React.useEffect(() => {
     if (usingCredits) {
       const inferred = hasFullCredit ? "full" : "exterior";
       setState(s => ({ ...s, service_key: inferred, addons: [], step: "calendar" }));
     }
-  }, []); // run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usingCredits]);
 
   async function subscribeNow(tierKey){
     const token = state.token;
@@ -160,7 +150,7 @@ function Services({ state, setState }) {
       body: JSON.stringify(payload),
     });
     const d = await r.json().catch(()=> ({}));
-    if (!d?.ok || !d?.url) { alert("We couldn’t start your subscription. Please try again."); return; }
+    if (!d?.ok || !d?.url) { alert(d?.error || "Unable to start subscription."); return; }
     try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
@@ -174,7 +164,7 @@ function Services({ state, setState }) {
     setState((s) => ({
       ...s,
       service_key: svc,
-      addons: [],
+      addons: usingCredits ? [] : addons,
       selectedDayKey: null,
       selectedSlot: null,
       step: "calendar",
@@ -183,14 +173,15 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
-  // Hide memberships user already has
-  const hasStandardSub = (state.subscriptions||[]).some(s => s.tier === "standard");
-  const hasPremiumSub  = (state.subscriptions||[]).some(s => s.tier === "premium");
+  // Hide Standard/Premium tiles if the user already has an active sub (credits will be granted next cycle)
+  const hideStandard = state.subscriptions?.some?.(x => x.tier === "standard" && x.status === "active");
+  const hidePremium  = state.subscriptions?.some?.(x => x.tier === "premium"  && x.status === "active");
 
   return (
     <div className="gm page-section gm-booking wrap">
-      <TopBar />
       <div className="gm panel wider">
+        <TopRight />
+
         <div className="gm h2 center">Choose your service</div>
 
         <div className="gm cards">
@@ -200,19 +191,37 @@ function Services({ state, setState }) {
           <ServiceCard title={cfg.services?.full?.name || "Full Detail"}
             price={effPrice("full")} strike={firstTime ? basePrice("full") : undefined}
             selected={svc==="full"} onClick={()=>setSvc("full")} />
-          {!hasStandardSub && (
+          {!hideStandard && (
             <ServiceCard title={cfg.services?.standard_membership?.name || "Standard Membership (2 Exterior)"}
               price={effPrice("standard_membership")} strike={firstTime ? basePrice("standard_membership") : undefined}
               selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} />
           )}
-          {!hasPremiumSub && (
+          {!hidePremium && (
             <ServiceCard title={cfg.services?.premium_membership?.name || "Premium Membership (2 Full)"}
               price={effPrice("premium_membership")} strike={firstTime ? basePrice("premium_membership") : undefined}
               selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
           )}
         </div>
 
+        {/* Show add-ons ONLY for one-off selections (Exterior/Full). Hide for memberships. */}
+        {(svc==="exterior" || svc==="full") && !usingCredits && (
+          <>
+            <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
+            <div className="gm addon-benefits two-col">
+              <AddonCard title={aCfg.wax?.name || "Ceramic Wax"}
+                price={typeof aCfg.wax?.price === "number" ? aCfg.wax.price : 10}
+                desc="Adds gloss and water beading. Light protection between washes."
+                align="left" selected={addons.includes("wax")} onToggle={toggleWax} />
+              <AddonCard title={aCfg.polish?.name || "Hand Polish"}
+                price={typeof aCfg.polish?.price === "number" ? aCfg.polish.price : 22.5}
+                desc="Hand-finished shine. Softens light marks and brightens the paint."
+                align="right" selected={addons.includes("polish")} onToggle={togglePolish} />
+            </div>
+          </>
+        )}
+
         <div className="gm actions space bottom-stick">
+          <div />
           <PrimaryButton onClick={continueFlow}>
             {(svc==="standard_membership"||svc==="premium_membership") ? "Subscribe" : "Continue"}
           </PrimaryButton>
@@ -281,7 +290,6 @@ function Calendar({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
-      <TopBar />
       <div className="gm panel wider">
         <div className="gm monthbar-grid">
           <div className="gm monthnav-left">
@@ -353,7 +361,6 @@ function Times({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
-      <TopBar />
       <div className="gm panel wider">
         <div className="gm h2 center">
           {new Date(fromKey(dayKey)).toLocaleString("en-GB",{ timeZone:TZ, weekday:"long", day:"numeric", month:"long", year:"numeric" })}
@@ -379,7 +386,7 @@ function Times({ state, setState }) {
         </div>
 
         <div className="gm actions space" style={{ marginTop: 12 }}>
-          <Button onClick={()=> setState(s=> ({ ...s, step: "calendar" }))}>Back to calendar</Button>
+          <Button onClick={()=> setState(s=> ({ ...s, step: "calendar" }))}>Back</Button>
         </div>
       </div>
     </div>
@@ -397,8 +404,8 @@ function Confirm({ state, setState }) {
   const finalTotal = serviceAfter + addonsTotal;
 
   const usingCredit =
-    (state.credits?.exterior||0) > 0 && state.service_key === "exterior" ||
-    (state.credits?.full||0)     > 0 && state.service_key === "full";
+    ((state.credits?.exterior||0) > 0 && state.service_key === "exterior") ||
+    ((state.credits?.full||0)     > 0 && state.service_key === "full");
 
   async function pay(){
     if (!state.customer || !state.service_key) return;
@@ -419,9 +426,13 @@ function Confirm({ state, setState }) {
         body: JSON.stringify(payload)
       });
       const d = await r.json().catch(()=> ({}));
-      if (!d?.ok) { alert("We couldn’t book this credit. Please try again."); return; }
+      if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
       if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; }
-      if (d.booked) { setState(s=> ({ ...s, step: "thankyou" })); setTimeout(reportHeight, 60); return; }
+      if (d.booked) {
+        setState(s=> ({ ...s, step: "thankyou", thankyouKind: "credit" }));
+        setTimeout(reportHeight, 60);
+        return;
+      }
       alert("Unexpected response."); return;
     }
 
@@ -437,7 +448,7 @@ function Confirm({ state, setState }) {
       method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
     });
     const d = await r.json().catch(()=> ({}));
-    if (!d?.ok || !d?.url) { alert("Payment could not be started. Please try again."); return; }
+    if (!d?.ok || !d?.url) { alert(d?.error || "Payment failed to initialize."); return; }
     try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
@@ -447,7 +458,6 @@ function Confirm({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
-      <TopBar />
       <div className="gm panel wider">
         <div className="gm h2 center">Confirm booking</div>
 
@@ -501,38 +511,40 @@ function Confirm({ state, setState }) {
   );
 }
 
-/* ================== THANK YOU (redesigned) ================== */
-function InstagramIcon({ size = 18, style = {} }) {
+/* ================== THANK YOU ================== */
+function InstagramRow() {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" style={style} aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" rx="5" ry="5" fill="none" stroke="currentColor" strokeWidth="2"/>
-      <circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="2"/>
-      <circle cx="17.5" cy="6.5" r="1.5" fill="currentColor"/>
-    </svg>
+    <div style={{ marginTop: 18, textAlign:"center" }}>
+      <div className="gm muted" style={{ marginBottom: 6 }}>In the meantime, check out my socials</div>
+      <div style={{ display:"inline-flex", gap:8, alignItems:"center", fontWeight:700 }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="2" y="2" width="20" height="20" rx="5" fill="#222" />
+          <circle cx="12" cy="12" r="5" fill="#fff" />
+          <circle cx="17.5" cy="6.5" r="1.5" fill="#fff" />
+        </svg>
+        <span>@gmautodetailing.uk</span>
+      </div>
+    </div>
   );
 }
 
-function ThankYou(){
-  React.useEffect(()=> setTimeout(reportHeight,60),[]);
-  const goAccount = () => { try { window.top.location.href = "/account.html"; } catch { window.location.href = "/account.html"; } };
+function ThankYou({ kind, onBook, onAccount }) {
+  const isSub  = kind === "sub";
+  const title  = isSub ? "Thank you for subscribing!" : "Thank you for your booking!";
+  const subtxt = isSub ? "You now have 2 credits to use this month." : "Your booking details have been sent to your email.";
+
   return (
     <div className="gm page-section gm-booking wrap">
-      <div className="gm panel wider" style={{textAlign:"center"}}>
-        <div className="gm h2 center" style={{ fontSize: 24, marginBottom: 8 }}>Thank you so much for booking with me!</div>
-        <div style={{ marginBottom: 14 }}>
-          If you want to see your booking, view your account dashboard.
+      <div className="gm panel wider" style={{ textAlign:"center" }}>
+        <div className="gm h2 center" style={{ fontSize:22 }}>{title}</div>
+        <div>{subtxt}</div>
+
+        <div style={{ marginTop: 14, display:"inline-flex", gap:10 }}>
+          {isSub && <PrimaryButton onClick={onBook}>Book now</PrimaryButton>}
+          <Button onClick={onAccount}><span style={{ marginRight:6 }}>View account</span><HeadIcon /></Button>
         </div>
-        <div style={{ display:"flex", justifyContent:"center", marginBottom: 18 }}>
-          <button className="gm btn primary" onClick={goAccount} style={{ display:"inline-flex", alignItems:"center", gap:8, fontWeight:800 }}>
-            <HeadIcon size={18} />
-            <span>View account</span>
-          </button>
-        </div>
-        <div style={{ marginTop: 6, color:"#444", fontWeight:700 }}>In the meantime, check out my socials!</div>
-        <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:8, marginTop:8 }}>
-          <InstagramIcon />
-          <span style={{ fontWeight:800 }}>gmautodetailing.uk</span>
-        </div>
+
+        <InstagramRow />
       </div>
     </div>
   );
@@ -543,6 +555,10 @@ function App(){
   const urlParams = new URLSearchParams(window.location.search);
   const afterLogin = urlParams.get("afterLogin") === "1";
   const fromSub = urlParams.get("sub") === "1";
+  const paid = urlParams.get("paid") === "1";
+  const thankyouFlag = urlParams.get("thankyou") === "1";
+  const flow = urlParams.get("flow"); // "oneoff" | "sub" | "credit"
+  const sessionId = urlParams.get("session_id");
 
   const [state, setState] = React.useState({
     step: "loading",
@@ -553,6 +569,7 @@ function App(){
     customer:{}, has_tap:true, service_key:"", addons:[],
     selectedDayKey:null, selectedSlot:null,
     availability:null, monthKey: toDateKey(new Date()).slice(0,7), config:null, first_time:false,
+    thankyouKind: flow || null,
   });
 
   // Load config early
@@ -575,33 +592,52 @@ function App(){
       postcode: user.postcode || "",
     };
     const credits = d.credits || { exterior:0, full:0 };
-    const subscriptions = d.subscriptions || [];
-    return { user, customer, credits, subscriptions };
+    return { user, customer, credits };
   }, []);
 
+  // Handle success redirects and initial routing
   React.useEffect(() => {
     (async () => {
-      if (!afterLogin && !fromSub) {
+      const token = localStorage.getItem('GM_TOKEN') || "";
+
+      // If a payment success redirect occurred, ensure persistence (confirm) then show Thank You
+      if (paid) {
+        // Optional confirm when session_id is present (one-off)
+        if (sessionId) {
+          await fetch(`${API}/pay/confirm`, { method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify({ session_id: sessionId }) }).catch(()=>{});
+        }
+        setState(s => ({ ...s, step: "thankyou", thankyouKind: flow || (sessionId ? "oneoff" : "credit") }));
+        return;
+      }
+
+      if (!afterLogin && !fromSub && !thankyouFlag) {
         try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
         return;
       }
-      const token = localStorage.getItem('GM_TOKEN') || "";
-      if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
+
+      if (!token) {
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        return;
+      }
 
       try {
-        const { user, customer, credits, subscriptions } = await loadProfile(token);
-
-        // If coming from subscription success and credits are present, jump to calendar
+        const { user, customer, credits } = await loadProfile(token);
+        // Basic subscriptions array not fetched via API in this app; leave empty or populate if you add route
         if (fromSub) {
           const hasFull = (credits.full||0) > 0;
           const hasExt  = (credits.exterior||0) > 0;
+          if (thankyouFlag && flow === "sub") {
+            // go to thank you for subscription
+            setState(s => ({ ...s, token, user, customer, credits, step: "thankyou", thankyouKind: "sub" }));
+            return;
+          }
           if (hasFull || hasExt) {
             const inferred = hasFull ? "full" : "exterior";
-            setState(s => ({ ...s, token, user, customer, credits, subscriptions, service_key: inferred, addons: [], step: "calendar" }));
+            setState(s => ({ ...s, token, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
             return;
           }
         }
-        setState(s => ({ ...s, token, user, customer, credits, subscriptions, step: "services" }));
+        setState(s => ({ ...s, token, user, customer, credits, step: "services" }));
       } catch {
         localStorage.removeItem('GM_TOKEN');
         try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
@@ -609,12 +645,20 @@ function App(){
     })();
   }, []); // eslint-disable-line
 
+  // Thank you handlers
+  const goAccount = React.useCallback(() => { window.location.href = "/account.html"; }, []);
+  const goBookFromSub = React.useCallback(() => {
+    const inferred = (state.credits.full||0) > 0 ? "full" : "exterior";
+    setState(s => ({ ...s, service_key: inferred, addons: [], step: "calendar" }));
+    window.history.replaceState(null, "", "/"); // clear query
+  }, [state.credits]);
+
   if (state.step === "loading")   return null;
   if (state.step === "services")  return <Services state={state} setState={setState} />;
   if (state.step === "calendar")  return <Calendar state={state} setState={setState} />;
   if (state.step === "times")     return <Times    state={state} setState={setState} />;
   if (state.step === "confirm")   return <Confirm  state={state} setState={setState} />;
-  if (state.step === "thankyou")  return <ThankYou />;
+  if (state.step === "thankyou")  return <ThankYou kind={state.thankyouKind || "oneoff"} onBook={goBookFromSub} onAccount={goAccount} />;
 
   return null;
 }
