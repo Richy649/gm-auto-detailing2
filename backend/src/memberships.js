@@ -17,22 +17,29 @@ const one = async (q,p)=> (await pool.query(q,p)).rows[0]||null;
 function norm(s){ return String(s||"").trim().toLowerCase(); }
 function digits(s){ return String(s||"").replace(/[^0-9]+/g,""); }
 
-async function firstTimeEligible({ email, phone, street }) {
+/**
+ * “First-time” logic for INTRO price:
+ *  - Do NOT disqualify the user just because they have an account row.
+ *  - If user has previously completed a subscription cycle (membership_intro_used = true), not eligible.
+ *  - If there are prior bookings tied to this identity (email/phone/street), not eligible.
+ *  - Otherwise, eligible for intro.
+ */
+async function firstTimeEligibleByHistory({ user_id, email, phone, street }) {
+  // If the same logged-in user already used intro: block intro
+  const u = await one("SELECT membership_intro_used FROM public.users WHERE id=$1", [user_id]);
+  if (u && u.membership_intro_used) return false;
+
+  // If any bookings exist by their identity: block intro
   const e = norm(email), p = digits(phone), s = norm(street);
-  const u = await one(
-    `SELECT 1 FROM public.users WHERE
-      (lower(email)=NULLIF($1,'')) OR
-      (regexp_replace(phone,'[^0-9]+','','g')=regexp_replace($2,'[^0-9]+','','g') AND $2<>'') OR
-      (regexp_replace(lower(street),'[^a-z0-9]+','','g')=regexp_replace($3,'[^a-z0-9]+','','g') AND $3<>'')
-     LIMIT 1`, [e,p,s]);
-  if (u) return false;
   const b = await one(
     `SELECT 1 FROM public.bookings WHERE
       (lower(customer_email)=NULLIF($1,'')) OR
       (regexp_replace(customer_phone,'[^0-9]+','','g')=regexp_replace($2,'[^0-9]+','','g') AND $2<>'') OR
       (regexp_replace(lower(customer_street),'[^a-z0-9]+','','g')=regexp_replace($3,'[^a-z0-9]+','','g') AND $3<>'')
      LIMIT 1`, [e,p,s]);
-  return !b;
+  if (b) return false;
+
+  return true;
 }
 
 async function upsertSubscription({ user_id, stripe_subscription_id, tier, status, period_start, period_end }) {
@@ -61,25 +68,21 @@ async function linkUserStripeCustomer(userId, stripeCustomerId) {
 }
 
 /**
- * Validate the stored customer id against Stripe.
- * If missing or invalid in the current mode, create a new customer in this mode and persist it.
+ * Validate stored customer id against Stripe.
+ * If missing/invalid (e.g., wrong mode), create a new one, persist, and return it.
  */
 async function getOrCreateCustomerSafely({ user, customerPayload }) {
-  // Try existing id first
   if (user.stripe_customer_id) {
     try {
       const sc = await stripe.customers.retrieve(user.stripe_customer_id);
       if (sc && !sc.deleted) return sc.id;
     } catch (e) {
       const code = e?.code || e?.raw?.code;
-      // resource_missing → invalid for this mode or deleted — we will recreate
       if (code !== "resource_missing") {
         console.warn("[memberships] retrieve customer failed:", e?.message || e);
       }
     }
   }
-
-  // Create a new customer in the mode of current API key (test or live)
   const created = await stripe.customers.create({
     email: customerPayload.email,
     name: customerPayload.name || undefined,
@@ -158,7 +161,7 @@ export function membershipRoutes() {
 
       const u = await one("SELECT * FROM public.users WHERE id=$1", [req.user.id]);
 
-      // Ensure a valid customer in the current Stripe mode (self-heal if stale)
+      // Ensure a valid Stripe customer in the current mode
       const stripeCustomerId = await getOrCreateCustomerSafely({
         user: u,
         customerPayload: {
@@ -169,14 +172,20 @@ export function membershipRoutes() {
         }
       });
 
-      // Update profile fields for convenience
+      // Keep latest profile on file
       await pool.query(
         `UPDATE public.users SET name=COALESCE($2,name), phone=COALESCE($3,phone),
          street=COALESCE($4,street), postcode=COALESCE($5,postcode) WHERE id=$1`,
         [u.id, customer.name||null, customer.phone||null, customer.street||null, customer.postcode||null]
       );
 
-      const eligible = await firstTimeEligible({ email: customer.email, phone: customer.phone, street: customer.street });
+      // Determine intro eligibility by actual history, not mere account existence
+      const eligible = await firstTimeEligibleByHistory({
+        user_id: u.id,
+        email: customer.email,
+        phone: customer.phone,
+        street: customer.street
+      });
 
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
@@ -218,7 +227,7 @@ export async function membershipsWebhookHandler(req, res) {
   try {
     const sig = req.headers["stripe-signature"];
     const event = stripe.webhooks.constructEvent(
-      req.body,
+      req.body, // RAW body (Buffer) – guaranteed by express.raw() in server.js
       sig,
       process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
     );
