@@ -17,19 +17,32 @@ const one = async (q,p)=> (await pool.query(q,p)).rows[0]||null;
 function norm(s){ return String(s||"").trim().toLowerCase(); }
 function digits(s){ return String(s||"").replace(/[^0-9]+/g,""); }
 
+/* ---------------- epoch helpers ---------------- */
+function asEpochSec(v) {
+  // Accept numeric epoch seconds, numeric strings; otherwise null
+  if (v == null) return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && /^\d+$/.test(v)) return Number(v);
+  return null;
+}
+function pickPeriod({ linePeriod, sub }) {
+  // Prefer line period; fall back to subscription current period
+  const start = asEpochSec(linePeriod?.start) ?? asEpochSec(sub?.current_period_start) ?? null;
+  const end   = asEpochSec(linePeriod?.end)   ?? asEpochSec(sub?.current_period_end)   ?? null;
+  return { start, end };
+}
+
+/* ---------------- intro eligibility ---------------- */
 /**
- * “First-time” logic for INTRO price:
- *  - Do NOT disqualify the user just because they have an account row.
- *  - If user has previously completed a subscription cycle (membership_intro_used = true), not eligible.
- *  - If there are prior bookings tied to this identity (email/phone/street), not eligible.
- *  - Otherwise, eligible for intro.
+ * INTRO price eligibility:
+ *  - Not blocked merely by having a user account.
+ *  - Block if user already used intro (membership_intro_used = true).
+ *  - Block if any prior bookings exist by email/phone/street.
  */
 async function firstTimeEligibleByHistory({ user_id, email, phone, street }) {
-  // If the same logged-in user already used intro: block intro
   const u = await one("SELECT membership_intro_used FROM public.users WHERE id=$1", [user_id]);
   if (u && u.membership_intro_used) return false;
 
-  // If any bookings exist by their identity: block intro
   const e = norm(email), p = digits(phone), s = norm(street);
   const b = await one(
     `SELECT 1 FROM public.bookings WHERE
@@ -42,12 +55,14 @@ async function firstTimeEligibleByHistory({ user_id, email, phone, street }) {
   return true;
 }
 
+/* ---------------- subscription persistence ---------------- */
 async function upsertSubscription({ user_id, stripe_subscription_id, tier, status, period_start, period_end }) {
   const ex = await one("SELECT id FROM public.subscriptions WHERE stripe_subscription_id=$1", [stripe_subscription_id]);
   if (ex) {
     await pool.query(
       `UPDATE public.subscriptions
-       SET user_id=$2,tier=$3,status=$4,current_period_start=to_timestamp($5),current_period_end=to_timestamp($6),updated_at=now()
+       SET user_id=$2,tier=$3,status=$4,
+           current_period_start=to_timestamp($5),current_period_end=to_timestamp($6),updated_at=now()
        WHERE stripe_subscription_id=$1`,
       [stripe_subscription_id, user_id, tier, status, period_start, period_end]
     );
@@ -60,17 +75,13 @@ async function upsertSubscription({ user_id, stripe_subscription_id, tier, statu
   }
 }
 
+/* ---------------- stripe customer self-heal ---------------- */
 async function linkUserStripeCustomer(userId, stripeCustomerId) {
   await pool.query(
     "UPDATE public.users SET stripe_customer_id=$1 WHERE id=$2 AND (stripe_customer_id IS NULL OR stripe_customer_id<>$1)",
     [stripeCustomerId, userId]
   );
 }
-
-/**
- * Validate stored customer id against Stripe.
- * If missing/invalid (e.g., wrong mode), create a new one, persist, and return it.
- */
 async function getOrCreateCustomerSafely({ user, customerPayload }) {
   if (user.stripe_customer_id) {
     try {
@@ -95,7 +106,12 @@ async function getOrCreateCustomerSafely({ user, customerPayload }) {
   return created.id;
 }
 
+/* ---------------- credit ledger ops ---------------- */
 async function grantCreditsFromInvoice({ user_id, tier, invoice_id, period_start, period_end }) {
+  // Guard against empty/invalid epochs; pass nulls rather than empty strings.
+  const ps = asEpochSec(period_start);
+  const pe = asEpochSec(period_end);
+
   const service_type = svcByTier[tier];
   const exists = await one(
     `SELECT 1 FROM public.credit_ledger
@@ -103,11 +119,25 @@ async function grantCreditsFromInvoice({ user_id, tier, invoice_id, period_start
     [user_id, service_type, invoice_id]
   );
   if (exists) return;
+
+  console.log("[credits] grant", { user_id, tier, invoice_id, start: ps, end: pe });
+
   await pool.query(
     `INSERT INTO public.credit_ledger
      (user_id, service_type, qty, kind, reason, valid_from, valid_until, stripe_invoice_id)
-     VALUES ($1,$2,2,'grant',$3,to_timestamp($4),to_timestamp($5),$6)`,
-    [user_id, service_type, `grant for ${tier} invoice ${invoice_id}`, period_start, period_end, invoice_id]
+     VALUES ($1,$2,2,'grant',$3,
+             ${ps!=null ? "to_timestamp($4)" : "NULL"},
+             ${pe!=null ? "to_timestamp($5)" : "NULL"},
+             $6)`,
+    // When ps/pe are null, the placeholders $4/$5 are still present in array;
+    // We align parameters to avoid mismatch.
+    ps!=null && pe!=null
+      ? [user_id, service_type, `grant for ${tier} invoice ${invoice_id}`, ps, pe, invoice_id]
+      : ps!=null
+        ? [user_id, service_type, `grant for ${tier} invoice ${invoice_id}`, ps, null, invoice_id]
+        : pe!=null
+          ? [user_id, service_type, `grant for ${tier} invoice ${invoice_id}`, null, pe, invoice_id]
+          : [user_id, service_type, `grant for ${tier} invoice ${invoice_id}`, null, null, invoice_id]
   );
 }
 
@@ -121,7 +151,10 @@ async function ensureFullPriceNextCycle(subscriptionId, tier) {
 }
 
 async function revokeRemainingForInvoice({ user_id, tier, invoice_id, period_start, period_end }) {
+  const ps = asEpochSec(period_start);
+  const pe = asEpochSec(period_end);
   const service_type = svcByTier[tier];
+
   const g = await one(
     `SELECT COALESCE(SUM(qty),0) AS v FROM public.credit_ledger
      WHERE user_id=$1 AND service_type=$2 AND kind='grant' AND stripe_invoice_id=$3`,
@@ -133,8 +166,14 @@ async function revokeRemainingForInvoice({ user_id, tier, invoice_id, period_sta
   const u = await one(
     `SELECT COALESCE(SUM(qty),0) AS v FROM public.credit_ledger
      WHERE user_id=$1 AND service_type=$2 AND kind IN ('debit','adjust')
-       AND created_at >= to_timestamp($3) AND created_at <= to_timestamp($4)`,
-    [user_id, service_type, period_start, period_end]
+       AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+       AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)`,
+    [
+      user_id,
+      service_type,
+      ps != null ? new Date(ps * 1000).toISOString() : null,
+      pe != null ? new Date(pe * 1000).toISOString() : null
+    ]
   );
   const used = Math.abs(Number(u?.v || 0));
   const remaining = granted - used;
@@ -147,7 +186,7 @@ async function revokeRemainingForInvoice({ user_id, tier, invoice_id, period_sta
   }
 }
 
-/* -------- Public routes (start subscription, portal) -------- */
+/* ---------------- public routes ---------------- */
 export function membershipRoutes() {
   const r = Router();
   r.use(authMiddleware);
@@ -179,7 +218,7 @@ export function membershipRoutes() {
         [u.id, customer.name||null, customer.phone||null, customer.street||null, customer.postcode||null]
       );
 
-      // Determine intro eligibility by actual history, not mere account existence
+      // Determine intro eligibility by actual history
       const eligible = await firstTimeEligibleByHistory({
         user_id: u.id,
         email: customer.email,
@@ -222,12 +261,12 @@ export function membershipRoutes() {
   return r;
 }
 
-/* -------- Webhook: memberships & addons-only completions -------- */
+/* ---------------- webhook handler ---------------- */
 export async function membershipsWebhookHandler(req, res) {
   try {
     const sig = req.headers["stripe-signature"];
     const event = stripe.webhooks.constructEvent(
-      req.body, // RAW body (Buffer) – guaranteed by express.raw() in server.js
+      req.body, // RAW body (Buffer) – provided by express.raw() in server.js
       sig,
       process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
     );
@@ -250,13 +289,14 @@ export async function membershipsWebhookHandler(req, res) {
           const subId = s.subscription;
           if (user_id && tier && subId) {
             const sub = await stripe.subscriptions.retrieve(subId);
+            // Persist sub record w/ current period
             await upsertSubscription({
               user_id,
               stripe_subscription_id: subId,
               tier,
               status: sub.status,
-              period_start: sub.current_period_start,
-              period_end: sub.current_period_end
+              period_start: asEpochSec(sub.current_period_start),
+              period_end: asEpochSec(sub.current_period_end)
             });
             if (s.customer) await linkUserStripeCustomer(user_id, s.customer);
           }
@@ -306,36 +346,54 @@ export async function membershipsWebhookHandler(req, res) {
         const inv = event.data.object;
         if (!inv.subscription) break;
 
-        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
-        if (!srow) break;
-
+        // Get subscription (for current period fallback) and tier
         const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const p = sub.items.data[0].price.id;
-        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
+        const priceId = sub.items.data[0].price.id;
+        const tier =
+          (priceId === prices.standard.full || priceId === prices.standard.intro) ? "standard" : "premium";
 
-        const line = inv.lines?.data?.[0];
-        if (line?.period) {
-          await grantCreditsFromInvoice({
-            user_id: srow.user_id,
+        const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]);
+        if (!srow) {
+          // Ensure we have a row; then continue
+          await upsertSubscription({
+            user_id: Number(inv.customer_details?.metadata?.user_id || srow?.user_id || 0) || 0,
+            stripe_subscription_id: inv.subscription,
             tier,
-            invoice_id: inv.id,
-            period_start: line.period.start,
-            period_end: line.period.end
+            status: sub.status,
+            period_start: asEpochSec(sub.current_period_start),
+            period_end: asEpochSec(sub.current_period_end)
           });
         }
 
+        // Prefer invoice line period; fallback to sub current period
+        const line = inv.lines?.data?.[0];
+        const { start: pStart, end: pEnd } = pickPeriod({ linePeriod: line?.period, sub });
+
+        // Grant 2 credits for the cycle
+        await grantCreditsFromInvoice({
+          user_id: srow?.user_id || (await one("SELECT user_id FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]))?.user_id || 0,
+          tier,
+          invoice_id: inv.id,
+          period_start: pStart,
+          period_end: pEnd
+        });
+
+        // If this invoice was the initial create, mark intro-used and switch next cycle to full price
         if (inv.billing_reason === "subscription_create") {
           await ensureFullPriceNextCycle(inv.subscription, tier);
-          await pool.query("UPDATE public.users SET membership_intro_used=TRUE WHERE id=$1", [srow.user_id]);
+          if (srow?.user_id) {
+            await pool.query("UPDATE public.users SET membership_intro_used=TRUE WHERE id=$1", [srow.user_id]);
+          }
         }
 
+        // Keep subscription row fresh
         await upsertSubscription({
-          user_id: srow.user_id,
+          user_id: srow?.user_id || (await one("SELECT user_id FROM public.subscriptions WHERE stripe_subscription_id=$1", [inv.subscription]))?.user_id || 0,
           stripe_subscription_id: inv.subscription,
           tier,
           status: sub.status,
-          period_start: sub.current_period_start,
-          period_end: sub.current_period_end
+          period_start: asEpochSec(sub.current_period_start),
+          period_end: asEpochSec(sub.current_period_end)
         });
         break;
       }
@@ -360,18 +418,19 @@ export async function membershipsWebhookHandler(req, res) {
         if (!srow) break;
 
         const sub = await stripe.subscriptions.retrieve(inv.subscription, { expand:["items.data.price"] });
-        const p = sub.items.data[0].price.id;
-        const tier = (p === prices.standard.full || p === prices.standard.intro) ? "standard" : "premium";
+        const priceId = sub.items.data[0].price.id;
+        const tier =
+          (priceId === prices.standard.full || priceId === prices.standard.intro) ? "standard" : "premium";
 
         const line = inv.lines?.data?.[0];
-        if (!line?.period) break;
+        const { start: pStart, end: pEnd } = pickPeriod({ linePeriod: line?.period, sub });
 
         await revokeRemainingForInvoice({
           user_id: srow.user_id,
           tier,
           invoice_id: invId,
-          period_start: line.period.start,
-          period_end: line.period.end
+          period_start: pStart,
+          period_end: pEnd
         });
         break;
       }
@@ -386,7 +445,7 @@ export async function membershipsWebhookHandler(req, res) {
   }
 }
 
-/* -------- Admin: cancel+refund now (deny if credits used) -------- */
+/* ---------------- admin: cancel+refund now ---------------- */
 export function adminMembershipRoutes() {
   const r = Router();
   r.post("/subscriptions/:sid/cancel_refund_now", async (req, res) => {
@@ -399,8 +458,10 @@ export function adminMembershipRoutes() {
       const sid = req.params.sid;
       const sub = await stripe.subscriptions.retrieve(sid, { expand:["latest_invoice.payment_intent","items.data.price"] });
 
-      const tier = (sub.items.data[0].price.id === prices.standard.full || sub.items.data[0].price.id === prices.standard.intro) ? "standard" : "premium";
-      const start = sub.current_period_start, end = sub.current_period_end;
+      const tier =
+        (sub.items.data[0].price.id === prices.standard.full || sub.items.data[0].price.id === prices.standard.intro) ? "standard" : "premium";
+      const start = asEpochSec(sub.current_period_start);
+      const end   = asEpochSec(sub.current_period_end);
 
       const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [sid]);
       if (!srow) return res.status(404).json({ ok:false, error:"sub_not_found" });
@@ -410,19 +471,30 @@ export function adminMembershipRoutes() {
       const grantedRow = await one(
         `SELECT COALESCE(SUM(qty),0) AS g FROM public.credit_ledger
          WHERE user_id=$1 AND service_type=$2 AND kind='grant'
-           AND valid_from=to_timestamp($3) AND valid_until=to_timestamp($4)`,
-        [srow.user_id, svc, start, end]
+           AND valid_from IS NOT DISTINCT FROM ${start!=null ? "to_timestamp($3)" : "NULL"}
+           AND valid_until IS NOT DISTINCT FROM ${end!=null ? "to_timestamp($4)" : "NULL"}`,
+        start!=null && end!=null
+          ? [srow.user_id, svc, start, end]
+          : start!=null
+            ? [srow.user_id, svc, start, null]
+            : end!=null
+              ? [srow.user_id, svc, null, end]
+              : [srow.user_id, svc, null, null]
       );
       const granted = Number(grantedRow?.g || 0);
 
       const usedRow = await one(
         `SELECT COALESCE(SUM(qty),0) AS u FROM public.credit_ledger
          WHERE user_id=$1 AND service_type=$2 AND kind IN ('debit','adjust')
-           AND created_at >= to_timestamp($3) AND created_at <= to_timestamp($4)`,
-        [srow.user_id, svc, start, end]
+           AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
+           AND ($4::timestamptz IS NULL OR created_at <= $4::timestamptz)`,
+        [
+          srow.user_id, svc,
+          start != null ? new Date(start * 1000).toISOString() : null,
+          end   != null ? new Date(end   * 1000).toISOString() : null
+        ]
       );
       const used = Math.abs(Number(usedRow?.u || 0));
-
       if (used > 0) return res.status(409).json({ ok:false, error:"credits_already_used" });
 
       const invId = sub.latest_invoice;
