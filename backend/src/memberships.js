@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import { Router } from "express";
 import { pool, saveBooking } from "./db.js";
 import { authMiddleware } from "./auth.js";
+import { createCalendarEvents } from "./gcal.js";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const svcByTier = { standard: "exterior", premium: "full" };
@@ -147,7 +148,6 @@ export function membershipRoutes() {
         mode: "subscription",
         customer: stripeCustomerId,
         line_items: [{ price: eligible ? cfg.intro : cfg.full, quantity: 1 }],
-        // >>> send to a real page we control
         success_url: `${(origin || process.env.PUBLIC_FRONTEND_ORIGIN)}/account.html?sub=1`,
         cancel_url:  (origin || process.env.PUBLIC_FRONTEND_ORIGIN),
         metadata: { tier, user_id: String(u.id), intro_used: String(eligible) }
@@ -189,6 +189,13 @@ export async function membershipsWebhookHandler(req, res) {
       process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
     );
 
+    // Optional defensive mode check
+    const isLiveKey = (process.env.STRIPE_SECRET_KEY || "").startsWith("sk_live_");
+    if (typeof event.livemode === "boolean" && event.livemode !== isLiveKey) {
+      console.warn("[memberships webhook] mode mismatch; dropping event");
+      return res.status(400).send("Mode mismatch");
+    }
+
     switch (event.type) {
       case "checkout.session.completed": {
         const s = event.data.object;
@@ -213,7 +220,7 @@ export async function membershipsWebhookHandler(req, res) {
           break;
         }
 
-        // B) addons-only with credit (mode=payment, we stored metadata) — unchanged
+        // B) addons-only with credit
         if (s.mode === "payment" && s.metadata?.kind === "addons_only_with_credit") {
           const user_id = Number(s.metadata.user_id || 0);
           const service_key = s.metadata.service_key;
@@ -222,6 +229,7 @@ export async function membershipsWebhookHandler(req, res) {
           const addons = JSON.parse(s.metadata.addons || "[]");
           const customer = JSON.parse(s.metadata.customer || "{}");
           const bookingId = await saveBooking({
+            user_id,
             stripe_session_id: s.id, service_key, addons, start_iso, end_iso, customer, has_tap: true
           });
           const service_type = service_key === "full" ? "full" : "exterior";
@@ -230,6 +238,23 @@ export async function membershipsWebhookHandler(req, res) {
              VALUES ($1,$2,-1,'debit',$3,$4)`,
             [user_id, service_type, `booking ${bookingId}`, bookingId]
           );
+
+          try {
+            await createCalendarEvents(s.id, [{
+              start_iso, end_iso,
+              summary: `GM Auto Detailing — ${(service_key==="full"?"Full Detail":"Exterior Detail")}`,
+              location: `${customer?.street||""}, ${customer?.postcode||""}`.trim(),
+              description: [
+                `Name: ${customer?.name||""}`,
+                `Phone: ${customer?.phone||""}`,
+                `Email: ${customer?.email||""}`,
+                (addons?.length ? `Add-ons: ${addons.join(", ")}` : null),
+                `Stripe session: ${s.id}`,
+              ].filter(Boolean).join("\n"),
+            }]);
+          } catch (e) {
+            console.warn("[gcal] addons+credit calendar create failed", e?.message || e);
+          }
         }
         break;
       }
@@ -323,8 +348,10 @@ export function adminMembershipRoutes() {
   const r = Router();
   r.post("/subscriptions/:sid/cancel_refund_now", async (req, res) => {
     try {
-      if (req.query.token !== process.env.ADMIN_TOKEN)
-        return res.status(401).json({ ok:false, error:"unauthorized" });
+      const tokenOk =
+        (req.query.token && req.query.token === process.env.ADMIN_TOKEN) ||
+        ((req.headers.authorization || "").trim() === `Bearer ${process.env.ADMIN_TOKEN}`);
+      if (!tokenOk) return res.status(401).json({ ok:false, error:"unauthorized" });
 
       const sid = req.params.sid;
       const sub = await stripe.subscriptions.retrieve(sid, { expand:["latest_invoice.payment_intent","items.data.price"] });
@@ -335,11 +362,13 @@ export function adminMembershipRoutes() {
       const srow = await one("SELECT * FROM public.subscriptions WHERE stripe_subscription_id=$1", [sid]);
       if (!srow) return res.status(404).json({ ok:false, error:"sub_not_found" });
 
+      const svc = svcByTier[tier];
+
       const grantedRow = await one(
         `SELECT COALESCE(SUM(qty),0) AS g FROM public.credit_ledger
          WHERE user_id=$1 AND service_type=$2 AND kind='grant'
            AND valid_from=to_timestamp($3) AND valid_until=to_timestamp($4)`,
-        [srow.user_id, svcByTier[tier], start, end]
+        [srow.user_id, svc, start, end]
       );
       const granted = Number(grantedRow?.g || 0);
 
@@ -347,7 +376,7 @@ export function adminMembershipRoutes() {
         `SELECT COALESCE(SUM(qty),0) AS u FROM public.credit_ledger
          WHERE user_id=$1 AND service_type=$2 AND kind IN ('debit','adjust')
            AND created_at >= to_timestamp($3) AND created_at <= to_timestamp($4)`,
-        [srow.user_id, svcByTier[tier], start, end]
+        [srow.user_id, svc, start, end]
       );
       const used = Math.abs(Number(usedRow?.u || 0));
 
@@ -363,7 +392,7 @@ export function adminMembershipRoutes() {
         await pool.query(
           `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason)
            VALUES ($1,$2,$3,'adjust',$4)`,
-          [srow.user_id, svcByTier[tier], -granted, `admin refund invoice ${invId}`]
+          [srow.user_id, svc, -granted, `admin refund invoice ${invId}`]
         );
       }
       await stripe.subscriptions.cancel(sid, { invoice_now:false, prorate:false });
