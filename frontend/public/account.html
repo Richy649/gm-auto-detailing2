@@ -18,13 +18,15 @@
       .actions-row { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
       .equal { min-width:220px; }
       .stack { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
-      .row { display:flex; flex-direction:column; gap:6px; }
+      .row { display:flex; flex-direction:column; gap:6px; position:relative; }
       label { font-size:14px; font-weight:700; color:#333; }
-      input { padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px; }
+      input { padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px; width:100%; }
       .muted { color:var(--muted); font-size:14px; }
       h2 { margin:8px 0 12px; font-weight:800; text-align:center; }
       .credits { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
       .pill { padding:10px 16px; border:2px solid #ddd; border-radius:999px; font-weight:800; background:#fff; }
+      .eyebtn { position:absolute; right:10px; top:34px; background:transparent; border:0; cursor:pointer; font-weight:800; }
+      .eyebtn:focus { outline: none; }
       @media (max-width:800px){ .stack{ grid-template-columns:1fr; } }
     </style>
   </head>
@@ -44,6 +46,12 @@
         <div id="credits" class="credits"></div>
       </div>
 
+      <!-- Upcoming booking -->
+      <div class="card" style="margin-bottom:12px;">
+        <h2>Upcoming booking</h2>
+        <div id="upcoming" class="center muted">Loading…</div>
+      </div>
+
       <!-- Profile -->
       <div class="card">
         <h2>Your details</h2>
@@ -53,6 +61,12 @@
           <div class="row"><label>Email</label><input id="email" type="email" disabled/></div>
           <div class="row"><label>Street</label><input id="street" autocomplete="address-line1"/></div>
           <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code"/></div>
+          <div class="row">
+            <label>Password</label>
+            <input id="password" type="password" placeholder="Set a new password (optional)"/>
+            <button id="togglepw" class="eyebtn" aria-label="Show password">👁️</button>
+            <div class="muted">Leave blank to keep your current password.</div>
+          </div>
         </div>
         <p class="muted" id="subs" style="margin-top:10px; text-align:center;"></p>
         <div class="actions-row" style="margin-top:12px;">
@@ -63,6 +77,7 @@
     </div>
 
     <script>
+      // Resize for Squarespace iframe
       function reportHeight(){
         const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
         try { window.parent.postMessage({ type:"GM_HEIGHT", height:h }, "*"); } catch {}
@@ -78,10 +93,39 @@
 
       function el(id){ return document.getElementById(id); }
 
+      function fmtSvc(key){
+        switch (key) {
+          case "exterior": return "Exterior Detail";
+          case "full": return "Full Detail";
+          case "standard_membership": return "Standard Membership";
+          case "premium_membership":  return "Premium Membership";
+          default: return key || "Service";
+        }
+      }
+
+      function renderUpcoming(row){
+        const box = el("upcoming");
+        if (!row) { box.textContent = "No upcoming booking."; return; }
+        const start = new Date(row.start_time);
+        const when = start.toLocaleString('en-GB', { timeZone: 'Europe/London', weekday:'long', day:'numeric', month:'long', hour:'2-digit', minute:'2-digit', hour12:false });
+        box.textContent = `${when} — ${fmtSvc(row.service_key)}`;
+      }
+
+      async function loadUpcoming(){
+        try {
+          const r = await fetch(`${API}/api/my/bookings/upcoming`, { headers: { Authorization: `Bearer ${token}` } });
+          const d = await r.json().catch(()=> ({}));
+          if (d?.ok) renderUpcoming(d.booking || null);
+          else renderUpcoming(null);
+        } catch { renderUpcoming(null); }
+      }
+
       async function load(){
         const r = await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
         if (!r.ok) { localStorage.removeItem('GM_TOKEN'); location.href="/login.html"; return; }
         const d = await r.json();
+
+        // Credits
         const credits = d.credits || { exterior:0, full:0 };
         const c = el("credits");
         c.innerHTML = "";
@@ -89,12 +133,14 @@
         const p2 = document.createElement("div"); p2.className="pill"; p2.textContent = `Full Detail credits: ${credits.full||0}`;
         c.appendChild(p1); c.appendChild(p2);
 
+        // Profile fields
         el("name").value = d.user?.name || "";
         el("phone").value = d.user?.phone || "";
         el("email").value = d.user?.email || "";
         el("street").value = d.user?.street || "";
         el("postcode").value = d.user?.postcode || "";
 
+        // Subs label
         const subsText = (d.subscriptions||[]).map(s=>{
           if (!s?.tier) return null;
           const label = s.tier === "premium" ? "Premium membership" : "Standard membership";
@@ -103,6 +149,7 @@
         }).filter(Boolean).join(" • ");
         el("subs").textContent = subsText || "No active membership.";
 
+        // Manage subscription
         el("portal").onclick = async () => {
           const rr = await fetch(`${API}/api/memberships/portal`, { method:"GET", headers: { Authorization:`Bearer ${token}` }});
           const pd = await rr.json().catch(()=> ({}));
@@ -110,6 +157,7 @@
           else { alert(pd?.error || "Portal unavailable."); }
         };
 
+        // Sign out
         el("signout").onclick = () => {
           localStorage.removeItem('GM_TOKEN');
           location.href = '/login.html';
@@ -118,6 +166,14 @@
         reportHeight();
       }
 
+      // Eye toggle for new password field
+      el("togglepw").onclick = (e) => {
+        e.preventDefault();
+        const inp = el("password");
+        inp.type = inp.type === "password" ? "text" : "password";
+      };
+
+      // Save profile (and optional new password), then return to login page
       el("save").onclick = async () => {
         const payload = {
           name: el("name").value.trim(),
@@ -125,6 +181,9 @@
           street: el("street").value.trim(),
           postcode: el("postcode").value.trim()
         };
+        const newpw = el("password").value;
+        if (newpw) payload.new_password = newpw;
+
         const r = await fetch(`${API}/api/auth/me`, {
           method:"PUT",
           headers:{ "Content-Type":"application/json", Authorization: `Bearer ${token}` },
@@ -132,7 +191,6 @@
         });
         const d = await r.json().catch(()=> ({}));
         if (d?.ok) {
-          // After saving, return to the first login page as requested
           localStorage.removeItem('GM_TOKEN');
           location.href = '/login.html';
         } else {
@@ -140,7 +198,7 @@
         }
       };
 
-      load().catch(()=> { alert("Failed to load account."); });
+      load().then(loadUpcoming).catch(()=> { alert("Failed to load account."); });
     </script>
   </body>
 </html>
