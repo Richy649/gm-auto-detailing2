@@ -13,7 +13,7 @@
       .card { background:#fff; border:1px solid var(--border); border-radius:18px; padding:18px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
       .center { text-align:center; }
       .logo { width:200px; height:auto; display:block; margin: 8px auto 10px; }
-      .btn { padding:14px 20px; border-radius:999px; border:2px solid #ddd; background:#fff; font-weight:800; font-size:18px; letter-spacing:.2px; cursor:pointer; }
+      .btn { padding:14px 20px; border-radius:999px; border:2px solid #ddd; background:#fff; font-weight:800; font-size:18px; letter-spacing:.2px; cursor:pointer; color:#111; }
       .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
       .actions-row { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
       .equal { min-width:220px; }
@@ -25,8 +25,7 @@
       h2 { margin:8px 0 12px; font-weight:800; text-align:center; }
       .credits { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
       .pill { padding:10px 16px; border:2px solid #ddd; border-radius:999px; font-weight:800; background:#fff; }
-      .eyebtn { position:absolute; right:10px; top:34px; background:transparent; border:0; cursor:pointer; font-weight:800; }
-      .eyebtn:focus { outline: none; }
+      .small-note { font-size:13px; color:#555; text-align:center; margin-top:6px; }
       @media (max-width:800px){ .stack{ grid-template-columns:1fr; } }
     </style>
   </head>
@@ -63,9 +62,10 @@
           <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code"/></div>
           <div class="row">
             <label>Password</label>
-            <input id="password" type="password" placeholder="Set a new password (optional)"/>
-            <button id="togglepw" class="eyebtn" aria-label="Show password">👁️</button>
-            <div class="muted">Leave blank to keep your current password.</div>
+            <div style="display:flex; gap:8px;">
+              <input id="password" type="password" placeholder="Set a new password (optional)" style="flex:1;"/>
+              <button id="togglepw" class="btn" style="min-width:110px;">View</button>
+            </div>
           </div>
         </div>
         <p class="muted" id="subs" style="margin-top:10px; text-align:center;"></p>
@@ -73,6 +73,7 @@
           <button id="save" class="btn primary equal">Save changes</button>
           <button id="signout" class="btn equal">Sign out</button>
         </div>
+        <div id="msg" class="small-note"></div>
       </div>
     </div>
 
@@ -153,8 +154,11 @@
         el("portal").onclick = async () => {
           const rr = await fetch(`${API}/api/memberships/portal`, { method:"GET", headers: { Authorization:`Bearer ${token}` }});
           const pd = await rr.json().catch(()=> ({}));
-          if (pd?.ok && pd?.url) { try { window.top.location.href = pd.url; } catch { location.href = pd.url; } }
-          else { alert(pd?.error || "Portal unavailable."); }
+          if (pd?.ok && pd?.url) {
+            try { window.top.location.href = pd.url; } catch { location.href = pd.url; }
+          } else {
+            el("msg").textContent = "We couldn’t open your subscription portal. If you’ve just subscribed, please wait a moment and try again.";
+          }
         };
 
         // Sign out
@@ -166,11 +170,13 @@
         reportHeight();
       }
 
-      // Eye toggle for new password field
+      // View/Hide toggle for new password field
       el("togglepw").onclick = (e) => {
         e.preventDefault();
         const inp = el("password");
-        inp.type = inp.type === "password" ? "text" : "password";
+        const showing = inp.type === "text";
+        inp.type = showing ? "password" : "text";
+        el("togglepw").textContent = showing ? "View" : "Hide";
       };
 
       // Save profile (and optional new password), then return to login page
@@ -194,7 +200,7 @@
           localStorage.removeItem('GM_TOKEN');
           location.href = '/login.html';
         } else {
-          alert(d?.error || "Failed to save");
+          el("msg").textContent = "We couldn’t save your changes. Please check your details and try again.";
         }
       };
 
