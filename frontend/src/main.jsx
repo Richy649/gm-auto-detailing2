@@ -44,7 +44,8 @@ const Button = ({ children, className, ...props }) => <button className={cx("gm 
 const PrimaryButton = (props) => <Button className="primary" {...props} />;
 
 /* Cards */
-function ServiceCard({ title, price, strike, selected, onClick }) {
+function ServiceCard({ title, price, strike, selected, onClick, hidden }) {
+  if (hidden) return null;
   return (
     <div className={cx("gm card", selected && "selected")} onClick={onClick} role="button">
       <div className="gm card-title">{title}</div>
@@ -54,7 +55,7 @@ function ServiceCard({ title, price, strike, selected, onClick }) {
           <span className="gm price-strike">{fmtGBP(strike)}</span>
         </div>
       ) : (
-        <div className="gm muted" style={{ fontWeight: 600, marginBottom: 6 }}>{fmtGBP(price)}</div>
+        <div className="gm muted" style={{ fontWeight: 700, marginBottom: 6 }}>{fmtGBP(price)}</div>
       )}
     </div>
   );
@@ -75,6 +76,17 @@ function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
 }
 
 /* ================== SERVICES ================== */
+function TopBar() {
+  return (
+    <div className="gm topbar">
+      <a className="gm account-link" href="/account.html">
+        <span className="head" aria-hidden="true"></span>
+        <span>View Account</span>
+      </a>
+    </div>
+  );
+}
+
 function Services({ state, setState }) {
   const cfg = state.config || { services:{}, addons:{} };
   const [svc, setSvc] = React.useState(state.service_key || "");
@@ -101,6 +113,11 @@ function Services({ state, setState }) {
   const hasFullCredit = (state.credits?.full || 0) > 0;
   const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
   const usingCredits = hasFullCredit || hasExteriorCredit;
+
+  // Hide membership the user already has active
+  const activeTiers = new Set((state.subscriptions || []).map(s => s.tier));
+  const hideStandardMembership = activeTiers.has("standard");
+  const hidePremiumMembership  = activeTiers.has("premium");
 
   async function subscribeNow(tierKey){
     const token = state.token;
@@ -147,7 +164,7 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
-  // Header: credits + quick actions
+  // Quick header: credits + account
   const CreditsHeader = () => (
     <div className="gm card" style={{ marginBottom: 12 }}>
       <div style={{ display:"flex", gap:10, alignItems:"center", flexWrap:"wrap", justifyContent:"space-between" }}>
@@ -170,6 +187,7 @@ function Services({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
+      <TopBar />
       <div className="gm panel wider">
         <CreditsHeader />
 
@@ -178,19 +196,18 @@ function Services({ state, setState }) {
         <div className="gm cards">
           <ServiceCard title={cfg.services?.exterior?.name || "Exterior Detail"}
             price={effPrice("exterior")} strike={firstTime ? basePrice("exterior") : undefined}
-            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} />
+            selected={svc==="exterior"} onClick={()=>setSvc("exterior")} hidden={false} />
           <ServiceCard title={cfg.services?.full?.name || "Full Detail"}
             price={effPrice("full")} strike={firstTime ? basePrice("full") : undefined}
-            selected={svc==="full"} onClick={()=>setSvc("full")} />
+            selected={svc==="full"} onClick={()=>setSvc("full")} hidden={false} />
           <ServiceCard title={cfg.services?.standard_membership?.name || "Standard Membership (2 Exterior)"}
             price={effPrice("standard_membership")} strike={firstTime ? basePrice("standard_membership") : undefined}
-            selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} />
+            selected={svc==="standard_membership"} onClick={()=>setSvc("standard_membership")} hidden={hideStandardMembership} />
           <ServiceCard title={cfg.services?.premium_membership?.name || "Premium Membership (2 Full)"}
             price={effPrice("premium_membership")} strike={firstTime ? basePrice("premium_membership") : undefined}
-            selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} />
+            selected={svc==="premium_membership"} onClick={()=>setSvc("premium_membership")} hidden={hidePremiumMembership} />
         </div>
 
-        {/* Add-ons at the bottom; hidden when using credits or selecting membership */}
         {!(svc==="standard_membership" || svc==="premium_membership" || usingCredits) && (
           <>
             <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -276,16 +293,13 @@ function Calendar({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
+      <TopBar />
       <div className="gm panel wider">
         <div className="gm monthbar-grid">
           <div className="gm monthnav-left">
             <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}>Previous</Button>
           </div>
           <div className="gm monthtitle">{monthLabel(monthKey)}</div>
-          <div className="gm monthnav-right">
-            <div style={{ width: 1 }} />
-            <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, +1) }))}>Next</Button>
-          </div>
         </div>
 
         {loading && <div className="gm alert">Loading availability…</div>}
@@ -323,7 +337,11 @@ function Calendar({ state, setState }) {
         ) : null}
 
         <div className="gm actions space" style={{ marginTop: 12 }}>
-          <Button onClick={()=> setState(s=> ({ ...s, step: "services" }))}>Back</Button>
+          {(state.credits?.exterior||0) + (state.credits?.full||0) === 0 ? (
+            <Button onClick={()=> setState(s=> ({ ...s, step: "services" }))}>Back</Button>
+          ) : (
+            <div className="gm muted">You have credits to use.</div>
+          )}
         </div>
       </div>
     </div>
@@ -347,6 +365,7 @@ function Times({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
+      <TopBar />
       <div className="gm panel wider">
         <div className="gm h2 center">
           {new Date(fromKey(dayKey)).toLocaleString("en-GB",{ timeZone:TZ, weekday:"long", day:"numeric", month:"long", year:"numeric" })}
@@ -440,6 +459,7 @@ function Confirm({ state, setState }) {
 
   return (
     <div className="gm page-section gm-booking wrap">
+      <TopBar />
       <div className="gm panel wider">
         <div className="gm h2 center">Confirm booking</div>
 
@@ -456,11 +476,11 @@ function Confirm({ state, setState }) {
 
             <div className="gm card">
               <div className="gm card-title">Booking</div>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>{(cfg.services?.[state.service_key]?.name) || state.service_key}</div>
               {slotLine}
               {!!(state.addons || []).length && !usingCredit && (
                 <div style={{ marginTop: 6 }}>
-                  <div style={{ fontWeight: 600 }}>Add-ons</div>
+                  <div style={{ fontWeight: 700 }}>Add-ons</div>
                   <div>{state.addons.map((k)=> (cfg.addons?.[k]?.name || k)).join(", ")}</div>
                 </div>
               )}
@@ -511,6 +531,7 @@ function App(){
     step: "loading",
     token: localStorage.getItem('GM_TOKEN') || "",
     user: null,
+    subscriptions: [],
     credits: { exterior: 0, full: 0 },
     customer:{}, has_tap:true, service_key:"", addons:[],
     selectedDayKey:null, selectedSlot:null,
@@ -537,7 +558,8 @@ function App(){
       postcode: user.postcode || "",
     };
     const credits = d.credits || { exterior:0, full:0 };
-    return { user, customer, credits };
+    const subscriptions = d.subscriptions || [];
+    return { user, customer, credits, subscriptions };
   }, []);
 
   React.useEffect(() => {
@@ -550,18 +572,27 @@ function App(){
       if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
 
       try {
-        const { user, customer, credits } = await loadProfile(token);
+        const { user, customer, credits, subscriptions } = await loadProfile(token);
 
+        // If user has any credits, force them into the calendar with the appropriate service.
+        const fullC = credits.full || 0;
+        const extC  = credits.exterior || 0;
+        if (fullC > 0 || extC > 0) {
+          const inferred = fullC > 0 ? "full" : "exterior";
+          setState(s => ({ ...s, token, user, customer, credits, subscriptions, service_key: inferred, addons: [], step: "calendar" }));
+          return;
+        }
+
+        // Coming back from subscription success: try to move to calendar if credits exist
         if (fromSub) {
-          const hasFull = (credits.full||0) > 0;
-          const hasExt  = (credits.exterior||0) > 0;
-          if (hasFull || hasExt) {
-            const inferred = hasFull ? "full" : "exterior";
-            setState(s => ({ ...s, token, user, customer, credits, service_key: inferred, addons: [], step: "calendar" }));
+          const inferred = (credits.full||0) > 0 ? "full" : ((credits.exterior||0) > 0 ? "exterior" : "");
+          if (inferred) {
+            setState(s => ({ ...s, token, user, customer, credits, subscriptions, service_key: inferred, addons: [], step: "calendar" }));
             return;
           }
         }
-        setState(s => ({ ...s, token, user, customer, credits, step: "services" }));
+
+        setState(s => ({ ...s, token, user, customer, credits, subscriptions, step: "services" }));
       } catch {
         localStorage.removeItem('GM_TOKEN');
         try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
