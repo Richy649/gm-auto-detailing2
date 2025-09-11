@@ -137,8 +137,6 @@ async function ensureColumnsAndConstraints() {
     }
   }
 
-  // Ensure email is nullable allowed (we do sometimes create users without immediately setting it)
-  // but keep UNIQUE index. If a NOT NULL exists from any previous experiment, relax it.
   try {
     if (await isNotNull("users", "email")) {
       await pool.query(`ALTER TABLE public.users ALTER COLUMN email DROP NOT NULL;`);
@@ -179,12 +177,28 @@ async function ensureColumnsAndConstraints() {
     }
   } catch {}
 
-  // One-time backfill canonical timestamptz from legacy strings where missing
+  // Safer one-time backfill canonical timestamptz from legacy strings where missing.
+  // Only cast ISO-looking strings; skip blanks/invalids to avoid errors.
   await pool
-    .query(`UPDATE public.bookings
-            SET start_time = COALESCE(start_time, NULLIF(start_iso,'')::timestamptz),
-                end_time   = COALESCE(end_time,   NULLIF(end_iso,'')::timestamptz)
-            WHERE (start_time IS NULL OR end_time IS NULL);`)
+    .query(`
+      UPDATE public.bookings
+      SET start_time = start_iso::timestamptz
+      WHERE start_time IS NULL
+        AND start_iso IS NOT NULL
+        AND btrim(start_iso) <> ''
+        AND start_iso ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T';
+    `)
+    .catch(() => {});
+
+  await pool
+    .query(`
+      UPDATE public.bookings
+      SET end_time = end_iso::timestamptz
+      WHERE end_time IS NULL
+        AND end_iso IS NOT NULL
+        AND btrim(end_iso) <> ''
+        AND end_iso ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T';
+    `)
     .catch(() => {});
 }
 
@@ -246,10 +260,6 @@ export async function initDB() {
  *   - b.start_iso / b.end_iso (prefer ISO strings)
  *   - b.customer { name,email,phone,street,postcode }
  *   - b.has_tap (Boolean)
- *
- * We bind each param ONCE with a single type:
- *   - start_iso/end_iso: plain strings
- *   - start_time/end_time: same ISO strings; PG will cast text -> timestamptz
  */
 export async function saveBooking(b) {
   if (!pool) {
