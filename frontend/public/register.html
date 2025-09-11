@@ -4,20 +4,22 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Create account • GM Auto Detailing</title>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
       :root { --bg:#f3efe8; --card:#fff; --border:#e3e0d7; --text:#111; }
       * { box-sizing: border-box; }
       body { font-family: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; font-weight:400; background:var(--bg); margin:0; padding:20px; color:var(--text); }
       .card { max-width:640px; margin:20px auto; background:#fff; border:1px solid var(--border); border-radius:16px; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
       .logo { display:block; width:180px; margin:8px auto 12px; }
-      h2 { text-align:center; margin:0 0 12px; font-weight:600; }
+      h2 { text-align:center; margin:0 0 12px; font-weight:700; }
       .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
       .row { display:flex; flex-direction:column; gap:6px; margin-bottom:12px; }
-      label { font-size:14px; }
+      label { font-size:14px; font-weight:600; }
       input { padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px; }
-      button { padding:12px 16px; border-radius:12px; border:0; background:#222; color:#fff; font-weight:600; cursor:pointer; width:100%; }
+      button { padding:14px 18px; border-radius:999px; border:0; background:#222; color:#fff; font-weight:700; cursor:pointer; width:100%; }
       .muted { color:#666; font-size:14px; text-align:center; }
+      .tap { display:flex; gap:12px; align-items:center; }
+      .tap .opt { display:flex; align-items:center; gap:6px; }
       @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
     </style>
   </head>
@@ -35,6 +37,13 @@
         <div class="row"><label>Street</label><input id="street" autocomplete="address-line1" /></div>
         <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code" /></div>
       </div>
+      <div class="row">
+        <label>Do you have an outhouse tap?</label>
+        <div class="tap">
+          <label class="opt"><input type="radio" name="tap" value="yes" checked> Yes</label>
+          <label class="opt"><input type="radio" name="tap" value="no"> No</label>
+        </div>
+      </div>
       <button id="go">Create account</button>
       <p class="muted" style="margin-top:10px;">Already have an account? <a href="/login.html">Login</a></p>
     </div>
@@ -42,13 +51,16 @@
       const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
         ? 'https://gm-auto-detailing2.onrender.com' : '';
       document.getElementById('go').onclick = async () => {
+        const tap = (document.querySelector('input[name="tap"]:checked')?.value === 'yes');
+        if (!tap) { alert("Sorry — we can only service locations with an outhouse tap."); return; }
+
         const payload = {
           email: document.getElementById('email').value.trim(),
           password: document.getElementById('password').value,
           name: document.getElementById('name').value.trim(),
           phone: document.getElementById('phone').value.trim(),
           street: document.getElementById('street').value.trim(),
-          postcode: document.getElementById('postcode').value.trim(),
+          postcode: document.getElementById('postcode').value.trim()
         };
         const r = await fetch(`${API}/api/auth/register`, {
           method:'POST', headers:{'Content-Type':'application/json'},
@@ -57,7 +69,6 @@
         const data = await r.json();
         if (data.ok) {
           localStorage.setItem('GM_TOKEN', data.token);
-          // Go directly into Services
           location.href = '/?afterLogin=1';
         } else { alert(data.error || 'Register failed'); }
       };
