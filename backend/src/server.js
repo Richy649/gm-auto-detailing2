@@ -1,74 +1,63 @@
-// backend/src/server.js
 import express from "express";
 import cors from "cors";
-import { initDB } from "./db.js";
-import baseRoutes from "./routes.js"; // availability, public config, first-time
-import authRoutes from "./auth.js";
-import creditsRoutes from "./credits.js";
-import { membershipRoutes, adminMembershipRoutes, membershipsWebhookHandler } from "./memberships.js";
-import myRoutes from "./my.js";
-import { mountPayments } from "./payments.js"; // /api/pay/* (includes its own /api/webhooks/stripe)
-
-// Boot DB before starting server (non-fatal if it fails; app still starts)
-initDB().catch((e) => {
-  console.error("[server] init failed", e);
-});
+import bodyParser from "body-parser";
+import Stripe from "stripe";
+import routes from "./routes.js";
+import memberships from "./memberships.js";
+import { handleMembershipWebhook } from "./credits.js";
 
 const app = express();
-const PORT = process.env.PORT || 10000;
 
-/* ---------- CORS ---------- */
-const allow = (process.env.ALLOW_ORIGIN || "").split(",").map(s => s.trim()).filter(Boolean);
-const vercelPreview = /\.vercel\.app$/i;
-app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (allow.includes("*")) return cb(null, true);
-    if (allow.includes(origin)) return cb(null, true);
-    if (vercelPreview.test(origin)) return cb(null, true);
-    return cb(new Error("CORS blocked: " + origin));
-  },
-  credentials: true
-}));
+// CORS
+const allowOrigin = process.env.ALLOW_ORIGIN?.split(",") || [];
+app.use(
+  cors({
+    origin: allowOrigin,
+    credentials: true,
+  })
+);
 
-/* ---------- Health ---------- */
-app.get("/", (_req, res) => res.type("text/plain").send("GM API up"));
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+// Normal JSON parsing (non-webhooks)
+app.use(bodyParser.json());
 
-/**
- * IMPORTANT: Stripe webhooks MUST receive the RAW body.
- * Therefore:
- *   1) mount the memberships webhook BEFORE express.json()
- *   2) mount payments (which registers /api/webhooks/stripe with RAW) BEFORE express.json() OR within mountPayments
- */
-app.post("/api/webhooks/stripe-memberships", express.raw({ type: "application/json" }), membershipsWebhookHandler);
+// Routes
+app.use("/api", routes);
+app.use("/api/memberships", memberships);
 
-/**
- * Payments module registers:
- *   - POST /api/webhooks/stripe (RAW body)
- *   - POST /api/pay/create-checkout-session
- *   - POST /api/pay/confirm
- */
-mountPayments(app);
+// Stripe webhook (raw body required)
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
+app.post(
+  "/webhooks/memberships",
+  bodyParser.raw({ type: "application/json" }),
+  (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
+      );
+    } catch (err) {
+      console.error("Webhook signature verification failed:", err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
 
-/* ---------- JSON for normal routes (after RAW webhook mounts) ---------- */
-app.use(express.json());
+    // Handle event
+    handleMembershipWebhook(event)
+      .then(() => res.json({ received: true }))
+      .catch((err) => {
+        console.error("Webhook handling failed:", err);
+        res.status(500).send("Webhook handling failed");
+      });
+  }
+);
 
-/* ---------- Auth + Memberships + Credits + “My” ---------- */
-app.use("/api/auth", authRoutes);
-app.use("/api/memberships", membershipRoutes());
-app.use("/api/admin", adminMembershipRoutes());
-app.use("/api/credits", creditsRoutes);
-app.use("/api/my", myRoutes);
+// Healthcheck
+app.get("/health", (req, res) => res.json({ ok: true }));
 
-/* ---------- Public API ---------- */
-app.use("/api", baseRoutes);
-
-/* ---------- 404 for unknown API ---------- */
-app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
-
-/* ---------- Listen ---------- */
-app.listen(PORT, () => {
-  console.log(`[server] listening on ${PORT}`);
+// Start server
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Backend running on port ${port}`);
 });
