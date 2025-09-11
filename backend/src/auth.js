@@ -2,6 +2,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { pool } from "./db.js";
 
 const router = Router();
@@ -24,17 +25,18 @@ export async function authMiddleware(req, _res, next) {
 
 router.post("/register", async (req, res) => {
   try {
-    const { email, password, name, phone, street, postcode } = req.body || {};
+    const { email, password, name, phone, street, postcode, has_tap } = req.body || {};
     if (!email || !password) return res.status(400).json({ ok:false, error:"missing_fields" });
-    const hash = await bcrypt.hash(password, 11);
+    if (!has_tap) return res.status(400).json({ ok:false, error:"tap_required" });
 
+    const hash = await bcrypt.hash(password, 11);
     const existing = await pool.query("SELECT 1 FROM public.users WHERE lower(email)=lower($1)", [email]);
     if (existing.rowCount) return res.status(409).json({ ok:false, error:"email_in_use" });
 
     const r = await pool.query(
-      `INSERT INTO public.users (email,password_hash,name,phone,street,postcode)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [email, hash, name||null, phone||null, street||null, postcode||null]
+      `INSERT INTO public.users (email,password_hash,name,phone,street,postcode,has_tap)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [email, hash, name||null, phone||null, street||null, postcode||null, !!has_tap]
     );
     res.json({ ok:true, token: signToken(r.rows[0]) });
   } catch (e) {
@@ -59,10 +61,6 @@ router.post("/login", async (req, res) => {
   }
 });
 
-/**
- * IMPORTANT: attach authMiddleware to /me so req.user is populated.
- * Without this, /me always 401’s and the frontend loops back to login.
- */
 router.get("/me", authMiddleware, async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ ok:false, error:"auth_required" });
@@ -87,6 +85,55 @@ router.get("/me", authMiddleware, async (req, res) => {
   } catch (e) {
     console.error("[auth/me]", e);
     res.status(500).json({ ok:false, error:"me_failed" });
+  }
+});
+
+/* ------------ Password reset (request + perform) ------------ */
+router.post("/request-reset", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    if (!email) return res.json({ ok: true }); // do not reveal existence
+    const u = await pool.query("SELECT id FROM public.users WHERE lower(email)=$1", [email]);
+    if (!u.rowCount) return res.json({ ok: true });
+
+    const token = crypto.randomBytes(24).toString("hex");
+    const expires = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+    await pool.query(
+      `INSERT INTO public.password_resets (email, token, expires_at) VALUES ($1,$2,$3)`,
+      [email, token, expires]
+    );
+
+    // In production you would email this link. For dev, echo it so your frontend can show it.
+    const origin = process.env.PUBLIC_FRONTEND_ORIGIN || "";
+    const link = `${origin}/reset.html?token=${token}`;
+    res.json({ ok: true, reset_link: link });
+  } catch (e) {
+    console.error("[auth/request-reset]", e);
+    res.status(500).json({ ok:false, error:"request_reset_failed" });
+  }
+});
+
+router.post("/perform-reset", async (req, res) => {
+  try {
+    const { token, new_password } = req.body || {};
+    if (!token || !new_password) return res.status(400).json({ ok:false, error:"missing_fields" });
+
+    const r = await pool.query(
+      `SELECT * FROM public.password_resets
+       WHERE token=$1 AND used=FALSE AND expires_at > now()`,
+      [token]
+    );
+    if (!r.rowCount) return res.status(400).json({ ok:false, error:"token_invalid" });
+
+    const row = r.rows[0];
+    const hash = await bcrypt.hash(new_password, 11);
+    await pool.query(`UPDATE public.users SET password_hash=$1 WHERE lower(email)=lower($2)`, [hash, row.email]);
+    await pool.query(`UPDATE public.password_resets SET used=TRUE WHERE id=$1`, [row.id]);
+
+    res.json({ ok:true });
+  } catch (e) {
+    console.error("[auth/perform-reset]", e);
+    res.status(500).json({ ok:false, error:"perform_reset_failed" });
   }
 });
 
