@@ -1,61 +1,182 @@
 import express from "express";
 import Stripe from "stripe";
-import db from "./db.js";
+import * as db from "./db.js";
+import {
+  addExteriorCredits,
+  addFullCredits,
+  awardCreditsForTier, // convenience wrapper
+} from "./credits.js";
+
+/**
+ * I import the DB with `* as db` to avoid assuming a default export.
+ * I export `handleMembershipWebhook` here so `server.js` can import it without
+ * depending on `credits.js` to expose that handler.
+ */
 
 const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 
-// Subscription creation endpoint
+/* ----------------------------- Helpers ----------------------------- */
+
+function tierFromPriceId(priceId) {
+  const std = process.env.STANDARD_PRICE;
+  const stdIntro = process.env.STANDARD_INTRO_PRICE;
+  const prem = process.env.PREMIUM_PRICE;
+  const premIntro = process.env.PREMIUM_INTRO_PRICE;
+
+  if ([std, stdIntro].includes(priceId)) return "standard";
+  if ([prem, premIntro].includes(priceId)) return "premium";
+  return null;
+}
+
+async function upsertStripeCustomerIdForEmail(email, details) {
+  // Try to find the user
+  const existing = await db.query("SELECT id, stripe_customer_id FROM users WHERE email=$1 LIMIT 1", [email]);
+  if (existing.rows.length === 0) return null;
+
+  const user = existing.rows[0];
+  if (!user.stripe_customer_id && details?.id) {
+    await db.query("UPDATE users SET stripe_customer_id=$1 WHERE id=$2", [details.id, user.id]);
+  }
+  return user.id;
+}
+
+/* --------------------------- Public Routes -------------------------- */
+
+/**
+ * POST /api/memberships/subscribe
+ * Creates a Stripe Checkout Session for subscription sign-up.
+ * Does NOT award credits here; credits are awarded on webhook confirmation.
+ */
 router.post("/subscribe", async (req, res) => {
   try {
-    const { tier, customer } = req.body;
+    const { tier, customer, origin } = req.body || {};
     if (!tier || !customer?.email) {
-      return res.status(400).json({ ok: false, error: "Missing tier or customer data" });
+      return res.status(400).json({ ok: false, error: "Missing tier or customer email" });
     }
 
-    // Ensure Stripe customer exists
-    let user = await db.getUserByEmail(customer.email);
-    let stripeCustomerId = user?.stripe_customer_id;
+    // Find (or later upsert) the Stripe customer via email
+    let stripeCustomerId = null;
 
-    if (!stripeCustomerId) {
-      const stripeCustomer = await stripe.customers.create({
-        email: customer.email,
-        name: customer.name,
-        phone: customer.phone,
-        address: { line1: customer.street, postal_code: customer.postcode },
-      });
-      stripeCustomerId = stripeCustomer.id;
-      if (user) {
-        await db.query("UPDATE users SET stripe_customer_id=$1 WHERE id=$2", [
-          stripeCustomerId,
-          user.id,
-        ]);
+    // If we already have a stripe_customer_id stored, use it
+    {
+      const r = await db.query(
+        "SELECT stripe_customer_id FROM users WHERE email=$1 LIMIT 1",
+        [customer.email]
+      );
+      if (r.rows.length && r.rows[0].stripe_customer_id) {
+        stripeCustomerId = r.rows[0].stripe_customer_id;
       }
     }
 
-    // Price IDs from environment
-    const priceId =
-      tier === "standard"
-        ? process.env.STANDARD_PRICE
-        : tier === "premium"
-        ? process.env.PREMIUM_PRICE
-        : null;
-    if (!priceId) return res.status(400).json({ ok: false, error: "Invalid tier" });
+    if (!stripeCustomerId) {
+      const sc = await stripe.customers.create({
+        email: customer.email,
+        name: customer.name || undefined,
+        phone: customer.phone || undefined,
+        address: (customer.street || customer.postcode)
+          ? { line1: customer.street || undefined, postal_code: customer.postcode || undefined }
+          : undefined,
+      });
+      stripeCustomerId = sc.id;
 
-    // Create checkout session
+      // Persist to user if the user exists already
+      await db.query(
+        "UPDATE users SET stripe_customer_id=$1 WHERE email=$2",
+        [stripeCustomerId, customer.email]
+      );
+    }
+
+    // Price id based on tier
+    const priceId =
+      tier === "standard" ? process.env.STANDARD_PRICE
+      : tier === "premium" ? process.env.PREMIUM_PRICE
+      : null;
+
+    if (!priceId) {
+      return res.status(400).json({ ok: false, error: "Invalid tier" });
+    }
+
+    // Success/cancel URLs
+    const successBase = process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN || origin || "";
+    const success_url = `${successBase}/?sub=1&thankyou=1&flow=sub`;
+    const cancel_url = `${successBase}/?sub=cancel`;
+
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
-      line_items: [{ price: priceId, quantity: 1 }],
       mode: "subscription",
-      success_url: `${process.env.FRONTEND_PUBLIC_URL}/?sub=1&thankyou=1&flow=sub`,
-      cancel_url: `${process.env.FRONTEND_PUBLIC_URL}/?sub=cancel`,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url,
+      cancel_url,
     });
 
-    res.json({ ok: true, url: session.url });
+    return res.json({ ok: true, url: session.url });
   } catch (err) {
-    console.error("Subscribe failed:", err);
-    res.status(500).json({ ok: false, error: "Unable to create subscription" });
+    console.error("[memberships/subscribe] failed:", err);
+    return res.status(500).json({ ok: false, error: "Unable to create subscription" });
   }
 });
+
+/* ------------------------ Webhook Entry Point ----------------------- */
+
+/**
+ * Exported handler called from server.js (after signature verification).
+ * Awards credits on:
+ *  - invoice.payment_succeeded (initial payment & renewals)
+ */
+export async function handleMembershipWebhook(event) {
+  switch (event.type) {
+    case "invoice.payment_succeeded": {
+      const invoice = event.data.object;
+
+      // Ensure it's a subscription invoice
+      const subscriptionId = invoice?.subscription;
+      if (!subscriptionId) return;
+
+      // Retrieve subscription to determine price/tier and customer
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      const customerId = sub.customer;
+      const priceId = sub.items?.data?.[0]?.price?.id;
+      if (!customerId || !priceId) return;
+
+      const tier = tierFromPriceId(priceId);
+      if (!tier) {
+        console.log("[webhook] invoice.payment_succeeded: price not mapped to tier", priceId);
+        return;
+      }
+
+      // Find user by stripe_customer_id
+      const ur = await db.query("SELECT id, email FROM users WHERE stripe_customer_id=$1 LIMIT 1", [customerId]);
+
+      // If not found, try to reconcile via the Stripe Customer email, then backfill stripe_customer_id
+      let userId = ur.rows[0]?.id;
+      if (!userId) {
+        const sc = await stripe.customers.retrieve(customerId);
+        const email = sc?.email;
+        if (email) {
+          const er = await db.query("SELECT id FROM users WHERE email=$1 LIMIT 1", [email]);
+          if (er.rows.length) {
+            userId = er.rows[0].id;
+            await db.query("UPDATE users SET stripe_customer_id=$1 WHERE id=$2", [customerId, userId]);
+          }
+        }
+      }
+      if (!userId) {
+        console.warn("[webhook] No user matched for customer:", customerId);
+        return;
+      }
+
+      // Award credits per tier
+      await awardCreditsForTier(userId, tier);
+      console.log(`[webhook] Awarded credits for user ${userId} (tier=${tier})`);
+      return;
+    }
+
+    default:
+      // Other events can be ignored or logged as needed
+      console.log(`[webhook] Unhandled event type: ${event.type}`);
+      return;
+  }
+}
 
 export default router;
