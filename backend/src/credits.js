@@ -5,11 +5,64 @@ import { authMiddleware } from "./auth.js";
 
 const router = express.Router();
 
+/* ------------------------------------------------------------------ */
+/*                          CREDIT UTILITIES                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Award membership credits for a billing period.
+ * - tier: "standard" => +2 exterior
+ * - tier: "premium"  => +2 full
+ * valid_until is set to the Stripe subscription current_period_end (unix seconds).
+ */
+export async function awardCreditsForTier(userId, tier, currentPeriodEndSec) {
+  if (!userId || !tier) return;
+
+  const rows = [];
+  if (tier === "standard") {
+    rows.push({ service_type: "exterior", qty: 2 });
+  } else if (tier === "premium") {
+    rows.push({ service_type: "full", qty: 2 });
+  } else {
+    // Unknown tier — do nothing.
+    return;
+  }
+
+  const validUntilExpr = currentPeriodEndSec
+    ? "to_timestamp($3::bigint)"
+    : "NULL";
+
+  for (const r of rows) {
+    const params = currentPeriodEndSec
+      ? [userId, r.service_type, currentPeriodEndSec, r.qty]
+      : [userId, r.service_type, r.qty];
+
+    const sql = `
+      INSERT INTO public.credit_ledger (user_id, service_type, qty, valid_until)
+      VALUES ($1, $2, $${currentPeriodEndSec ? 3 : 3}, $${currentPeriodEndSec ? 4 : 3})
+    `;
+
+    // When no period end is provided, we want NULL valid_until and use qty as the 3rd param.
+    // Build the sql dynamically to map params correctly.
+    const finalSql = currentPeriodEndSec
+      ? `INSERT INTO public.credit_ledger (user_id, service_type, valid_until, qty)
+         VALUES ($1, $2, ${validUntilExpr}, $4)`
+      : `INSERT INTO public.credit_ledger (user_id, service_type, qty)
+         VALUES ($1, $2, $3)`;
+
+    await pool.query(finalSql, params);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*                       BOOK WITH CREDIT ENDPOINT                     */
+/* ------------------------------------------------------------------ */
+
 /**
  * Ensure the minimal bookings table exists so credit bookings can be recorded.
  * If you already have a bookings/appointments table, this will be a no-op due to IF NOT EXISTS.
  */
-async function ensureSchema() {
+async function ensureBookingsSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS public.bookings (
       id               bigserial PRIMARY KEY,
@@ -39,7 +92,6 @@ async function getBalance(userId, serviceType) {
 
 /**
  * Deduct exactly one credit; we insert a -1 row.
- * This is consistent with your /auth/me balance calculation (SUM over valid rows).
  */
 async function deductOneCredit(userId, serviceType) {
   await pool.query(
@@ -53,7 +105,7 @@ async function deductOneCredit(userId, serviceType) {
  * Try to persist a booking record (for audit and UI). Not a scheduler — just a record.
  */
 async function insertBooking(userId, serviceType, startIso, endIso) {
-  await ensureSchema();
+  await ensureBookingsSchema();
   await pool.query(
     `INSERT INTO public.bookings (user_id, service_type, start_ts, end_ts)
      VALUES ($1, $2, to_timestamp($3), to_timestamp($4))`,
@@ -113,10 +165,9 @@ router.post("/book-with-credit", authMiddleware, async (req, res) => {
       return res.status(400).json({ ok: false, error: "insufficient_credits" });
     }
 
-    // OPTIONAL collision check: ensure user doesn't already have a booking at the same time.
-    // (You can remove if not needed.)
+    // Optional duplicate check (same user/time)
     try {
-      await ensureSchema();
+      await ensureBookingsSchema();
       const clash = await pool.query(
         `SELECT 1 FROM public.bookings
           WHERE user_id=$1
@@ -130,19 +181,17 @@ router.post("/book-with-credit", authMiddleware, async (req, res) => {
         ]
       );
       if (clash.rowCount) {
-        console.warn("[credits] duplicate booking detected, short-circuiting success");
-        // Treat as success (idempotent UX): don't double-deduct, just say booked.
+        console.warn("[credits] duplicate booking detected; returning success");
         return res.json({ ok: true, booked: true });
       }
     } catch (e) {
-      // If bookings table is not available for some reason, continue (best-effort).
       console.warn("[credits] clash check skipped:", e?.message);
     }
 
     // Deduct 1 credit
     await deductOneCredit(req.user.id, serviceKey);
 
-    // Record booking (best-effort; if it fails, we still return ok, as the credit is deducted)
+    // Record booking (best effort)
     try {
       await insertBooking(req.user.id, serviceKey, startIso, endIso);
     } catch (e) {
