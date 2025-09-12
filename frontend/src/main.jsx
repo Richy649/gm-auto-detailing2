@@ -134,7 +134,7 @@ function Services({ state, setState }) {
     const tier = tierKey === "standard_membership" ? "standard" : "premium";
     const payload = {
       tier,
-      first_time: !!firstTime, // <— tell backend to use intro price for first month
+      first_time: !!firstTime,
       customer: {
         name: state.customer?.name || "",
         phone: state.customer?.phone || "",
@@ -289,7 +289,7 @@ function Calendar({ state, setState }) {
     return keyFromISO(state.selectedSlot.start_iso) === k;
   }
 
-  // ---- Top-right "View account" to match Services ----
+  // Top-right "View account"
   const TopRight = () => (
     <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
       <Button onClick={()=> window.location.href="/account.html"}>
@@ -432,14 +432,26 @@ function Confirm({ state, setState }) {
         customer: state.customer,
         origin: window.location.origin
       };
+      if (!payload.slot?.start_iso || !payload.slot?.end_iso) {
+        alert("Please pick a time slot."); return;
+      }
       const r = await fetch(`${API}/credits/book-with-credit`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload)
       });
-      const d = await r.json().catch(()=> ({}));
+
+      // Improved error surfacing to avoid silent failures
+      let d;
+      try { d = await r.json(); }
+      catch (e) {
+        const text = await r.text().catch(() => "");
+        alert(`Credit booking failed (${r.status}). ${text?.slice(0,180) || ""}`);
+        return;
+      }
+
       if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
-      if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; }
+
       if (d.booked) {
         setState(s=> ({ ...s, step: "thankyou" })); // universal thank you
         setTimeout(reportHeight, 60);
@@ -529,7 +541,7 @@ function ThankYou({ onBook, onAccount }) {
     <div className="gm page-section gm-booking wrap">
       <div className="gm panel wider" style={{ textAlign:"center", padding:"20px" }}>
         <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ maxWidth:120, margin:"0 auto 16px" }} />
-        <div className="gm h2 center" style={{ fontSize:26, fontWeight:700, color:"#16a34a" }}>
+        <div className="gm h2 center" style={{ fontSize:26, fontWeight:700 }}>
           Thank you so much for booking with us!
         </div>
         <p style={{ marginTop: 12, maxWidth: 640, marginLeft:"auto", marginRight:"auto", lineHeight:1.6 }}>
