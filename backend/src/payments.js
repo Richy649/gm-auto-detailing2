@@ -14,7 +14,22 @@ import { createCalendarEvents } from "./gcal.js";
  */
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-const FRONTEND_ORIGIN = (process.env.PUBLIC_FRONTEND_ORIGIN || "https://book.gmautodetailing.uk").replace(/\/+$/, "");
+
+// Resolve a safe frontend origin from several envs, then fallback.
+function resolveFrontendOrigin() {
+  const cand =
+    process.env.PUBLIC_FRONTEND_ORIGIN ||
+    process.env.FRONTEND_PUBLIC_URL ||
+    process.env.PUBLIC_APP_ORIGIN ||
+    "https://book.gmautodetailing.uk";
+  try {
+    const u = new URL(cand);
+    return `${u.origin}`;
+  } catch {
+    return "https://book.gmautodetailing.uk";
+  }
+}
+const FRONTEND_ORIGIN = resolveFrontendOrigin();
 
 const GBP = "gbp";
 
@@ -31,12 +46,12 @@ const addons = {
   polish: { name: "Hand Polish",   price_cents: 2250 },
 };
 
-/** Small helpers */
-function cleanStr(v) { return (String(v || "").trim()); }
-function normalizeEmail(e) { return cleanStr(e).toLowerCase(); }
-function normalizeStreet(s) { return cleanStr(s).toLowerCase(); }
+/* ---------------------------- Normalizers ---------------------------- */
+function cleanStr(s) { return (s ?? "").toString().replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim(); }
+function normalizeEmail(s) { return cleanStr(s).toLowerCase(); }
+function normalizeStreet(s) { return cleanStr(s).toLowerCase().replace(/[^a-z0-9]+/g, ""); }
 
-/** Build line items w/ first-time 50% off on service ONLY (addons full price) */
+/* -------------------------- Price composition ------------------------ */
 async function buildLineItemsAndFirstTime(customer, service_key, addonKeys) {
   const firstTime = !(await hasExistingCustomer({
     email: normalizeEmail(customer?.email),
@@ -71,57 +86,10 @@ async function buildLineItemsAndFirstTime(customer, service_key, addonKeys) {
     });
   }
 
-  return { firstTime, line_items };
+  return { line_items, firstTime };
 }
 
-/** Persist bookings and sync Google Calendar (idempotent on Calendar by event id) */
-async function persistAndSync(sessionId, payload) {
-  const svc = services[payload.service_key] || { name: payload.service_key || "Service" };
-  const itemsForCalendar = [];
-
-  for (const sl of (payload.slots || [])) {
-    // Save to DB
-    try {
-      await saveBooking({
-        stripe_session_id: sessionId,
-        service_key: payload.service_key,
-        addons: payload.addons || [],
-        start_iso: sl.start_iso,
-        end_iso: sl.end_iso,
-        customer: payload.customer || {},
-        has_tap: !!payload.has_tap,
-      });
-    } catch (e) {
-      console.warn("[saveBooking] failed", e?.message || e);
-    }
-
-    // Prepare Calendar item
-    const desc = [
-      `Name: ${payload.customer?.name || ""}`,
-      `Phone: ${payload.customer?.phone || ""}`,
-      `Email: ${payload.customer?.email || ""}`,
-      `Address: ${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`,
-      `Outhouse tap: ${payload.has_tap ? "Yes" : "No"}`,
-      (payload.addons?.length ? `Add-ons: ${payload.addons.join(", ")}` : null),
-      `Stripe session: ${sessionId}`,
-    ].filter(Boolean).join("\n");
-
-    itemsForCalendar.push({
-      start_iso: sl.start_iso,
-      end_iso: sl.end_iso,
-      summary: `GM Auto Detailing — ${svc.name}`,
-      description: desc,
-      location: `${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`.trim(),
-    });
-  }
-
-  try {
-    await createCalendarEvents(sessionId, itemsForCalendar);
-  } catch (e) {
-    console.warn("[gcal] create events failed", e?.message || e);
-  }
-}
-
+/* ------------------------------- Mount ------------------------------- */
 export function mountPayments(app) {
   /**
    * Create Checkout Session
@@ -169,26 +137,24 @@ export function mountPayments(app) {
   });
 
   /**
-   * Stripe Webhook (must use raw body; keep this route BEFORE any global express.json())
-   * Event handled: checkout.session.completed
+   * Webhook: persist & create calendar events after Stripe confirms the session.
    */
   app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
     let event;
     try {
-      const sig = req.headers["stripe-signature"];
-      event = stripe.webhooks.constructEvent(req.body, sig, WEBHOOK_SECRET);
+      event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], WEBHOOK_SECRET);
     } catch (err) {
-      console.warn("[webhook] signature error", err?.message);
+      console.error("[webhook] signature verification failed:", err?.message || err);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      let payload = {};
-      try { payload = JSON.parse(session.metadata?.payload || "{}"); } catch { payload = {}; }
-
+      const sessionId = session?.id;
       try {
-        await persistAndSync(session.id, payload);
+        let payload = {};
+        try { payload = JSON.parse(session.metadata?.payload || "{}"); } catch { payload = {}; }
+        await persistAndSync(sessionId, payload);
       } catch (e) {
         console.warn("[webhook persist] failed", e?.message || e);
       }
@@ -205,12 +171,10 @@ export function mountPayments(app) {
   app.post("/api/pay/confirm", express.json(), async (req, res) => {
     try {
       const { session_id } = req.body || {};
-      if (!session_id) return res.status(400).json({ ok: false, error: "Missing session id." });
+      if (!session_id) return res.status(400).json({ ok: false, error: "Missing session_id" });
 
       const sess = await stripe.checkout.sessions.retrieve(session_id);
-      if (!sess || (sess.payment_status !== "paid" && sess.status !== "complete")) {
-        return res.status(409).json({ ok: false, error: "Session not paid yet." });
-      }
+      if (!sess?.id) return res.status(404).json({ ok: false, error: "Session not found." });
 
       let payload = {};
       try { payload = JSON.parse(sess.metadata?.payload || "{}"); } catch { payload = {}; }
@@ -225,4 +189,52 @@ export function mountPayments(app) {
       return res.status(500).json({ ok: false, error: "Confirm failed." });
     }
   });
+}
+
+/* ------------------------- Persistence + GCal ------------------------ */
+async function persistAndSync(sessionId, payload) {
+  const svc = services[payload.service_key] || { name: payload.service_key || "Service" };
+  const itemsForCalendar = [];
+
+  for (const sl of (payload.slots || [])) {
+    // Save to DB
+    try {
+      await saveBooking({
+        stripe_session_id: sessionId,
+        service_key: payload.service_key,
+        addons: payload.addons || [],
+        start_iso: sl.start_iso,
+        end_iso: sl.end_iso,
+        customer: payload.customer || {},
+        has_tap: !!payload.has_tap,
+      });
+    } catch (e) {
+      console.warn("[saveBooking] failed", e?.message || e);
+    }
+
+    // Build calendar item
+    const desc = [
+      `Name: ${payload.customer?.name || ""}`,
+      `Phone: ${payload.customer?.phone || ""}`,
+      `Email: ${payload.customer?.email || ""}`,
+      `Address: ${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`,
+      `Outhouse tap: ${payload.has_tap ? "Yes" : "No"}`,
+      (payload.addons?.length ? `Add-ons: ${payload.addons.join(", ")}` : null),
+      `Stripe session: ${sessionId}`,
+    ].filter(Boolean).join("\n");
+
+    itemsForCalendar.push({
+      start_iso: sl.start_iso,
+      end_iso: sl.end_iso,
+      summary: `GM Auto Detailing — ${svc.name}`,
+      description: desc,
+      location: `${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`.trim(),
+    });
+  }
+
+  try {
+    await createCalendarEvents(sessionId, itemsForCalendar);
+  } catch (e) {
+    console.warn("[gcal] create events failed", e?.message || e);
+  }
 }
