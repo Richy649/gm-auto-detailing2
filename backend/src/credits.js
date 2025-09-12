@@ -1,31 +1,64 @@
-import * as db from "./db.js";
+import { pool } from "./db.js";
 
 /**
- * I keep the functions minimal and database-agnostic, assuming your `users` table
- * holds integer columns for `exterior_credits` and `full_credits`. If your schema
- * differs, adjust the UPDATE statements accordingly.
+ * Insert credits into the ledger. If `validUntilSec` is provided, set `valid_until`.
+ * The caller (webhook) passes the subscription period end to align with your /auth/me query.
  */
-
-export async function addExteriorCredits(userId, count) {
-  await db.query(
-    "UPDATE users SET exterior_credits = COALESCE(exterior_credits, 0) + $1 WHERE id=$2",
-    [count, userId]
-  );
+async function insertLedgerCredits(userId, serviceType, qty, validUntilSec = null) {
+  if (validUntilSec) {
+    await pool.query(
+      `INSERT INTO public.credit_ledger (user_id, service_type, qty, valid_until)
+       VALUES ($1, $2, $3, to_timestamp($4))`,
+      [userId, serviceType, qty, validUntilSec]
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO public.credit_ledger (user_id, service_type, qty)
+       VALUES ($1, $2, $3)`,
+      [userId, serviceType, qty]
+    );
+  }
 }
 
-export async function addFullCredits(userId, count) {
-  await db.query(
-    "UPDATE users SET full_credits = COALESCE(full_credits, 0) + $1 WHERE id=$2",
-    [count, userId]
+/**
+ * Guard against duplicate awards for the same period & service.
+ * This does not require schema changes and is safe if multiple rows exist historically.
+ */
+async function alreadyAwarded(userId, serviceType, qty, validUntilSec) {
+  if (!validUntilSec) return false; // no way to scope to a period; allow insert
+  const r = await pool.query(
+    `SELECT 1
+       FROM public.credit_ledger
+      WHERE user_id=$1
+        AND service_type=$2
+        AND qty=$3
+        AND valid_until = to_timestamp($4)
+      LIMIT 1`,
+    [userId, serviceType, qty, validUntilSec]
   );
+  return r.rowCount > 0;
 }
 
-export async function awardCreditsForTier(userId, tier) {
+export async function addExteriorCredits(userId, count, validUntilSec = null) {
+  if (await alreadyAwarded(userId, "exterior", count, validUntilSec)) return;
+  await insertLedgerCredits(userId, "exterior", count, validUntilSec);
+}
+
+export async function addFullCredits(userId, count, validUntilSec = null) {
+  if (await alreadyAwarded(userId, "full", count, validUntilSec)) return;
+  await insertLedgerCredits(userId, "full", count, validUntilSec);
+}
+
+/**
+ * Award credits based on membership tier.
+ * - standard → +2 exterior credits
+ * - premium  → +2 full credits
+ * Period end is used for expiration to match your /auth/me balance computation.
+ */
+export async function awardCreditsForTier(userId, tier, periodEndSec = null) {
   if (tier === "standard") {
-    // 2 exterior credits per billing period
-    await addExteriorCredits(userId, 2);
+    await addExteriorCredits(userId, 2, periodEndSec);
   } else if (tier === "premium") {
-    // 2 full-detail credits per billing period
-    await addFullCredits(userId, 2);
+    await addFullCredits(userId, 2, periodEndSec);
   }
 }
