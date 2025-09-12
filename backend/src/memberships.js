@@ -40,36 +40,24 @@ function mapTierFromPrice(priceId) {
 }
 
 /* -------------------- Env: prices and optional coupons ------------------- */
-/**
- * EXPECTED ENVS (you already have the price IDs):
- *   STANDARD_PRICE, PREMIUM_PRICE                   (recurring/monthly)
- *   STANDARD_INTRO_PRICE, PREMIUM_INTRO_PRICE       (optional fallback)
- *
- * To enable the clearer Checkout messaging, create two COUPONS in Stripe (Test & Live):
- *   STANDARD_INTRO_COUPON = coupon_... (duration=once, amount_off to reach £35 first month)
- *   PREMIUM_INTRO_COUPON  = coupon_... (duration=once, amount_off to reach £50 first month)
- *
- * Example amounts if your normal prices are £70 / £100:
- *   STANDARD_INTRO_COUPON: amount_off=3500, currency=gbp, duration=once
- *   PREMIUM_INTRO_COUPON:  amount_off=5000, currency=gbp, duration=once
- */
 const ENV = {
   STANDARD_PRICE:        clean(process.env.STANDARD_PRICE || ""),
   STANDARD_INTRO_PRICE:  clean(process.env.STANDARD_INTRO_PRICE || ""),
   PREMIUM_PRICE:         clean(process.env.PREMIUM_PRICE || ""),
   PREMIUM_INTRO_PRICE:   clean(process.env.PREMIUM_INTRO_PRICE || ""),
-  STANDARD_INTRO_COUPON: clean(process.env.STANDARD_INTRO_COUPON || ""), // NEW (optional)
-  PREMIUM_INTRO_COUPON:  clean(process.env.PREMIUM_INTRO_COUPON || ""),  // NEW (optional)
+  // Coupon IDs (duration=once). Make sure you set THESE names in Render:
+  STANDARD_INTRO_COUPON: clean(process.env.STANDARD_INTRO_COUPON || ""),
+  PREMIUM_INTRO_COUPON:  clean(process.env.PREMIUM_INTRO_COUPON || ""),
 };
 
 /* --------------------------- Public Routes -------------------------- */
 /**
  * POST /api/memberships/subscribe
  * Body: { tier: "standard"|"premium", customer: {...}, first_time?: boolean }
- * If first_time=true and a COUPON env is configured:
+ * If first_time=true AND coupon env exists:
  *   - Use NORMAL price in the line item
- *   - Apply COUPON (duration=once) so the first invoice is discounted
- *   - Set Checkout custom text to "Intro month £35, then £70 / month"
+ *   - Apply COUPON at the **top level** as `discounts` (duration=once)
+ *   - Add Checkout submit message (“Intro month £35, then £70 / month”)
  * Else (no coupon configured):
  *   - Fall back to intro price for first cycle, then flip to normal price via webhook.
  */
@@ -109,71 +97,56 @@ router.post("/subscribe", async (req, res) => {
       );
     }
 
-    // Load prices (pence used only for custom text – we read them from Stripe)
+    // Load prices (for building message)
     const standardPriceId = ENV.STANDARD_PRICE;
     const premiumPriceId  = ENV.PREMIUM_PRICE;
     if (!standardPriceId || !premiumPriceId) {
       return res.status(500).json({ ok: false, error: "price_not_configured" });
     }
 
-    // Fetch price amounts from Stripe for messaging
     const [stdPrice, premPrice] = await Promise.all([
       stripe.prices.retrieve(standardPriceId),
       stripe.prices.retrieve(premiumPriceId),
     ]);
-    const stdUnit = stdPrice?.unit_amount ?? 0;   // pence
-    const premUnit = premPrice?.unit_amount ?? 0; // pence
+    const stdUnit  = stdPrice?.unit_amount ?? 0;   // pence
+    const premUnit = premPrice?.unit_amount ?? 0;  // pence
 
-    // Determine the normal + intro (coupon) for the chosen tier
+    // Determine normal price + optional coupon for the chosen tier
     let normalPriceId = null;
     let couponId = null;
-    let introLabel = ""; // for custom_text
     if (tier === "standard") {
       normalPriceId = standardPriceId;
       couponId = first_time ? ENV.STANDARD_INTRO_COUPON : "";
-      introLabel = `Intro month ${money(Math.max(0, stdUnit - (stdUnit - 3500)))}, then ${money(stdUnit)} / month`;
-      // Note: label is overridden below once we read the actual coupon. This line just avoids undefined.
     } else if (tier === "premium") {
       normalPriceId = premiumPriceId;
       couponId = first_time ? ENV.PREMIUM_INTRO_COUPON : "";
-      introLabel = `Intro month ${money(Math.max(0, premUnit - (premUnit - 5000)))}, then ${money(premUnit)} / month`;
     } else {
       return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
 
-    // If coupon approach is configured AND first_time=true, prefer coupon.
     const useCoupon = !!(first_time && couponId);
 
-    // If using coupon, pull it to compute the actual intro price for the message
+    // Build helpful submit message
     let submitMessage = "";
     if (useCoupon) {
       try {
         const c = await stripe.coupons.retrieve(couponId);
-        if (c.duration !== "once") {
-          console.warn(`[memberships] coupon ${couponId} is not duration=once; Checkout will still work but intro intent may be unclear.`);
-        }
+        const normal = tier === "standard" ? stdUnit : premUnit;
         if (c.amount_off && c.currency?.toLowerCase() === "gbp") {
-          const normal = tier === "standard" ? stdUnit : premUnit;
           const intro = Math.max(0, normal - c.amount_off);
-          submitMessage =
-            `Intro month ${money(intro)}, then ${money(normal)} / month`;
+          submitMessage = `Intro month ${money(intro)}, then ${money(normal)} / month`;
         } else if (c.percent_off) {
-          const normal = tier === "standard" ? stdUnit : premUnit;
           const intro = Math.round(normal * (1 - c.percent_off / 100));
-          submitMessage =
-            `Intro month ${money(intro)}, then ${money(normal)} / month`;
+          submitMessage = `Intro month ${money(intro)}, then ${money(normal)} / month`;
         } else {
-          // Unknown coupon type — still show a generic message.
-          const normal = tier === "standard" ? stdUnit : premUnit;
           submitMessage = `Intro month applied, then ${money(normal)} / month`;
         }
       } catch {
-        // If coupon fetch failed, fall back to generic message; Checkout will still show discount line.
         const normal = tier === "standard" ? stdUnit : premUnit;
         submitMessage = `Intro month applied, then ${money(normal)} / month`;
       }
     } else if (first_time && !useCoupon) {
-      // Fallback: intro price flow (we will put a message, but the line item will be intro price).
+      // Fallback: intro price flow (we will put a message, but the line item will be the intro price).
       const introPriceId = tier === "standard" ? ENV.STANDARD_INTRO_PRICE : ENV.PREMIUM_INTRO_PRICE;
       if (!introPriceId) {
         return res.status(500).json({ ok: false, error: "intro_price_not_configured" });
@@ -198,18 +171,16 @@ router.post("/subscribe", async (req, res) => {
       subscription_data: {
         metadata: {
           tier,
-          // if using coupon, we don't need a price flip; mark the method for the webhook
           method: useCoupon ? "coupon" : "intro_price",
           normal_price: ENV[`${tier.toUpperCase()}_PRICE`] || "",
           first_cycle_price: useCoupon ? "" : (ENV[`${tier.toUpperCase()}_INTRO_PRICE`] || ""),
         },
-        // Apply the coupon only on first invoice if configured
-        discounts: useCoupon ? [{ coupon: couponId }] : undefined,
       },
-      // Line item: normal price (coupon will discount the first invoice)
+      // IMPORTANT: discounts go at the TOP LEVEL for Checkout Sessions
+      discounts: useCoupon ? [{ coupon: couponId }] : undefined,
+      // Line item:
       line_items: useCoupon
         ? [{ price: normalPriceId, quantity: 1 }]
-        // Fallback: intro price this cycle, will be switched to normal later by webhook
         : [{ price: tier === "standard" ? ENV.STANDARD_INTRO_PRICE : ENV.PREMIUM_INTRO_PRICE, quantity: 1 }],
     };
 
@@ -231,7 +202,7 @@ async function ensureNormalPriceForNextCycle(subscription) {
     if (!sub) return;
 
     const method = sub.metadata?.method || "intro_price";
-    if (method !== "intro_price") return; // If we're using coupons, no flip is required.
+    if (method !== "intro_price") return; // If using coupons, no flip is required.
 
     const item = sub.items?.data?.[0];
     if (!item) return;
