@@ -1,299 +1,258 @@
-// backend/src/memberships.js
+// backend/src/payments.js
 import express from "express";
 import Stripe from "stripe";
-import { pool } from "./db.js";
-import { awardCreditsForTier } from "./credits.js";
+import { pool, saveBooking } from "./db.js";
+import { createCalendarEvents } from "./gcal.js";
 
-const router = express.Router();
+/**
+ * One-off payments:
+ *   - Create Checkout Session
+ *   - Webhook to persist booking + create calendar event
+ *   - Resilience confirm endpoint
+ *
+ * ENV expected:
+ *   STRIPE_SECRET_KEY         = sk_test_... or sk_live_...
+ *   STRIPE_WEBHOOK_SECRET     = whsec_...
+ *   FRONTEND_PUBLIC_URL       = https://book.gmautodetailing.uk
+ *   (fallbacks tried: PUBLIC_APP_ORIGIN, PUBLIC_FRONTEND_ORIGIN)
+ */
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
+const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-/* ----------------------------- Helpers ----------------------------- */
+/* ---------------------------- Service Catalog ---------------------------- */
+const services = {
+  exterior: { name: "Exterior Detail", minutes: 75, price_cents: 4000 },
+  full:     { name: "Full Detail",     minutes: 120, price_cents: 6000 },
+};
 
-function hardSanitize(str) {
-  if (!str) return "";
-  return String(str).replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim();
+const addons = {
+  wax:    { name: "Full Body Wax", price_cents: 1000 },
+  polish: { name: "Hand Polish",   price_cents: 2250 },
+};
+
+/* ------------------------------- Utilities ------------------------------- */
+function sanitize(s) { return (s ?? "").toString().replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim(); }
+function normEmail(s) { return sanitize(s).toLowerCase(); }
+function normStreet(s) { return sanitize(s).toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+
+function resolveFrontendOriginEnv() {
+  const cand =
+    process.env.FRONTEND_PUBLIC_URL ||
+    process.env.PUBLIC_APP_ORIGIN ||
+    process.env.PUBLIC_FRONTEND_ORIGIN ||
+    "https://book.gmautodetailing.uk";
+  try { return new URL(cand).origin; } catch { return "https://book.gmautodetailing.uk"; }
 }
+const FRONTEND_ORIGIN = resolveFrontendOriginEnv();
 
-/**
- * Map Stripe price IDs to internal tiers.
- */
-function tierFromPriceId(priceId) {
-  const std       = hardSanitize(process.env.STANDARD_PRICE || "");
-  const stdIntro  = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
-  const prem      = hardSanitize(process.env.PREMIUM_PRICE || "");
-  const premIntro = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
-
-  if ([std, stdIntro].filter(Boolean).includes(priceId)) return "standard";
-  if ([prem, premIntro].filter(Boolean).includes(priceId)) return "premium";
-  return null;
-}
-
-/**
- * Strictly resolve the public origin for success/cancel URLs from FRONTEND_PUBLIC_URL.
- */
-function resolvePublicOriginStrict() {
-  const raw = hardSanitize(process.env.FRONTEND_PUBLIC_URL || "");
-  if (!raw) {
-    throw new Error(
-      "FRONTEND_PUBLIC_URL must be set to a full URL, e.g. https://book.gmautodetailing.uk"
-    );
-  }
-  let parsed;
-  try { parsed = new URL(raw); } catch { throw new Error(`FRONTEND_PUBLIC_URL is not a valid URL: ${raw}`); }
-  if (!(parsed.protocol === "https:" || parsed.protocol === "http:")) {
-    throw new Error(`FRONTEND_PUBLIC_URL must be http(s): ${raw}`);
-  }
-  return parsed.origin;
-}
-
-/* --------------------------- Public Routes -------------------------- */
-/**
- * POST /api/memberships/subscribe
- * Body: { tier: "standard"|"premium", customer: {...}, first_time?: boolean }
- * If first_time=true and an intro price is configured, we start with the intro price,
- * then schedule updating the subscription to the normal price from the next cycle.
- */
-router.post("/subscribe", async (req, res) => {
+function safeOriginFromClient(origin) {
   try {
-    const { tier, customer, first_time } = req.body || {};
-    if (!tier || !customer?.email) {
-      return res.status(400).json({ ok: false, error: "missing_fields" });
-    }
+    if (!origin) throw new Error("no origin");
+    return new URL(origin).origin;
+  } catch {
+    return FRONTEND_ORIGIN;
+  }
+}
 
-    // Look up stripe_customer_id for this user (if any)
-    let stripeCustomerId = null;
-    {
-      const r = await pool.query(
-        "SELECT stripe_customer_id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
-        [customer.email]
-      );
-      if (r.rowCount && r.rows[0].stripe_customer_id) {
-        stripeCustomerId = r.rows[0].stripe_customer_id;
+/**
+ * Server-side first-time check (email OR phone OR normalized street has been seen before).
+ */
+async function isFirstTimeCustomer({ email, phone, street }) {
+  const emailNorm = normEmail(email);
+  const phoneNorm = sanitize(phone);
+  const streetNorm = normStreet(street);
+
+  if (!emailNorm && !phoneNorm && !streetNorm) return false;
+
+  const r = await pool.query(
+    `
+    SELECT 1
+      FROM public.users
+     WHERE ($1 <> '' AND lower(email) = $1)
+        OR ($2 <> '' AND phone = $2)
+        OR ($3 <> '' AND lower(regexp_replace(COALESCE(street,''),'[^a-z0-9]+','', 'g')) = $3)
+     LIMIT 1
+    `,
+    [emailNorm, phoneNorm, streetNorm]
+  );
+  return r.rowCount === 0;
+}
+
+async function buildLineItems(customer, service_key, addonKeys) {
+  const svc = services[service_key];
+  if (!svc) throw new Error("invalid_service");
+
+  const firstTime = await isFirstTimeCustomer({
+    email: customer?.email,
+    phone: customer?.phone,
+    street: customer?.street,
+  });
+
+  const line_items = [];
+  const svcAmount = Math.round(svc.price_cents * (firstTime ? 0.5 : 1));
+  line_items.push({
+    price_data: {
+      currency: "gbp",
+      product_data: { name: svc.name },
+      unit_amount: svcAmount,
+    },
+    quantity: 1,
+  });
+
+  for (const k of addonKeys || []) {
+    const ad = addons[k];
+    if (!ad) continue;
+    line_items.push({
+      price_data: {
+        currency: "gbp",
+        product_data: { name: ad.name },
+        unit_amount: ad.price_cents,
+      },
+      quantity: 1,
+    });
+  }
+
+  return { line_items, firstTime };
+}
+
+/* -------------------------- Persistence + GCal -------------------------- */
+async function persistAndSync(sessionId, payload) {
+  const svcName = services[payload.service_key]?.name || payload.service_key || "Service";
+
+  const itemsForCalendar = [];
+  for (const sl of (payload.slots || [])) {
+    await saveBooking({
+      stripe_session_id: sessionId,
+      service_key: payload.service_key,
+      addons: payload.addons || [],
+      start_iso: sl.start_iso,
+      end_iso: sl.end_iso,
+      customer: payload.customer || {},
+      has_tap: !!payload.has_tap,
+    });
+
+    const desc = [
+      `Name: ${payload.customer?.name || ""}`,
+      `Phone: ${payload.customer?.phone || ""}`,
+      `Email: ${payload.customer?.email || ""}`,
+      `Address: ${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`,
+      `Outhouse tap: ${payload.has_tap ? "Yes" : "No"}`,
+      (payload.addons?.length ? `Add-ons: ${payload.addons.join(", ")}` : null),
+      `Stripe session: ${sessionId}`,
+    ].filter(Boolean).join("\n");
+
+    itemsForCalendar.push({
+      start_iso: sl.start_iso,
+      end_iso: sl.end_iso,
+      summary: `GM Auto Detailing — ${svcName}`,
+      description: desc,
+      location: `${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`.trim(),
+    });
+  }
+
+  await createCalendarEvents(sessionId, itemsForCalendar);
+}
+
+/* --------------------------------- Mount -------------------------------- */
+export function mountPayments(app) {
+  /**
+   * Create Checkout Session (one-off)
+   * Body: { customer, has_tap, service_key, addons:[], slot, origin? }
+   */
+  app.post("/api/pay/create-checkout-session", express.json(), async (req, res) => {
+    try {
+      const { customer, has_tap, service_key, addons: addonKeys = [], slot, origin } = req.body || {};
+      if (!customer || !service_key || !slot?.start_iso || !slot?.end_iso) {
+        return res.status(400).json({ ok: false, error: "Please select a time and complete your details." });
       }
-    }
 
-    // Create Stripe Customer if none exists yet
-    if (!stripeCustomerId) {
-      const sc = await stripe.customers.create({
-        email: customer.email,
-        name: customer.name || undefined,
-        phone: customer.phone || undefined,
-        address:
-          customer.street || customer.postcode
-            ? { line1: customer.street || undefined, postal_code: customer.postcode || undefined }
-            : undefined,
-      });
-      stripeCustomerId = sc.id;
+      const { line_items } = await buildLineItems(customer, service_key, addonKeys);
 
-      // Persist onto user row if user already exists
-      await pool.query(
-        "UPDATE public.users SET stripe_customer_id=$1 WHERE lower(email)=lower($2)",
-        [stripeCustomerId, customer.email]
-      );
-    }
-
-    // Choose price (intro for first month if first_time=true and intro price exists)
-    const STANDARD          = hardSanitize(process.env.STANDARD_PRICE || "");
-    const STANDARD_INTRO    = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
-    const PREMIUM           = hardSanitize(process.env.PREMIUM_PRICE || "");
-    const PREMIUM_INTRO     = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
-
-    let priceForFirstCycle = "";
-    let normalPrice        = "";
-
-    if (tier === "standard") {
-      normalPrice        = STANDARD;
-      priceForFirstCycle = first_time && STANDARD_INTRO ? STANDARD_INTRO : STANDARD;
-    } else if (tier === "premium") {
-      normalPrice        = PREMIUM;
-      priceForFirstCycle = first_time && PREMIUM_INTRO ? PREMIUM_INTRO : PREMIUM;
-    } else {
-      return res.status(400).json({ ok: false, error: "invalid_tier" });
-    }
-    if (!priceForFirstCycle) {
-      return res.status(500).json({ ok: false, error: "price_not_configured" });
-    }
-
-    // Build success/cancel URLs from FRONTEND_PUBLIC_URL origin only
-    const origin = resolvePublicOriginStrict();
-    const success_url = `${origin}/?thankyou=1&flow=sub&sub=1`;
-    const cancel_url  = `${origin}/?sub=cancel`;
-
-    console.log(`[memberships] origin=${origin} success_url=${success_url} cancel_url=${cancel_url}`);
-
-    // Create checkout session in subscription mode using the first-cycle price
-    const session = await stripe.checkout.sessions.create({
-      customer: stripeCustomerId,
-      mode: "subscription",
-      line_items: [{ price: priceForFirstCycle, quantity: 1 }],
-      success_url,
-      cancel_url,
-      subscription_data: {
-        metadata: {
-          tier,
-          first_cycle_price: priceForFirstCycle,
-          normal_price: normalPrice,
-          first_time: first_time ? "true" : "false",
+      const payload = {
+        service_key,
+        addons: addonKeys,
+        has_tap: !!has_tap,
+        customer: {
+          name: sanitize(customer.name),
+          email: normEmail(customer.email),
+          phone: sanitize(customer.phone),
+          street: sanitize(customer.street),
+          postcode: sanitize(customer.postcode),
         },
-      },
-    });
+        slots: [slot],
+      };
 
-    return res.json({ ok: true, url: session.url });
-  } catch (err) {
-    console.error("[memberships/subscribe] failed:", err);
-    return res.status(500).json({ ok: false, error: "subscribe_failed" });
-  }
-});
+      const successBase = safeOriginFromClient(origin);
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items,
+        success_url: `${successBase}/?paid=1&flow=oneoff&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: successBase,
+        metadata: { payload: JSON.stringify(payload) },
+      });
 
-/* ------------------------ Webhook Entry Point ----------------------- */
-/**
- * After the subscription is created (via checkout.session.completed), if this was a first-time
- * customer with an intro price, we programmatically update the subscription’s price to the
- * “normal” price for the next billing cycle. Credits are still awarded per cycle elsewhere.
- */
-async function ensureNormalPriceForNextCycle(subscription) {
-  try {
-    const sub = typeof subscription === "string"
-      ? await stripe.subscriptions.retrieve(subscription)
-      : subscription;
+      if (!session?.url) return res.status(500).json({ ok: false, error: "Unable to start checkout." });
+      return res.json({ ok: true, url: session.url });
+    } catch (e) {
+      console.error("[pay/create-checkout-session] error:", e?.message || e);
+      return res.status(500).json({ ok: false, error: "Payment failed to initialise" });
+    }
+  });
 
-    if (!sub) return;
-    const item = sub.items?.data?.[0];
-    if (!item) return;
+  /**
+   * One-off webhook (raw) — must be raw before json middleware (handled in server.js)
+   */
+  app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
+    let event;
+    try {
+      event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], WEBHOOK_SECRET);
+    } catch (err) {
+      console.error("[webhook] signature verification failed:", err?.message || err);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
 
-    const first_time = sub.metadata?.first_time === "true";
-    const normal_price = sub.metadata?.normal_price || "";
-    if (!first_time || !normal_price) return; // nothing to do
-
-    // If already on normal price, skip
-    if (item.price?.id === normal_price) return;
-
-    await stripe.subscriptions.update(sub.id, {
-      items: [
-        { id: item.id, price: normal_price },
-      ],
-      proration_behavior: "none",
-      metadata: {
-        ...sub.metadata,
-        first_time: "false",
-      },
-    });
-
-    console.log(`[webhook] scheduled normal price for next cycle on sub ${sub.id}`);
-  } catch (e) {
-    console.warn("[webhook] ensureNormalPriceForNextCycle failed:", e?.message);
-  }
-}
-
-/**
- * Called by server.js after Stripe signature verification.
- * Awards credits on subscription invoices (initial + renewals) and applies next-cycle price.
- */
-export async function handleMembershipWebhook(event) {
-  switch (event.type) {
-    case "checkout.session.completed": {
+    if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      if (session?.mode !== "subscription") return;
-      const subId =
-        typeof session.subscription === "string"
-          ? session.subscription
-          : session.subscription?.id;
-      if (!subId) return;
-
-      // If intro cycle was used, schedule normal price for next cycle
-      await ensureNormalPriceForNextCycle(subId);
-      return;
-    }
-
-    case "invoice.payment_succeeded":
-    case "invoice.paid": {
-      const invoice = event.data.object;
-      const subscriptionId = invoice?.subscription;
-      if (!subscriptionId) return;
-
-      const sub = await stripe.subscriptions.retrieve(subscriptionId);
-      const customerId = sub.customer;
-      const item = sub.items?.data?.[0];
-      const priceId = item?.price?.id;
-      const currentPeriodEndSec = sub.current_period_end; // UNIX seconds
-      if (!customerId || !priceId) return;
-
-      // Map price to tier
-      const std       = hardSanitize(process.env.STANDARD_PRICE || "");
-      const stdIntro  = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
-      const prem      = hardSanitize(process.env.PREMIUM_PRICE || "");
-      const premIntro = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
-
-      let tier = null;
-      if ([std, stdIntro].filter(Boolean).includes(priceId)) tier = "standard";
-      else if ([prem, premIntro].filter(Boolean).includes(priceId)) tier = "premium";
-      if (!tier) {
-        console.log("[webhook] invoice.*: unmapped price", priceId);
-        return;
-      }
-
-      // Find user by stripe_customer_id
-      let userId = null;
-      {
-        const ur = await pool.query(
-          "SELECT id, email FROM public.users WHERE stripe_customer_id=$1 LIMIT 1",
-          [customerId]
-        );
-        if (ur.rowCount) userId = ur.rows[0].id;
-      }
-
-      // Fallback: reconcile via Stripe Customer email, then backfill customer id
-      if (!userId) {
-        const sc = await stripe.customers.retrieve(customerId);
-        const email = sc?.email;
-        if (email) {
-          const er = await pool.query(
-            "SELECT id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
-            [email]
-          );
-          if (er.rowCount) {
-            userId = er.rows[0].id;
-            await pool.query(
-              "UPDATE public.users SET stripe_customer_id=$1 WHERE id=$2",
-              [customerId, userId]
-            );
-          }
-        }
-      }
-      if (!userId) {
-        console.warn("[webhook] no user matched for customer:", customerId);
-        return;
-      }
-
-      // Award credits into the ledger for this billing period
-      await awardCreditsForTier(userId, tier, currentPeriodEndSec);
-
-      // Optional: persist subscription status
+      const sessionId = session?.id;
       try {
-        await pool.query(
-          `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
-           VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), now())
-           ON CONFLICT (user_id, tier) DO UPDATE
-             SET status=EXCLUDED.status,
-                 current_period_start=EXCLUDED.current_period_start,
-                 current_period_end=EXCLUDED.current_period_end,
-                 updated_at=now()`,
-          [userId, tier, sub.status || "active", sub.current_period_start, sub.current_period_end]
-        );
+        let payload = {};
+        try { payload = JSON.parse(session?.metadata?.payload || "{}"); } catch { payload = {}; }
+        if (payload?.service_key && Array.isArray(payload?.slots) && payload.slots.length) {
+          await persistAndSync(sessionId, payload);
+        } else {
+          console.warn("[webhook] session missing payload or slots");
+        }
       } catch (e) {
-        console.warn("[webhook] subscriptions upsert skipped:", e?.message);
+        console.warn("[webhook] persist failed:", e?.message || e);
       }
-
-      console.log(
-        `[webhook] credits awarded for user ${userId} — tier=${tier}, period_end=${currentPeriodEndSec}`
-      );
-      return;
     }
 
-    default:
-      console.log(`[webhook] unhandled event type: ${event.type}`);
-      return;
-  }
-}
+    res.json({ received: true });
+  });
 
-export default router;
+  /**
+   * Confirm endpoint — FE calls after success redirect to ensure persistence
+   */
+  app.post("/api/pay/confirm", express.json(), async (req, res) => {
+    try {
+      const { session_id } = req.body || {};
+      if (!session_id) return res.status(400).json({ ok: false, error: "Missing session_id" });
+
+      const sess = await stripe.checkout.sessions.retrieve(session_id);
+      if (!sess?.id) return res.status(404).json({ ok: false, error: "Session not found." });
+
+      let payload = {};
+      try { payload = JSON.parse(sess.metadata?.payload || "{}"); } catch { payload = {}; }
+      if (!payload?.service_key || !Array.isArray(payload?.slots) || !payload.slots.length) {
+        return res.status(400).json({ ok: false, error: "Invalid session payload." });
+      }
+
+      await persistAndSync(sess.id, payload);
+      return res.json({ ok: true });
+    } catch (e) {
+      console.warn("[pay/confirm] failed:", e?.message || e);
+      return res.status(500).json({ ok: false, error: "Confirm failed." });
+    }
+  });
+}
