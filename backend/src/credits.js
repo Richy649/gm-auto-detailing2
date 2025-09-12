@@ -6,10 +6,51 @@ import { createCalendarEvents } from "./gcal.js";
 
 const router = Router();
 
-// Require auth for all endpoints here
-router.use(authMiddleware);
+/* =================================================================== */
+/*                     MEMBERSHIP CREDIT AWARDING                     */
+/* =================================================================== */
+/**
+ * Award membership credits for a billing period.
+ *  - tier "standard" => +2 exterior
+ *  - tier "premium"  => +2 full
+ * If currentPeriodEndSec is provided, credits get a valid_until = that timestamp.
+ */
+export async function awardCreditsForTier(userId, tier, currentPeriodEndSec) {
+  if (!userId || !tier) return;
 
-/** Live (non-expired) balance for a user/service. */
+  const grants =
+    tier === "standard"
+      ? [{ service_type: "exterior", qty: 2 }]
+      : tier === "premium"
+      ? [{ service_type: "full", qty: 2 }]
+      : [];
+
+  if (!grants.length) return;
+
+  const setValidUntil = Number.isFinite(currentPeriodEndSec);
+  for (const g of grants) {
+    if (setValidUntil) {
+      await pool.query(
+        `INSERT INTO public.credit_ledger (user_id, service_type, qty, valid_until, kind, reason)
+         VALUES ($1,$2,$3,to_timestamp($4),'credit','membership_cycle')`,
+        [userId, g.service_type, g.qty, currentPeriodEndSec]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO public.credit_ledger (user_id, service_type, qty, kind, reason)
+         VALUES ($1,$2,$3,'credit','membership_cycle')`,
+        [userId, g.service_type, g.qty]
+      );
+    }
+  }
+}
+
+/* =================================================================== */
+/*                         BOOK WITH CREDIT API                        */
+/* =================================================================== */
+
+const svcNames = { exterior: "Exterior Detail", full: "Full Detail" };
+
 async function availableCredits(user_id, service_type) {
   const r = await pool.query(
     `SELECT COALESCE(SUM(qty),0) AS bal
@@ -22,8 +63,8 @@ async function availableCredits(user_id, service_type) {
   return Number(r.rows?.[0]?.bal || 0);
 }
 
-/** Defensive duplicate check: same user & exact same timeslot already saved. */
 async function hasDuplicateBooking(user_id, startISO, endISO) {
+  // Uses your canonical columns via saveBooking elsewhere; here we check against the same timestamps.
   const q = `
     SELECT 1
       FROM public.bookings
@@ -36,7 +77,6 @@ async function hasDuplicateBooking(user_id, startISO, endISO) {
   return r.rowCount > 0;
 }
 
-/** Insert a -1 debit row linked to the booking id. */
 async function deductOneCredit(user_id, service_type, bookingId) {
   await pool.query(
     `INSERT INTO public.credit_ledger
@@ -46,32 +86,25 @@ async function deductOneCredit(user_id, service_type, bookingId) {
   );
 }
 
-/** Human names for services (for calendar title). */
-const svcNames = {
-  exterior: "Exterior Detail",
-  full: "Full Detail",
-};
-
 /**
  * POST /api/credits/book-with-credit
  * Body: {
  *   service_key: 'exterior' | 'full',
  *   slot: { start_iso: string, end_iso: string },
- *   customer: { name?, email?, phone?, street?, postcode? },
+ *   customer?: { name?, email?, phone?, street?, postcode? },
  *   origin?: string
  * }
+ * Auth: Bearer (authMiddleware)
  */
-router.post("/book-with-credit", async (req, res) => {
+router.post("/book-with-credit", authMiddleware, async (req, res) => {
   console.log("[credits] hit book-with-credit");
 
   try {
-    // Auth
     if (!req.user?.id) {
       console.warn("[credits] missing auth user");
       return res.status(401).json({ ok: false, error: "auth_required" });
     }
 
-    // Validate body
     const body = req.body || {};
     const service_key = String(body.service_key || "");
     const slot = body.slot || {};
@@ -87,37 +120,35 @@ router.post("/book-with-credit", async (req, res) => {
       return res.status(400).json({ ok: false, error: "invalid_slot" });
     }
 
-    // Credit balance
     const bal = await availableCredits(req.user.id, service_key);
     if (bal < 1) {
       console.warn("[credits] insufficient credits: have", bal, "need 1");
       return res.status(400).json({ ok: false, error: "insufficient_credits" });
     }
 
-    // Idempotency: if already booked same slot, succeed without re-deducting
     if (await hasDuplicateBooking(req.user.id, start_iso, end_iso)) {
       console.log("[credits] duplicate detected; returning success");
       return res.json({ ok: true, booked: true });
     }
 
-    // Persist booking using your canonical helper (writes start_time/end_time etc.)
+    // Persist booking using your canonical helper (correct columns + customer fields).
     const bookingId = await saveBooking({
       user_id: req.user.id,
-      stripe_session_id: null,            // not a Stripe session; we’ll synthesize one for calendar id
+      stripe_session_id: null,         // not a Stripe session
       service_key,
-      addons: [],                         // credits pay for the base service only
+      addons: [],                      // credits pay base service only
       start_iso,
       end_iso,
       customer: body.customer || {},
-      has_tap: true,                      // matches your current FE assumption
+      has_tap: true,
     });
 
-    // Deduct exactly one credit, linked to the booking row
+    // Deduct exactly one credit, linked to the booking.
     await deductOneCredit(req.user.id, service_key, bookingId);
 
-    // Create Google Calendar event
+    // Create Google Calendar event (best-effort).
     try {
-      const sessionId = `credit:${bookingId}`; // deterministic for event id hashing
+      const sessionId = `credit:${bookingId}`; // deterministic for calendar event id
       const items = [{
         start_iso,
         end_iso,
