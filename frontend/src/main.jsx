@@ -407,6 +407,8 @@ function Times({ state, setState }) {
 
 /* ================== CONFIRM ================== */
 function Confirm({ state, setState }) {
+  const [busy, setBusy] = React.useState(false);
+
   const cfg = state.config || { services:{}, addons:{} };
   const base = (typeof cfg.services?.[state.service_key]?.price === "number") ? cfg.services[state.service_key].price : 0;
   const addonsTotal = (state.addons || []).reduce((s,k)=> s + (typeof cfg.addons?.[k]?.price === "number" ? cfg.addons[k].price : 0), 0);
@@ -420,60 +422,86 @@ function Confirm({ state, setState }) {
     ((state.credits?.full||0)     > 0 && state.service_key === "full");
 
   async function pay(){
-    if (!state.customer || !state.service_key) return;
+    try {
+      console.log("[Confirm.pay] start", { usingCredit, service_key: state.service_key, slot: state.selectedSlot, customer: state.customer });
+      if (busy) return;
+      setBusy(true);
 
-    if (usingCredit) {
-      const token = state.token;
-      if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
-      const payload = {
-        service_key: state.service_key,
-        slot: state.selectedSlot,
-        addons: [],
-        customer: state.customer,
-        origin: window.location.origin
-      };
-      if (!payload.slot?.start_iso || !payload.slot?.end_iso) {
-        alert("Please pick a time slot."); return;
+      // Base validations (apply to both flows)
+      if (!state.service_key) { alert("Please choose a service."); setBusy(false); return; }
+      if (!state.customer?.email) { alert("Please enter your email on your account."); setBusy(false); return; }
+      if (!state.selectedSlot?.start_iso || !state.selectedSlot?.end_iso) { alert("Please pick a time slot."); setBusy(false); return; }
+
+      if (usingCredit) {
+        const token = state.token;
+        if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } setBusy(false); return; }
+        const payload = {
+          service_key: state.service_key,
+          slot: state.selectedSlot,
+          addons: [],
+          customer: state.customer,
+          origin: window.location.origin
+        };
+        const r = await fetch(`${API}/credits/book-with-credit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify(payload)
+        });
+
+        let d;
+        try { d = await r.json(); }
+        catch (e) {
+          const text = await r.text().catch(() => "");
+          alert(`Credit booking failed (${r.status}). ${text?.slice(0,180) || ""}`);
+          setBusy(false);
+          return;
+        }
+
+        if (!d?.ok) { alert(d?.error || "Credit booking failed"); setBusy(false); return; }
+        if (d.booked) {
+          setState(s=> ({ ...s, step: "thankyou" })); // universal thank you
+          setTimeout(reportHeight, 60);
+          setBusy(false);
+          return;
+        }
+        alert("Unexpected response.");
+        setBusy(false);
+        return;
       }
-      const r = await fetch(`${API}/credits/book-with-credit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload)
+
+      // One-off payment flow
+      const payload = {
+        customer: state.customer,
+        has_tap: true,
+        service_key: state.service_key,
+        addons: state.addons || [],
+        origin: window.location.origin,
+        slot: state.selectedSlot
+      };
+      const r = await fetch(`${API}/pay/create-checkout-session`, {
+        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
       });
 
-      // Improved error surfacing to avoid silent failures
       let d;
       try { d = await r.json(); }
       catch (e) {
         const text = await r.text().catch(() => "");
-        alert(`Credit booking failed (${r.status}). ${text?.slice(0,180) || ""}`);
+        alert(`Payment failed to initialise (${r.status}). ${text?.slice(0,180) || ""}`);
+        setBusy(false);
         return;
       }
 
-      if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
-
-      if (d.booked) {
-        setState(s=> ({ ...s, step: "thankyou" })); // universal thank you
-        setTimeout(reportHeight, 60);
+      if (!d?.ok || !d?.url) {
+        alert(d?.error || "Payment failed to initialise");
+        setBusy(false);
         return;
       }
-      alert("Unexpected response."); return;
+      try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
+    } catch (err) {
+      console.error("[Confirm.pay] error", err);
+      alert("Something went wrong. Please try again.");
+      setBusy(false);
     }
-
-    const payload = {
-      customer: state.customer,
-      has_tap: true,
-      service_key: state.service_key,
-      addons: state.addons || [],
-      origin: window.location.origin,
-      slot: state.selectedSlot
-    };
-    const r = await fetch(`${API}/pay/create-checkout-session`, {
-      method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
-    });
-    const d = await r.json().catch(()=> ({}));
-    if (!d?.ok || !d?.url) { alert(d?.error || "Payment failed to initialize."); return; }
-    try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
   const slotLine = state.selectedSlot
@@ -525,8 +553,10 @@ function Confirm({ state, setState }) {
               <div className="gm total">{fmtGBP(preDiscountTotal)}</div>
             )}
             <div className="gm actions end" style={{ marginTop: 10 }}>
-              <Button onClick={()=> setState(s=> ({ ...s, step: "times" }))}>Back</Button>
-              <PrimaryButton onClick={pay}>{usingCredit ? "Confirm" : "Confirm & Pay"}</PrimaryButton>
+              <Button onClick={()=> setState(s=> ({ ...s, step: "times" }))} disabled={busy}>Back</Button>
+              <PrimaryButton onClick={pay} disabled={busy} style={{ pointerEvents: busy ? "none" : "auto" }}>
+                {usingCredit ? "Confirm" : (busy ? "Please wait…" : "Confirm & Pay")}
+              </PrimaryButton>
             </div>
           </div>
         </div>
