@@ -1,3 +1,4 @@
+// backend/src/memberships.js
 import express from "express";
 import Stripe from "stripe";
 import { pool } from "./db.js";
@@ -10,7 +11,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-
 
 function hardSanitize(str) {
   if (!str) return "";
-  return String(str).replace(/[\u0000-\u001F\u007F-\uFFFF]/g, "").trim();
+  return String(str).replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim();
 }
 
 /**
@@ -95,10 +96,7 @@ router.post("/subscribe", async (req, res) => {
     const STANDARD          = hardSanitize(process.env.STANDARD_PRICE || "");
     const STANDARD_INTRO    = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
     const PREMIUM           = hardSanitize(process.env.PREMIUM_PRICE || "");
-    const PREMIUM_INTRO     = hardSanize(process.env.PREMIUM_INTRO_PRICE || ""); // typo fix below
-
-    // Fix: correct sanitization call (typo)
-    const PREMIUM_INTRO_FIXED = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
+    const PREMIUM_INTRO     = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
 
     let priceForFirstCycle = "";
     let normalPrice        = "";
@@ -108,7 +106,7 @@ router.post("/subscribe", async (req, res) => {
       priceForFirstCycle = first_time && STANDARD_INTRO ? STANDARD_INTRO : STANDARD;
     } else if (tier === "premium") {
       normalPrice        = PREMIUM;
-      priceForFirstCycle = first_time && PREMIUM_INTRO_FIXED ? PREMIUM_INTRO_FIXED : PREMIUM;
+      priceForFirstCycle = first_time && PREMIUM_INTRO ? PREMIUM_INTRO : PREMIUM;
     } else {
       return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
@@ -170,20 +168,14 @@ async function ensureNormalPriceForNextCycle(subscription) {
     // If already on normal price, skip
     if (item.price?.id === normal_price) return;
 
-    // Schedule the price change at period end (proration off by default on update)
     await stripe.subscriptions.update(sub.id, {
       items: [
-        {
-          id: item.id,
-          price: normal_price,
-          // Set at_period_end=false so the change is immediate for next invoices generated after current period,
-          // but Stripe will honor current_period_end for billing.
-        },
+        { id: item.id, price: normal_price },
       ],
       proration_behavior: "none",
       metadata: {
         ...sub.metadata,
-        first_time: "false", // flip the flag
+        first_time: "false",
       },
     });
 
@@ -226,7 +218,15 @@ export async function handleMembershipWebhook(event) {
       const currentPeriodEndSec = sub.current_period_end; // UNIX seconds
       if (!customerId || !priceId) return;
 
-      const tier = tierFromPriceId(priceId);
+      // Map price to tier
+      const std       = hardSanitize(process.env.STANDARD_PRICE || "");
+      const stdIntro  = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
+      const prem      = hardSanitize(process.env.PREMIUM_PRICE || "");
+      const premIntro = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
+
+      let tier = null;
+      if ([std, stdIntro].filter(Boolean).includes(priceId)) tier = "standard";
+      else if ([prem, premIntro].filter(Boolean).includes(priceId)) tier = "premium";
       if (!tier) {
         console.log("[webhook] invoice.*: unmapped price", priceId);
         return;
