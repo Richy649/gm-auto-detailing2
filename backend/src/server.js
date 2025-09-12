@@ -12,8 +12,23 @@ import { mountPayments } from "./payments.js";
 
 const app = express();
 
+/* ------------------------------ CORS FIRST ------------------------------ */
+/** Apply CORS before any routes so preflights for /api/pay/* succeed */
+const allowOrigin = (process.env.ALLOW_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const corsConfig = {
+  origin: allowOrigin.length ? allowOrigin : true,
+  credentials: true,
+};
+app.use(cors(corsConfig));
+// (Optional but helpful for some hosts)
+app.options("*", cors(corsConfig));
+
 /* -------------------------- Stripe Webhooks -------------------------- */
-/** Memberships webhook (raw) — mount BEFORE json parser */
+/** Memberships webhook (raw) — must be mounted before json parser */
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 app.post(
   "/webhooks/memberships",
@@ -43,23 +58,11 @@ app.post(
   }
 );
 
-/** One-off payments webhook (raw) — mount BEFORE json parser */
+/** One-off payments webhook + routes (raw inside) — mount before json parser */
 mountPayments(app);
 
-/* ------------------------------ CORS/JSON ----------------------------- */
-const allowOrigin = (process.env.ALLOW_ORIGIN || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-app.use(
-  cors({
-    origin: allowOrigin.length ? allowOrigin : true,
-    credentials: true,
-  })
-);
-
-// JSON body parser AFTER both webhook mounts
+/* ------------------------------ JSON AFTER ----------------------------- */
+/** JSON body parser MUST come after raw webhooks to avoid consuming the body */
 app.use(bodyParser.json());
 
 /* --------------------------------- API -------------------------------- */
