@@ -8,12 +8,12 @@ import auth from "./auth.js";
 import routes from "./routes.js";
 import memberships, { handleMembershipWebhook } from "./memberships.js";
 import credits from "./credits.js";
+import { mountPayments } from "./payments.js";
 
 const app = express();
 
-/**
- * Stripe webhooks require the raw body. Mount BEFORE JSON middleware.
- */
+/* -------------------------- Stripe Webhooks -------------------------- */
+/** Memberships webhook (raw) — mount BEFORE json parser */
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 app.post(
   "/webhooks/memberships",
@@ -43,9 +43,10 @@ app.post(
   }
 );
 
-/**
- * Normal middleware for the rest of the API.
- */
+/** One-off payments webhook (raw) — mount BEFORE json parser */
+mountPayments(app);
+
+/* ------------------------------ CORS/JSON ----------------------------- */
 const allowOrigin = (process.env.ALLOW_ORIGIN || "")
   .split(",")
   .map((s) => s.trim())
@@ -58,24 +59,19 @@ app.use(
   })
 );
 
+// JSON body parser AFTER both webhook mounts
 app.use(bodyParser.json());
 
-/**
- * API routes
- */
+/* --------------------------------- API -------------------------------- */
 app.use("/api/auth", auth);
 app.use("/api", routes);
 app.use("/api/memberships", memberships);
 app.use("/api/credits", credits);
 
-/**
- * Healthcheck
- */
+/* ------------------------------ Healthcheck --------------------------- */
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-/**
- * Start
- */
+/* -------------------------------- Start ------------------------------- */
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`[server] listening on ${port}`);
