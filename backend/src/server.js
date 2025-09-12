@@ -2,34 +2,21 @@ import express from "express";
 import cors from "cors";
 import bodyParser from "body-parser";
 import Stripe from "stripe";
+
 import routes from "./routes.js";
-import memberships from "./memberships.js";
-import { handleMembershipWebhook } from "./credits.js";
+import memberships, { handleMembershipWebhook } from "./memberships.js";
 
 const app = express();
 
-// CORS
-const allowOrigin = process.env.ALLOW_ORIGIN?.split(",") || [];
-app.use(
-  cors({
-    origin: allowOrigin,
-    credentials: true,
-  })
-);
-
-// Normal JSON parsing (non-webhooks)
-app.use(bodyParser.json());
-
-// Routes
-app.use("/api", routes);
-app.use("/api/memberships", memberships);
-
-// Stripe webhook (raw body required)
+/**
+ * 1) Stripe webhooks MUST receive the raw body to validate the signature.
+ *    Mount the webhook route BEFORE JSON parsing middleware.
+ */
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 app.post(
   "/webhooks/memberships",
   bodyParser.raw({ type: "application/json" }),
-  (req, res) => {
+  async (req, res) => {
     const sig = req.headers["stripe-signature"];
     let event;
     try {
@@ -39,25 +26,53 @@ app.post(
         process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
       );
     } catch (err) {
-      console.error("Webhook signature verification failed:", err.message);
+      console.error("[webhooks/memberships] signature verification failed:", err?.message);
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Handle event
-    handleMembershipWebhook(event)
-      .then(() => res.json({ received: true }))
-      .catch((err) => {
-        console.error("Webhook handling failed:", err);
-        res.status(500).send("Webhook handling failed");
-      });
+    try {
+      await handleMembershipWebhook(event);
+      return res.json({ received: true });
+    } catch (err) {
+      console.error("[webhooks/memberships] handler failed:", err);
+      return res.status(500).send("Webhook handling failed");
+    }
   }
 );
 
-// Healthcheck
+/**
+ * 2) CORS + JSON for all normal API routes (mounted AFTER webhook).
+ */
+const allowOrigin = (process.env.ALLOW_ORIGIN || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: allowOrigin.length ? allowOrigin : true,
+    credentials: true,
+  })
+);
+
+// Normal JSON parsing (do NOT affect the webhook above)
+app.use(bodyParser.json());
+
+/**
+ * 3) API routes
+ */
+app.use("/api", routes);
+app.use("/api/memberships", memberships);
+
+/**
+ * 4) Healthcheck
+ */
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-// Start server
-const port = process.env.PORT || 3000;
+/**
+ * 5) Start
+ */
+const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
-  console.log(`Backend running on port ${port}`);
+  console.log(`[server] listening on ${port}`);
 });
