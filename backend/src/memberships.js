@@ -1,16 +1,13 @@
 import express from "express";
 import Stripe from "stripe";
-import * as db from "./db.js";   // ✅ fixed: import all named exports
-import {
-  addExteriorCredits,
-  addFullCredits,
-  awardCreditsForTier,
-} from "./credits.js";
+import { pool } from "./db.js";
+import { awardCreditsForTier } from "./credits.js";
 
 const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 
 /* ----------------------------- Helpers ----------------------------- */
+
 function tierFromPriceId(priceId) {
   const std = process.env.STANDARD_PRICE;
   const stdIntro = process.env.STANDARD_INTRO_PRICE;
@@ -23,52 +20,65 @@ function tierFromPriceId(priceId) {
 }
 
 /* --------------------------- Public Routes -------------------------- */
+/**
+ * POST /api/memberships/subscribe
+ * Creates a Stripe Checkout Session for subscription sign-up.
+ * Credits are NOT awarded here; only after successful payment via webhook.
+ */
 router.post("/subscribe", async (req, res) => {
   try {
     const { tier, customer, origin } = req.body || {};
     if (!tier || !customer?.email) {
-      return res.status(400).json({ ok: false, error: "Missing tier or customer email" });
+      return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    // Find existing stripe_customer_id if present
+    // Look up stripe_customer_id for this user (if any)
     let stripeCustomerId = null;
-    const r = await db.query(
-      "SELECT stripe_customer_id FROM users WHERE email=$1 LIMIT 1",
-      [customer.email]
-    );
-    if (r.rows.length && r.rows[0].stripe_customer_id) {
-      stripeCustomerId = r.rows[0].stripe_customer_id;
+    {
+      const r = await pool.query(
+        "SELECT stripe_customer_id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
+        [customer.email]
+      );
+      if (r.rowCount && r.rows[0].stripe_customer_id) {
+        stripeCustomerId = r.rows[0].stripe_customer_id;
+      }
     }
 
-    // Create a Stripe customer if none exists
+    // Create Stripe Customer if none exists yet
     if (!stripeCustomerId) {
       const sc = await stripe.customers.create({
         email: customer.email,
         name: customer.name || undefined,
         phone: customer.phone || undefined,
-        address: (customer.street || customer.postcode)
-          ? { line1: customer.street || undefined, postal_code: customer.postcode || undefined }
-          : undefined,
+        address:
+          customer.street || customer.postcode
+            ? { line1: customer.street || undefined, postal_code: customer.postcode || undefined }
+            : undefined,
       });
       stripeCustomerId = sc.id;
 
-      // Persist the customer id if the user already exists
-      await db.query(
-        "UPDATE users SET stripe_customer_id=$1 WHERE email=$2",
+      // Persist onto user row if user already exists
+      await pool.query(
+        "UPDATE public.users SET stripe_customer_id=$1 WHERE lower(email)=lower($2)",
         [stripeCustomerId, customer.email]
       );
     }
 
+    // Pick price by tier
     const priceId =
-      tier === "standard" ? process.env.STANDARD_PRICE
-      : tier === "premium" ? process.env.PREMIUM_PRICE
-      : null;
+      tier === "standard"
+        ? process.env.STANDARD_PRICE
+        : tier === "premium"
+        ? process.env.PREMIUM_PRICE
+        : null;
 
     if (!priceId) {
-      return res.status(400).json({ ok: false, error: "Invalid tier" });
+      return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
 
-    const successBase = process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN || origin || "";
+    // Success/cancel URLs
+    const successBase =
+      process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN || origin || "";
     const success_url = `${successBase}/?sub=1&thankyou=1&flow=sub`;
     const cancel_url = `${successBase}/?sub=cancel`;
 
@@ -83,11 +93,15 @@ router.post("/subscribe", async (req, res) => {
     return res.json({ ok: true, url: session.url });
   } catch (err) {
     console.error("[memberships/subscribe] failed:", err);
-    return res.status(500).json({ ok: false, error: "Unable to create subscription" });
+    return res.status(500).json({ ok: false, error: "subscribe_failed" });
   }
 });
 
 /* ------------------------ Webhook Entry Point ----------------------- */
+/**
+ * Called by server.js after Stripe signature verification.
+ * Awards credits on subscription invoices (initial + renewals).
+ */
 export async function handleMembershipWebhook(event) {
   switch (event.type) {
     case "invoice.payment_succeeded": {
@@ -95,43 +109,83 @@ export async function handleMembershipWebhook(event) {
       const subscriptionId = invoice?.subscription;
       if (!subscriptionId) return;
 
+      // Retrieve subscription to determine period and items
       const sub = await stripe.subscriptions.retrieve(subscriptionId);
       const customerId = sub.customer;
-      const priceId = sub.items?.data?.[0]?.price?.id;
+      const item = sub.items?.data?.[0];
+      const priceId = item?.price?.id;
+      const currentPeriodEndSec = sub.current_period_end; // unix epoch seconds
       if (!customerId || !priceId) return;
 
       const tier = tierFromPriceId(priceId);
-      if (!tier) return;
+      if (!tier) {
+        console.log("[webhook] invoice.payment_succeeded: unmapped price", priceId);
+        return;
+      }
 
-      const ur = await db.query(
-        "SELECT id, email FROM users WHERE stripe_customer_id=$1 LIMIT 1",
-        [customerId]
-      );
+      // Find user by stripe_customer_id
+      let userId = null;
+      {
+        const ur = await pool.query(
+          "SELECT id, email FROM public.users WHERE stripe_customer_id=$1 LIMIT 1",
+          [customerId]
+        );
+        if (ur.rowCount) userId = ur.rows[0].id;
+      }
 
-      let userId = ur.rows[0]?.id;
+      // Fallback: reconcile via Stripe Customer email, then backfill customer id
       if (!userId) {
         const sc = await stripe.customers.retrieve(customerId);
         const email = sc?.email;
         if (email) {
-          const er = await db.query("SELECT id FROM users WHERE email=$1 LIMIT 1", [email]);
-          if (er.rows.length) {
+          const er = await pool.query(
+            "SELECT id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
+            [email]
+          );
+          if (er.rowCount) {
             userId = er.rows[0].id;
-            await db.query("UPDATE users SET stripe_customer_id=$1 WHERE id=$2", [customerId, userId]);
+            await pool.query(
+              "UPDATE public.users SET stripe_customer_id=$1 WHERE id=$2",
+              [customerId, userId]
+            );
           }
         }
       }
       if (!userId) {
-        console.warn("[webhook] No user matched for customer:", customerId);
+        console.warn("[webhook] no user matched for customer:", customerId);
         return;
       }
 
-      await awardCreditsForTier(userId, tier);
-      console.log(`[webhook] Awarded credits for user ${userId} (tier=${tier})`);
+      // Award credits into the ledger for this billing period (idempotent check inside)
+      await awardCreditsForTier(userId, tier, currentPeriodEndSec);
+
+      // Optionally persist subscription status for UI (if you already manage this elsewhere, this is safe to omit)
+      try {
+        const tierLabel = tier; // "standard" | "premium"
+        await pool.query(
+          `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
+           VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), now())
+           ON CONFLICT (user_id, tier) DO UPDATE
+             SET status=EXCLUDED.status,
+                 current_period_start=EXCLUDED.current_period_start,
+                 current_period_end=EXCLUDED.current_period_end,
+                 updated_at=now()`,
+          [userId, tierLabel, "active", sub.current_period_start, sub.current_period_end]
+        );
+      } catch (e) {
+        // If your schema differs, the above will no-op without breaking credit awards.
+        console.warn("[webhook] subscriptions upsert skipped:", e?.message);
+      }
+
+      console.log(
+        `[webhook] credits awarded for user ${userId} — tier=${tier}, period_end=${currentPeriodEndSec}`
+      );
       return;
     }
 
     default:
-      console.log(`[webhook] Unhandled event type: ${event.type}`);
+      // Other events are currently not required for credit logic
+      console.log(`[webhook] unhandled event type: ${event.type}`);
       return;
   }
 }
