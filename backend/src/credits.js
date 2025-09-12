@@ -2,7 +2,7 @@ import { pool } from "./db.js";
 
 /**
  * Insert credits into the ledger. If `validUntilSec` is provided, set `valid_until`.
- * The caller (webhook) passes the subscription period end to align with your /auth/me query.
+ * This matches how /api/auth/me calculates balances.
  */
 async function insertLedgerCredits(userId, serviceType, qty, validUntilSec = null) {
   if (validUntilSec) {
@@ -21,11 +21,10 @@ async function insertLedgerCredits(userId, serviceType, qty, validUntilSec = nul
 }
 
 /**
- * Guard against duplicate awards for the same period & service.
- * This does not require schema changes and is safe if multiple rows exist historically.
+ * Prevent duplicate awards for the same period, service, and qty.
  */
 async function alreadyAwarded(userId, serviceType, qty, validUntilSec) {
-  if (!validUntilSec) return false; // no way to scope to a period; allow insert
+  if (!validUntilSec) return false;
   const r = await pool.query(
     `SELECT 1
        FROM public.credit_ledger
@@ -53,7 +52,6 @@ export async function addFullCredits(userId, count, validUntilSec = null) {
  * Award credits based on membership tier.
  * - standard → +2 exterior credits
  * - premium  → +2 full credits
- * Period end is used for expiration to match your /auth/me balance computation.
  */
 export async function awardCreditsForTier(userId, tier, periodEndSec = null) {
   if (tier === "standard") {
