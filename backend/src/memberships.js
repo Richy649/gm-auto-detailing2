@@ -8,22 +8,50 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-
 
 /* ----------------------------- Helpers ----------------------------- */
 
+/**
+ * Map Stripe price IDs to internal tiers.
+ */
 function tierFromPriceId(priceId) {
-  const std = process.env.STANDARD_PRICE;
-  const stdIntro = process.env.STANDARD_INTRO_PRICE;
-  const prem = process.env.PREMIUM_PRICE;
-  const premIntro = process.env.PREMIUM_INTRO_PRICE;
+  const std       = (process.env.STANDARD_PRICE || "").trim();
+  const stdIntro  = (process.env.STANDARD_INTRO_PRICE || "").trim();
+  const prem      = (process.env.PREMIUM_PRICE || "").trim();
+  const premIntro = (process.env.PREMIUM_INTRO_PRICE || "").trim();
 
-  if ([std, stdIntro].includes(priceId)) return "standard";
-  if ([prem, premIntro].includes(priceId)) return "premium";
+  if ([std, stdIntro].filter(Boolean).includes(priceId)) return "standard";
+  if ([prem, premIntro].filter(Boolean).includes(priceId)) return "premium";
   return null;
+}
+
+/**
+ * Strictly resolve the public base URL for redirects.
+ * We intentionally *only* accept FRONTEND_PUBLIC_URL because:
+ *  - It’s your canonical booking app origin (e.g., https://book.gmautodetailing.uk).
+ *  - It avoids accidental fallback to non-URL envs (like FRONTEND_ORIGIN without scheme).
+ *  - It ensures Stripe redirects load your app at top-level (not the Squarespace embed).
+ */
+function resolveFrontendPublicUrl() {
+  const raw = (process.env.FRONTEND_PUBLIC_URL || "").trim();
+  if (!raw) {
+    throw new Error("FRONTEND_PUBLIC_URL must be set to a full URL, e.g. https://book.gmautodetailing.uk");
+  }
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    throw new Error(`FRONTEND_PUBLIC_URL is not a valid URL: ${raw}`);
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") {
+    throw new Error(`FRONTEND_PUBLIC_URL must be http(s): ${raw}`);
+  }
+  // Normalise to no trailing slash for stable concatenation
+  return u.toString().replace(/\/+$/, "");
 }
 
 /* --------------------------- Public Routes -------------------------- */
 /**
  * POST /api/memberships/subscribe
  * Creates a Stripe Checkout Session for subscription sign-up.
- * Credits are NOT awarded here; only after successful payment via webhook.
+ * Credits are NOT awarded here; they are awarded by the webhook upon payment.
  */
 router.post("/subscribe", async (req, res) => {
   try {
@@ -64,25 +92,23 @@ router.post("/subscribe", async (req, res) => {
       );
     }
 
-    // Pick price by tier
+    // Select price by tier
     const priceId =
       tier === "standard"
-        ? process.env.STANDARD_PRICE
+        ? (process.env.STANDARD_PRICE || "").trim()
         : tier === "premium"
-        ? process.env.PREMIUM_PRICE
-        : null;
+        ? (process.env.PREMIUM_PRICE || "").trim()
+        : "";
 
     if (!priceId) {
       return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
 
-    // Success/cancel URLs — must be fully qualified HTTPS
-    const successBase = process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN;
-    if (!successBase || !/^https?:\/\//.test(successBase)) {
-      throw new Error("FRONTEND_PUBLIC_URL or PUBLIC_APP_ORIGIN must be set to a valid URL");
-    }
-    const success_url = `${successBase}/?sub=1&thankyou=1&flow=sub`;
-    const cancel_url = `${successBase}/?sub=cancel`;
+    // Build strict success/cancel URLs from FRONTEND_PUBLIC_URL only
+    const base = resolveFrontendPublicUrl();
+    console.log(`[memberships] using FRONTEND_PUBLIC_URL: ${base}`);
+    const success_url = new URL("/?sub=1&thankyou=1&flow=sub", base).toString();
+    const cancel_url  = new URL("/?sub=cancel", base).toString();
 
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
@@ -116,7 +142,7 @@ export async function handleMembershipWebhook(event) {
       const customerId = sub.customer;
       const item = sub.items?.data?.[0];
       const priceId = item?.price?.id;
-      const currentPeriodEndSec = sub.current_period_end; // unix epoch seconds
+      const currentPeriodEndSec = sub.current_period_end; // Unix epoch seconds
       if (!customerId || !priceId) return;
 
       const tier = tierFromPriceId(priceId);
@@ -161,7 +187,7 @@ export async function handleMembershipWebhook(event) {
       // Award credits into the ledger for this billing period
       await awardCreditsForTier(userId, tier, currentPeriodEndSec);
 
-      // Optional: persist subscription status
+      // Optional: persist subscription status for dashboard logic
       try {
         await pool.query(
           `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
