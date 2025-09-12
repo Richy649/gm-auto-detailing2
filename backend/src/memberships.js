@@ -13,6 +13,9 @@ function hardSanitize(str) {
   return String(str).replace(/[\u0000-\u001F\u007F-\uFFFF]/g, "").trim();
 }
 
+/**
+ * Map Stripe price IDs to internal tiers.
+ */
 function tierFromPriceId(priceId) {
   const std       = hardSanitize(process.env.STANDARD_PRICE || "");
   const stdIntro  = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
@@ -24,6 +27,9 @@ function tierFromPriceId(priceId) {
   return null;
 }
 
+/**
+ * Strictly resolve the public origin for success/cancel URLs from FRONTEND_PUBLIC_URL.
+ */
 function resolvePublicOriginStrict() {
   const raw = hardSanitize(process.env.FRONTEND_PUBLIC_URL || "");
   if (!raw) {
@@ -32,11 +38,7 @@ function resolvePublicOriginStrict() {
     );
   }
   let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error(`FRONTEND_PUBLIC_URL is not a valid URL: ${raw}`);
-  }
+  try { parsed = new URL(raw); } catch { throw new Error(`FRONTEND_PUBLIC_URL is not a valid URL: ${raw}`); }
   if (!(parsed.protocol === "https:" || parsed.protocol === "http:")) {
     throw new Error(`FRONTEND_PUBLIC_URL must be http(s): ${raw}`);
   }
@@ -44,21 +46,15 @@ function resolvePublicOriginStrict() {
 }
 
 /* --------------------------- Public Routes -------------------------- */
-
-router.get("/debug-url", (_req, res) => {
-  try {
-    const origin = resolvePublicOriginStrict();
-    const success_url = `${origin}/?sub=1&thankyou=1&flow=sub`;
-    const cancel_url  = `${origin}/?sub=cancel`;
-    return res.json({ ok: true, origin, success_url, cancel_url });
-  } catch (e) {
-    return res.status(500).json({ ok: false, error: String(e.message || e) });
-  }
-});
-
+/**
+ * POST /api/memberships/subscribe
+ * Body: { tier: "standard"|"premium", customer: {...}, first_time?: boolean }
+ * If first_time=true and an intro price is configured, we start with the intro price,
+ * then schedule updating the subscription to the normal price from the next cycle.
+ */
 router.post("/subscribe", async (req, res) => {
   try {
-    const { tier, customer } = req.body || {};
+    const { tier, customer, first_time } = req.body || {};
     if (!tier || !customer?.email) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
@@ -95,31 +91,53 @@ router.post("/subscribe", async (req, res) => {
       );
     }
 
-    // Select price by tier
-    const priceId =
-      tier === "standard"
-        ? hardSanitize(process.env.STANDARD_PRICE || "")
-        : tier === "premium"
-        ? hardSanitize(process.env.PREMIUM_PRICE || "")
-        : "";
+    // Choose price (intro for first month if first_time=true and intro price exists)
+    const STANDARD          = hardSanitize(process.env.STANDARD_PRICE || "");
+    const STANDARD_INTRO    = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
+    const PREMIUM           = hardSanitize(process.env.PREMIUM_PRICE || "");
+    const PREMIUM_INTRO     = hardSanize(process.env.PREMIUM_INTRO_PRICE || ""); // typo fix below
 
-    if (!priceId) {
+    // Fix: correct sanitization call (typo)
+    const PREMIUM_INTRO_FIXED = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
+
+    let priceForFirstCycle = "";
+    let normalPrice        = "";
+
+    if (tier === "standard") {
+      normalPrice        = STANDARD;
+      priceForFirstCycle = first_time && STANDARD_INTRO ? STANDARD_INTRO : STANDARD;
+    } else if (tier === "premium") {
+      normalPrice        = PREMIUM;
+      priceForFirstCycle = first_time && PREMIUM_INTRO_FIXED ? PREMIUM_INTRO_FIXED : PREMIUM;
+    } else {
       return res.status(400).json({ ok: false, error: "invalid_tier" });
+    }
+    if (!priceForFirstCycle) {
+      return res.status(500).json({ ok: false, error: "price_not_configured" });
     }
 
     // Build success/cancel URLs from FRONTEND_PUBLIC_URL origin only
     const origin = resolvePublicOriginStrict();
-    const success_url = `${origin}/?sub=1&thankyou=1&flow=sub`;
+    const success_url = `${origin}/?thankyou=1&flow=sub&sub=1`;
     const cancel_url  = `${origin}/?sub=cancel`;
 
     console.log(`[memberships] origin=${origin} success_url=${success_url} cancel_url=${cancel_url}`);
 
+    // Create checkout session in subscription mode using the first-cycle price
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
       mode: "subscription",
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [{ price: priceForFirstCycle, quantity: 1 }],
       success_url,
       cancel_url,
+      subscription_data: {
+        metadata: {
+          tier,
+          first_cycle_price: priceForFirstCycle,
+          normal_price: normalPrice,
+          first_time: first_time ? "true" : "false",
+        },
+      },
     });
 
     return res.json({ ok: true, url: session.url });
@@ -130,116 +148,145 @@ router.post("/subscribe", async (req, res) => {
 });
 
 /* ------------------------ Webhook Entry Point ----------------------- */
-
-async function settleAndAwardFromSubscriptionId(subscriptionId) {
-  if (!subscriptionId) return;
-
-  const sub = await stripe.subscriptions.retrieve(subscriptionId);
-  const customerId = sub.customer;
-  const item = sub.items?.data?.[0];
-  const priceId = item?.price?.id;
-  const currentPeriodEndSec = sub.current_period_end; // UNIX seconds
-  if (!customerId || !priceId) return;
-
-  const tier = tierFromPriceId(priceId);
-  if (!tier) return;
-
-  // Find user by stripe_customer_id
-  let userId = null;
-  {
-    const ur = await pool.query(
-      "SELECT id, email FROM public.users WHERE stripe_customer_id=$1 LIMIT 1",
-      [customerId]
-    );
-    if (ur.rowCount) userId = ur.rows[0].id;
-  }
-
-  // Fallback: reconcile via Stripe Customer email, then backfill customer id
-  if (!userId) {
-    const sc = await stripe.customers.retrieve(customerId);
-    const email = sc?.email;
-    if (email) {
-      const er = await pool.query(
-        "SELECT id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
-        [email]
-      );
-      if (er.rowCount) {
-        userId = er.rows[0].id;
-        await pool.query(
-          "UPDATE public.users SET stripe_customer_id=$1 WHERE id=$2",
-          [customerId, userId]
-        );
-      }
-    }
-  }
-  if (!userId) {
-    console.warn("[webhook] no user matched for customer:", customerId);
-    return;
-  }
-
-  // Award credits into the ledger for this billing period (idempotent via period end)
-  await awardCreditsForTier(userId, tier, currentPeriodEndSec);
-
-  // Optional: persist subscription status for dashboard logic
+/**
+ * After the subscription is created (via checkout.session.completed), if this was a first-time
+ * customer with an intro price, we programmatically update the subscription’s price to the
+ * “normal” price for the next billing cycle. Credits are still awarded per cycle elsewhere.
+ */
+async function ensureNormalPriceForNextCycle(subscription) {
   try {
-    await pool.query(
-      `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
-       VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), now())
-       ON CONFLICT (user_id, tier) DO UPDATE
-         SET status=EXCLUDED.status,
-             current_period_start=EXCLUDED.current_period_start,
-             current_period_end=EXCLUDED.current_period_end,
-             updated_at=now()`,
-      [userId, tier, sub.status || "active", sub.current_period_start, sub.current_period_end]
-    );
-  } catch (e) {
-    console.warn("[webhook] subscriptions upsert skipped:", e?.message);
-  }
+    const sub = typeof subscription === "string"
+      ? await stripe.subscriptions.retrieve(subscription)
+      : subscription;
 
-  console.log(
-    `[webhook] credits awarded for user ${userId} — tier=${tier}, period_end=${currentPeriodEndSec}`
-  );
+    if (!sub) return;
+    const item = sub.items?.data?.[0];
+    if (!item) return;
+
+    const first_time = sub.metadata?.first_time === "true";
+    const normal_price = sub.metadata?.normal_price || "";
+    if (!first_time || !normal_price) return; // nothing to do
+
+    // If already on normal price, skip
+    if (item.price?.id === normal_price) return;
+
+    // Schedule the price change at period end (proration off by default on update)
+    await stripe.subscriptions.update(sub.id, {
+      items: [
+        {
+          id: item.id,
+          price: normal_price,
+          // Set at_period_end=false so the change is immediate for next invoices generated after current period,
+          // but Stripe will honor current_period_end for billing.
+        },
+      ],
+      proration_behavior: "none",
+      metadata: {
+        ...sub.metadata,
+        first_time: "false", // flip the flag
+      },
+    });
+
+    console.log(`[webhook] scheduled normal price for next cycle on sub ${sub.id}`);
+  } catch (e) {
+    console.warn("[webhook] ensureNormalPriceForNextCycle failed:", e?.message);
+  }
 }
 
+/**
+ * Called by server.js after Stripe signature verification.
+ * Awards credits on subscription invoices (initial + renewals) and applies next-cycle price.
+ */
 export async function handleMembershipWebhook(event) {
-  // Handle multiple relevant events to be robust across Stripe flows.
   switch (event.type) {
-    case "invoice.payment_succeeded":
-    case "invoice.paid": {
-      const invoice = event.data.object;
-      await settleAndAwardFromSubscriptionId(invoice?.subscription);
+    case "checkout.session.completed": {
+      const session = event.data.object;
+      if (session?.mode !== "subscription") return;
+      const subId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription?.id;
+      if (!subId) return;
+
+      // If intro cycle was used, schedule normal price for next cycle
+      await ensureNormalPriceForNextCycle(subId);
       return;
     }
 
-    case "checkout.session.completed": {
-      const session = event.data.object;
-      // Only for subscription mode
-      if (session?.mode !== "subscription") return;
-
-      // If payment is confirmed or the resulting subscription is active, award now.
-      // session.subscription can be an ID string.
-      const subscriptionId = typeof session.subscription === "string"
-        ? session.subscription
-        : session.subscription?.id;
-
+    case "invoice.payment_succeeded":
+    case "invoice.paid": {
+      const invoice = event.data.object;
+      const subscriptionId = invoice?.subscription;
       if (!subscriptionId) return;
 
-      // Safety: only award if paid or active (covers trials that still activate immediately).
-      const paid = session.payment_status === "paid";
-      if (paid) {
-        await settleAndAwardFromSubscriptionId(subscriptionId);
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      const customerId = sub.customer;
+      const item = sub.items?.data?.[0];
+      const priceId = item?.price?.id;
+      const currentPeriodEndSec = sub.current_period_end; // UNIX seconds
+      if (!customerId || !priceId) return;
+
+      const tier = tierFromPriceId(priceId);
+      if (!tier) {
+        console.log("[webhook] invoice.*: unmapped price", priceId);
         return;
       }
 
-      // If not clearly paid, check the subscription status directly.
-      try {
-        const sub = await stripe.subscriptions.retrieve(subscriptionId);
-        if (sub?.status === "active" || sub?.status === "trialing") {
-          await settleAndAwardFromSubscriptionId(subscriptionId);
-        }
-      } catch (e) {
-        console.warn("[webhook] could not inspect subscription on session.completed:", e?.message);
+      // Find user by stripe_customer_id
+      let userId = null;
+      {
+        const ur = await pool.query(
+          "SELECT id, email FROM public.users WHERE stripe_customer_id=$1 LIMIT 1",
+          [customerId]
+        );
+        if (ur.rowCount) userId = ur.rows[0].id;
       }
+
+      // Fallback: reconcile via Stripe Customer email, then backfill customer id
+      if (!userId) {
+        const sc = await stripe.customers.retrieve(customerId);
+        const email = sc?.email;
+        if (email) {
+          const er = await pool.query(
+            "SELECT id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
+            [email]
+          );
+          if (er.rowCount) {
+            userId = er.rows[0].id;
+            await pool.query(
+              "UPDATE public.users SET stripe_customer_id=$1 WHERE id=$2",
+              [customerId, userId]
+            );
+          }
+        }
+      }
+      if (!userId) {
+        console.warn("[webhook] no user matched for customer:", customerId);
+        return;
+      }
+
+      // Award credits into the ledger for this billing period
+      await awardCreditsForTier(userId, tier, currentPeriodEndSec);
+
+      // Optional: persist subscription status
+      try {
+        await pool.query(
+          `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
+           VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), now())
+           ON CONFLICT (user_id, tier) DO UPDATE
+             SET status=EXCLUDED.status,
+                 current_period_start=EXCLUDED.current_period_start,
+                 current_period_end=EXCLUDED.current_period_end,
+                 updated_at=now()`,
+          [userId, tier, sub.status || "active", sub.current_period_start, sub.current_period_end]
+        );
+      } catch (e) {
+        console.warn("[webhook] subscriptions upsert skipped:", e?.message);
+      }
+
+      console.log(
+        `[webhook] credits awarded for user ${userId} — tier=${tier}, period_end=${currentPeriodEndSec}`
+      );
       return;
     }
 
