@@ -27,7 +27,7 @@ function tierFromPriceId(priceId) {
  */
 router.post("/subscribe", async (req, res) => {
   try {
-    const { tier, customer, origin } = req.body || {};
+    const { tier, customer } = req.body || {};
     if (!tier || !customer?.email) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
@@ -76,9 +76,11 @@ router.post("/subscribe", async (req, res) => {
       return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
 
-    // Success/cancel URLs
-    const successBase =
-      process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN || origin || "";
+    // Success/cancel URLs — must be fully qualified HTTPS
+    const successBase = process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN;
+    if (!successBase || !/^https?:\/\//.test(successBase)) {
+      throw new Error("FRONTEND_PUBLIC_URL or PUBLIC_APP_ORIGIN must be set to a valid URL");
+    }
     const success_url = `${successBase}/?sub=1&thankyou=1&flow=sub`;
     const cancel_url = `${successBase}/?sub=cancel`;
 
@@ -156,12 +158,11 @@ export async function handleMembershipWebhook(event) {
         return;
       }
 
-      // Award credits into the ledger for this billing period (idempotent check inside)
+      // Award credits into the ledger for this billing period
       await awardCreditsForTier(userId, tier, currentPeriodEndSec);
 
-      // Optionally persist subscription status for UI (if you already manage this elsewhere, this is safe to omit)
+      // Optional: persist subscription status
       try {
-        const tierLabel = tier; // "standard" | "premium"
         await pool.query(
           `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
            VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), now())
@@ -170,10 +171,9 @@ export async function handleMembershipWebhook(event) {
                  current_period_start=EXCLUDED.current_period_start,
                  current_period_end=EXCLUDED.current_period_end,
                  updated_at=now()`,
-          [userId, tierLabel, "active", sub.current_period_start, sub.current_period_end]
+          [userId, tier, "active", sub.current_period_start, sub.current_period_end]
         );
       } catch (e) {
-        // If your schema differs, the above will no-op without breaking credit awards.
         console.warn("[webhook] subscriptions upsert skipped:", e?.message);
       }
 
@@ -184,7 +184,6 @@ export async function handleMembershipWebhook(event) {
     }
 
     default:
-      // Other events are currently not required for credit logic
       console.log(`[webhook] unhandled event type: ${event.type}`);
       return;
   }
