@@ -3,8 +3,8 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import Stripe from "stripe";
 
-import auth from "./auth.js";                  // ✅ Mount auth explicitly
-import routes from "./routes.js";              // Existing grouped routes (availability, pay, my, etc.)
+import auth from "./auth.js";
+import routes from "./routes.js";
 import memberships, { handleMembershipWebhook } from "./memberships.js";
 
 const app = express();
@@ -31,7 +31,9 @@ app.post(
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
+    // Log the event type (no sensitive data)
     try {
+      console.log(`[webhooks/memberships] received: ${event.type}`);
       await handleMembershipWebhook(event);
       return res.json({ received: true });
     } catch (err) {
@@ -61,11 +63,10 @@ app.use(bodyParser.json());
 
 /**
  * 3) API routes
- * Mount auth FIRST so /api/auth/login works even if routes.js changes.
  */
-app.use("/api/auth", auth);                   // ✅ Ensures /api/auth/login, /api/auth/me, etc.
-app.use("/api", routes);                      // Other grouped routes under /api/*
-app.use("/api/memberships", memberships);    // Subscription endpoints
+app.use("/api/auth", auth);
+app.use("/api", routes);
+app.use("/api/memberships", memberships);
 
 /**
  * 4) Healthcheck
