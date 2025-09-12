@@ -9,13 +9,22 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-
 /* ----------------------------- Helpers ----------------------------- */
 
 /**
+ * Remove control chars & non-ASCII that can sneak in when copy/pasting envs.
+ */
+function hardSanitize(str) {
+  if (!str) return "";
+  // Remove control chars (0x00-0x1F, 0x7F) and non-ASCII (>0x7F)
+  return String(str).replace(/[\u0000-\u001F\u007F-\uFFFF]/g, "").trim();
+}
+
+/**
  * Map Stripe price IDs to internal tiers.
  */
 function tierFromPriceId(priceId) {
-  const std       = (process.env.STANDARD_PRICE || "").trim();
-  const stdIntro  = (process.env.STANDARD_INTRO_PRICE || "").trim();
-  const prem      = (process.env.PREMIUM_PRICE || "").trim();
-  const premIntro = (process.env.PREMIUM_INTRO_PRICE || "").trim();
+  const std       = hardSanitize(process.env.STANDARD_PRICE || "");
+  const stdIntro  = hardSanitize(process.env.STANDARD_INTRO_PRICE || "");
+  const prem      = hardSanitize(process.env.PREMIUM_PRICE || "");
+  const premIntro = hardSanitize(process.env.PREMIUM_INTRO_PRICE || "");
 
   if ([std, stdIntro].filter(Boolean).includes(priceId)) return "standard";
   if ([prem, premIntro].filter(Boolean).includes(priceId)) return "premium";
@@ -23,35 +32,50 @@ function tierFromPriceId(priceId) {
 }
 
 /**
- * Strictly resolve the public base URL for redirects.
- * We intentionally *only* accept FRONTEND_PUBLIC_URL because:
- *  - It’s your canonical booking app origin (e.g., https://book.gmautodetailing.uk).
- *  - It avoids accidental fallback to non-URL envs (like FRONTEND_ORIGIN without scheme).
- *  - It ensures Stripe redirects load your app at top-level (not the Squarespace embed).
+ * Resolve the public base URL strictly from FRONTEND_PUBLIC_URL.
+ * Uses only the .origin to avoid path/query/hash issues.
  */
-function resolveFrontendPublicUrl() {
-  const raw = (process.env.FRONTEND_PUBLIC_URL || "").trim();
+function resolvePublicOriginStrict() {
+  const raw = hardSanitize(process.env.FRONTEND_PUBLIC_URL || "");
   if (!raw) {
-    throw new Error("FRONTEND_PUBLIC_URL must be set to a full URL, e.g. https://book.gmautodetailing.uk");
+    throw new Error(
+      "FRONTEND_PUBLIC_URL must be set to a full URL, e.g. https://book.gmautodetailing.uk"
+    );
   }
-  let u;
+  let parsed;
   try {
-    u = new URL(raw);
+    parsed = new URL(raw);
   } catch {
     throw new Error(`FRONTEND_PUBLIC_URL is not a valid URL: ${raw}`);
   }
-  if (u.protocol !== "https:" && u.protocol !== "http:") {
+  if (!(parsed.protocol === "https:" || parsed.protocol === "http:")) {
     throw new Error(`FRONTEND_PUBLIC_URL must be http(s): ${raw}`);
   }
-  // Normalise to no trailing slash for stable concatenation
-  return u.toString().replace(/\/+$/, "");
+  // Use origin only (scheme + host + optional port). This eliminates any stray path fragments.
+  return parsed.origin;
 }
 
 /* --------------------------- Public Routes -------------------------- */
+
+/**
+ * Simple debug route to confirm what URLs will be sent to Stripe.
+ * Safe to keep; shows no secrets.
+ */
+router.get("/debug-url", (_req, res) => {
+  try {
+    const origin = resolvePublicOriginStrict();
+    const success_url = `${origin}/?sub=1&thankyou=1&flow=sub`;
+    const cancel_url  = `${origin}/?sub=cancel`;
+    return res.json({ ok: true, origin, success_url, cancel_url });
+  } catch (e) {
+    return res.status(500).json({ ok: false, error: String(e.message || e) });
+  }
+});
+
 /**
  * POST /api/memberships/subscribe
  * Creates a Stripe Checkout Session for subscription sign-up.
- * Credits are NOT awarded here; they are awarded by the webhook upon payment.
+ * Credits are NOT awarded here; only after successful payment via webhook.
  */
 router.post("/subscribe", async (req, res) => {
   try {
@@ -95,20 +119,22 @@ router.post("/subscribe", async (req, res) => {
     // Select price by tier
     const priceId =
       tier === "standard"
-        ? (process.env.STANDARD_PRICE || "").trim()
+        ? hardSanitize(process.env.STANDARD_PRICE || "")
         : tier === "premium"
-        ? (process.env.PREMIUM_PRICE || "").trim()
+        ? hardSanitize(process.env.PREMIUM_PRICE || "")
         : "";
 
     if (!priceId) {
       return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
 
-    // Build strict success/cancel URLs from FRONTEND_PUBLIC_URL only
-    const base = resolveFrontendPublicUrl();
-    console.log(`[memberships] using FRONTEND_PUBLIC_URL: ${base}`);
-    const success_url = new URL("/?sub=1&thankyou=1&flow=sub", base).toString();
-    const cancel_url  = new URL("/?sub=cancel", base).toString();
+    // Build strict success/cancel URLs from FRONTEND_PUBLIC_URL only (origin)
+    const origin = resolvePublicOriginStrict();
+    const success_url = `${origin}/?sub=1&thankyou=1&flow=sub`;
+    const cancel_url  = `${origin}/?sub=cancel`;
+
+    // One concise log line for Render debugging
+    console.log(`[memberships] origin=${origin} success_url=${success_url} cancel_url=${cancel_url}`);
 
     const session = await stripe.checkout.sessions.create({
       customer: stripeCustomerId,
