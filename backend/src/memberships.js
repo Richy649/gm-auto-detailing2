@@ -1,23 +1,16 @@
 import express from "express";
 import Stripe from "stripe";
-import * as db from "./db.js";
+import * as db from "./db.js";   // ✅ fixed: import all named exports
 import {
   addExteriorCredits,
   addFullCredits,
-  awardCreditsForTier, // convenience wrapper
+  awardCreditsForTier,
 } from "./credits.js";
-
-/**
- * I import the DB with `* as db` to avoid assuming a default export.
- * I export `handleMembershipWebhook` here so `server.js` can import it without
- * depending on `credits.js` to expose that handler.
- */
 
 const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
 
 /* ----------------------------- Helpers ----------------------------- */
-
 function tierFromPriceId(priceId) {
   const std = process.env.STANDARD_PRICE;
   const stdIntro = process.env.STANDARD_INTRO_PRICE;
@@ -29,25 +22,7 @@ function tierFromPriceId(priceId) {
   return null;
 }
 
-async function upsertStripeCustomerIdForEmail(email, details) {
-  // Try to find the user
-  const existing = await db.query("SELECT id, stripe_customer_id FROM users WHERE email=$1 LIMIT 1", [email]);
-  if (existing.rows.length === 0) return null;
-
-  const user = existing.rows[0];
-  if (!user.stripe_customer_id && details?.id) {
-    await db.query("UPDATE users SET stripe_customer_id=$1 WHERE id=$2", [details.id, user.id]);
-  }
-  return user.id;
-}
-
 /* --------------------------- Public Routes -------------------------- */
-
-/**
- * POST /api/memberships/subscribe
- * Creates a Stripe Checkout Session for subscription sign-up.
- * Does NOT award credits here; credits are awarded on webhook confirmation.
- */
 router.post("/subscribe", async (req, res) => {
   try {
     const { tier, customer, origin } = req.body || {};
@@ -55,20 +30,17 @@ router.post("/subscribe", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing tier or customer email" });
     }
 
-    // Find (or later upsert) the Stripe customer via email
+    // Find existing stripe_customer_id if present
     let stripeCustomerId = null;
-
-    // If we already have a stripe_customer_id stored, use it
-    {
-      const r = await db.query(
-        "SELECT stripe_customer_id FROM users WHERE email=$1 LIMIT 1",
-        [customer.email]
-      );
-      if (r.rows.length && r.rows[0].stripe_customer_id) {
-        stripeCustomerId = r.rows[0].stripe_customer_id;
-      }
+    const r = await db.query(
+      "SELECT stripe_customer_id FROM users WHERE email=$1 LIMIT 1",
+      [customer.email]
+    );
+    if (r.rows.length && r.rows[0].stripe_customer_id) {
+      stripeCustomerId = r.rows[0].stripe_customer_id;
     }
 
+    // Create a Stripe customer if none exists
     if (!stripeCustomerId) {
       const sc = await stripe.customers.create({
         email: customer.email,
@@ -80,14 +52,13 @@ router.post("/subscribe", async (req, res) => {
       });
       stripeCustomerId = sc.id;
 
-      // Persist to user if the user exists already
+      // Persist the customer id if the user already exists
       await db.query(
         "UPDATE users SET stripe_customer_id=$1 WHERE email=$2",
         [stripeCustomerId, customer.email]
       );
     }
 
-    // Price id based on tier
     const priceId =
       tier === "standard" ? process.env.STANDARD_PRICE
       : tier === "premium" ? process.env.PREMIUM_PRICE
@@ -97,7 +68,6 @@ router.post("/subscribe", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Invalid tier" });
     }
 
-    // Success/cancel URLs
     const successBase = process.env.FRONTEND_PUBLIC_URL || process.env.PUBLIC_APP_ORIGIN || origin || "";
     const success_url = `${successBase}/?sub=1&thankyou=1&flow=sub`;
     const cancel_url = `${successBase}/?sub=cancel`;
@@ -118,37 +88,26 @@ router.post("/subscribe", async (req, res) => {
 });
 
 /* ------------------------ Webhook Entry Point ----------------------- */
-
-/**
- * Exported handler called from server.js (after signature verification).
- * Awards credits on:
- *  - invoice.payment_succeeded (initial payment & renewals)
- */
 export async function handleMembershipWebhook(event) {
   switch (event.type) {
     case "invoice.payment_succeeded": {
       const invoice = event.data.object;
-
-      // Ensure it's a subscription invoice
       const subscriptionId = invoice?.subscription;
       if (!subscriptionId) return;
 
-      // Retrieve subscription to determine price/tier and customer
       const sub = await stripe.subscriptions.retrieve(subscriptionId);
       const customerId = sub.customer;
       const priceId = sub.items?.data?.[0]?.price?.id;
       if (!customerId || !priceId) return;
 
       const tier = tierFromPriceId(priceId);
-      if (!tier) {
-        console.log("[webhook] invoice.payment_succeeded: price not mapped to tier", priceId);
-        return;
-      }
+      if (!tier) return;
 
-      // Find user by stripe_customer_id
-      const ur = await db.query("SELECT id, email FROM users WHERE stripe_customer_id=$1 LIMIT 1", [customerId]);
+      const ur = await db.query(
+        "SELECT id, email FROM users WHERE stripe_customer_id=$1 LIMIT 1",
+        [customerId]
+      );
 
-      // If not found, try to reconcile via the Stripe Customer email, then backfill stripe_customer_id
       let userId = ur.rows[0]?.id;
       if (!userId) {
         const sc = await stripe.customers.retrieve(customerId);
@@ -166,14 +125,12 @@ export async function handleMembershipWebhook(event) {
         return;
       }
 
-      // Award credits per tier
       await awardCreditsForTier(userId, tier);
       console.log(`[webhook] Awarded credits for user ${userId} (tier=${tier})`);
       return;
     }
 
     default:
-      // Other events can be ignored or logged as needed
       console.log(`[webhook] Unhandled event type: ${event.type}`);
       return;
   }
