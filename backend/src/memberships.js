@@ -1,258 +1,257 @@
-// backend/src/payments.js
+// backend/src/memberships.js
 import express from "express";
 import Stripe from "stripe";
-import { pool, saveBooking } from "./db.js";
-import { createCalendarEvents } from "./gcal.js";
+import { pool } from "./db.js";
+import { awardCreditsForTier } from "./credits.js";
 
-/**
- * One-off payments:
- *   - Create Checkout Session
- *   - Webhook to persist booking + create calendar event
- *   - Resilience confirm endpoint
- *
- * ENV expected:
- *   STRIPE_SECRET_KEY         = sk_test_... or sk_live_...
- *   STRIPE_WEBHOOK_SECRET     = whsec_...
- *   FRONTEND_PUBLIC_URL       = https://book.gmautodetailing.uk
- *   (fallbacks tried: PUBLIC_APP_ORIGIN, PUBLIC_FRONTEND_ORIGIN)
- */
-
+const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
-const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-/* ---------------------------- Service Catalog ---------------------------- */
-const services = {
-  exterior: { name: "Exterior Detail", minutes: 75, price_cents: 4000 },
-  full:     { name: "Full Detail",     minutes: 120, price_cents: 6000 },
-};
+/* ----------------------------- Helpers ----------------------------- */
 
-const addons = {
-  wax:    { name: "Full Body Wax", price_cents: 1000 },
-  polish: { name: "Hand Polish",   price_cents: 2250 },
-};
+function clean(s) {
+  return (s ?? "").toString().replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim();
+}
 
-/* ------------------------------- Utilities ------------------------------- */
-function sanitize(s) { return (s ?? "").toString().replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim(); }
-function normEmail(s) { return sanitize(s).toLowerCase(); }
-function normStreet(s) { return sanitize(s).toLowerCase().replace(/[^a-z0-9]+/g, ""); }
-
-function resolveFrontendOriginEnv() {
-  const cand =
-    process.env.FRONTEND_PUBLIC_URL ||
-    process.env.PUBLIC_APP_ORIGIN ||
-    process.env.PUBLIC_FRONTEND_ORIGIN ||
+function strictPublicOrigin() {
+  const raw =
+    clean(process.env.FRONTEND_PUBLIC_URL) ||
+    clean(process.env.PUBLIC_APP_ORIGIN) ||
+    clean(process.env.PUBLIC_FRONTEND_ORIGIN) ||
     "https://book.gmautodetailing.uk";
-  try { return new URL(cand).origin; } catch { return "https://book.gmautodetailing.uk"; }
-}
-const FRONTEND_ORIGIN = resolveFrontendOriginEnv();
-
-function safeOriginFromClient(origin) {
-  try {
-    if (!origin) throw new Error("no origin");
-    return new URL(origin).origin;
-  } catch {
-    return FRONTEND_ORIGIN;
-  }
+  let u;
+  try { u = new URL(raw); } catch { throw new Error(`FRONTEND_PUBLIC_URL invalid: ${raw}`); }
+  if (!/^https?:$/.test(u.protocol)) throw new Error(`Front-end origin must be http(s): ${raw}`);
+  return u.origin;
 }
 
+function mapTierFromPrice(priceId) {
+  const std       = clean(process.env.STANDARD_PRICE || "");
+  const stdIntro  = clean(process.env.STANDARD_INTRO_PRICE || "");
+  const prem      = clean(process.env.PREMIUM_PRICE || "");
+  const premIntro = clean(process.env.PREMIUM_INTRO_PRICE || "");
+  if ([std, stdIntro].filter(Boolean).includes(priceId)) return "standard";
+  if ([prem, premIntro].filter(Boolean).includes(priceId)) return "premium";
+  return null;
+}
+
+/* --------------------------- Public Routes -------------------------- */
 /**
- * Server-side first-time check (email OR phone OR normalized street has been seen before).
+ * POST /api/memberships/subscribe
+ * Body: { tier: "standard"|"premium", customer: {...}, first_time?: boolean }
+ * On first_time=true: uses INTRO price for first cycle, then auto-switches to normal price.
  */
-async function isFirstTimeCustomer({ email, phone, street }) {
-  const emailNorm = normEmail(email);
-  const phoneNorm = sanitize(phone);
-  const streetNorm = normStreet(street);
+router.post("/subscribe", async (req, res) => {
+  try {
+    const { tier, customer, first_time } = req.body || {};
+    if (!tier || !customer?.email) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
 
-  if (!emailNorm && !phoneNorm && !streetNorm) return false;
-
-  const r = await pool.query(
-    `
-    SELECT 1
-      FROM public.users
-     WHERE ($1 <> '' AND lower(email) = $1)
-        OR ($2 <> '' AND phone = $2)
-        OR ($3 <> '' AND lower(regexp_replace(COALESCE(street,''),'[^a-z0-9]+','', 'g')) = $3)
-     LIMIT 1
-    `,
-    [emailNorm, phoneNorm, streetNorm]
-  );
-  return r.rowCount === 0;
-}
-
-async function buildLineItems(customer, service_key, addonKeys) {
-  const svc = services[service_key];
-  if (!svc) throw new Error("invalid_service");
-
-  const firstTime = await isFirstTimeCustomer({
-    email: customer?.email,
-    phone: customer?.phone,
-    street: customer?.street,
-  });
-
-  const line_items = [];
-  const svcAmount = Math.round(svc.price_cents * (firstTime ? 0.5 : 1));
-  line_items.push({
-    price_data: {
-      currency: "gbp",
-      product_data: { name: svc.name },
-      unit_amount: svcAmount,
-    },
-    quantity: 1,
-  });
-
-  for (const k of addonKeys || []) {
-    const ad = addons[k];
-    if (!ad) continue;
-    line_items.push({
-      price_data: {
-        currency: "gbp",
-        product_data: { name: ad.name },
-        unit_amount: ad.price_cents,
-      },
-      quantity: 1,
-    });
-  }
-
-  return { line_items, firstTime };
-}
-
-/* -------------------------- Persistence + GCal -------------------------- */
-async function persistAndSync(sessionId, payload) {
-  const svcName = services[payload.service_key]?.name || payload.service_key || "Service";
-
-  const itemsForCalendar = [];
-  for (const sl of (payload.slots || [])) {
-    await saveBooking({
-      stripe_session_id: sessionId,
-      service_key: payload.service_key,
-      addons: payload.addons || [],
-      start_iso: sl.start_iso,
-      end_iso: sl.end_iso,
-      customer: payload.customer || {},
-      has_tap: !!payload.has_tap,
-    });
-
-    const desc = [
-      `Name: ${payload.customer?.name || ""}`,
-      `Phone: ${payload.customer?.phone || ""}`,
-      `Email: ${payload.customer?.email || ""}`,
-      `Address: ${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`,
-      `Outhouse tap: ${payload.has_tap ? "Yes" : "No"}`,
-      (payload.addons?.length ? `Add-ons: ${payload.addons.join(", ")}` : null),
-      `Stripe session: ${sessionId}`,
-    ].filter(Boolean).join("\n");
-
-    itemsForCalendar.push({
-      start_iso: sl.start_iso,
-      end_iso: sl.end_iso,
-      summary: `GM Auto Detailing — ${svcName}`,
-      description: desc,
-      location: `${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`.trim(),
-    });
-  }
-
-  await createCalendarEvents(sessionId, itemsForCalendar);
-}
-
-/* --------------------------------- Mount -------------------------------- */
-export function mountPayments(app) {
-  /**
-   * Create Checkout Session (one-off)
-   * Body: { customer, has_tap, service_key, addons:[], slot, origin? }
-   */
-  app.post("/api/pay/create-checkout-session", express.json(), async (req, res) => {
-    try {
-      const { customer, has_tap, service_key, addons: addonKeys = [], slot, origin } = req.body || {};
-      if (!customer || !service_key || !slot?.start_iso || !slot?.end_iso) {
-        return res.status(400).json({ ok: false, error: "Please select a time and complete your details." });
+    // Ensure a Stripe Customer
+    let stripeCustomerId = null;
+    const email = clean(customer.email);
+    {
+      const r = await pool.query(
+        "SELECT stripe_customer_id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
+        [email]
+      );
+      if (r.rowCount && r.rows[0].stripe_customer_id) {
+        stripeCustomerId = r.rows[0].stripe_customer_id;
       }
-
-      const { line_items } = await buildLineItems(customer, service_key, addonKeys);
-
-      const payload = {
-        service_key,
-        addons: addonKeys,
-        has_tap: !!has_tap,
-        customer: {
-          name: sanitize(customer.name),
-          email: normEmail(customer.email),
-          phone: sanitize(customer.phone),
-          street: sanitize(customer.street),
-          postcode: sanitize(customer.postcode),
-        },
-        slots: [slot],
-      };
-
-      const successBase = safeOriginFromClient(origin);
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        line_items,
-        success_url: `${successBase}/?paid=1&flow=oneoff&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: successBase,
-        metadata: { payload: JSON.stringify(payload) },
+    }
+    if (!stripeCustomerId) {
+      const sc = await stripe.customers.create({
+        email,
+        name: clean(customer.name) || undefined,
+        phone: clean(customer.phone) || undefined,
+        address:
+          customer.street || customer.postcode
+            ? { line1: clean(customer.street) || undefined, postal_code: clean(customer.postcode) || undefined }
+            : undefined,
       });
-
-      if (!session?.url) return res.status(500).json({ ok: false, error: "Unable to start checkout." });
-      return res.json({ ok: true, url: session.url });
-    } catch (e) {
-      console.error("[pay/create-checkout-session] error:", e?.message || e);
-      return res.status(500).json({ ok: false, error: "Payment failed to initialise" });
-    }
-  });
-
-  /**
-   * One-off webhook (raw) — must be raw before json middleware (handled in server.js)
-   */
-  app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
-    let event;
-    try {
-      event = stripe.webhooks.constructEvent(req.body, req.headers["stripe-signature"], WEBHOOK_SECRET);
-    } catch (err) {
-      console.error("[webhook] signature verification failed:", err?.message || err);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      stripeCustomerId = sc.id;
+      await pool.query(
+        "UPDATE public.users SET stripe_customer_id=$1 WHERE lower(email)=lower($2)",
+        [stripeCustomerId, email]
+      );
     }
 
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const sessionId = session?.id;
-      try {
-        let payload = {};
-        try { payload = JSON.parse(session?.metadata?.payload || "{}"); } catch { payload = {}; }
-        if (payload?.service_key && Array.isArray(payload?.slots) && payload.slots.length) {
-          await persistAndSync(sessionId, payload);
-        } else {
-          console.warn("[webhook] session missing payload or slots");
-        }
-      } catch (e) {
-        console.warn("[webhook] persist failed:", e?.message || e);
-      }
+    // Prices
+    const STANDARD       = clean(process.env.STANDARD_PRICE || "");
+    const STANDARD_INTRO = clean(process.env.STANDARD_INTRO_PRICE || "");
+    const PREMIUM        = clean(process.env.PREMIUM_PRICE || "");
+    const PREMIUM_INTRO  = clean(process.env.PREMIUM_INTRO_PRICE || "");
+
+    let priceFirstCycle = "";
+    let normalPrice     = "";
+
+    if (tier === "standard") {
+      normalPrice     = STANDARD;
+      priceFirstCycle = first_time && STANDARD_INTRO ? STANDARD_INTRO : STANDARD;
+    } else if (tier === "premium") {
+      normalPrice     = PREMIUM;
+      priceFirstCycle = first_time && PREMIUM_INTRO ? PREMIUM_INTRO : PREMIUM;
+    } else {
+      return res.status(400).json({ ok: false, error: "invalid_tier" });
     }
+    if (!priceFirstCycle) return res.status(500).json({ ok: false, error: "price_not_configured" });
 
-    res.json({ received: true });
-  });
+    const origin = strictPublicOrigin();
+    const success_url = `${origin}/?thankyou=1&flow=sub&sub=1`;
+    const cancel_url  = `${origin}/?sub=cancel`;
 
-  /**
-   * Confirm endpoint — FE calls after success redirect to ensure persistence
-   */
-  app.post("/api/pay/confirm", express.json(), async (req, res) => {
-    try {
-      const { session_id } = req.body || {};
-      if (!session_id) return res.status(400).json({ ok: false, error: "Missing session_id" });
+    console.log(`[memberships] origin=${origin} success_url=${success_url} cancel_url=${cancel_url}`);
 
-      const sess = await stripe.checkout.sessions.retrieve(session_id);
-      if (!sess?.id) return res.status(404).json({ ok: false, error: "Session not found." });
+    // Create Stripe Checkout session for subscription
+    const session = await stripe.checkout.sessions.create({
+      customer: stripeCustomerId,
+      mode: "subscription",
+      line_items: [{ price: priceFirstCycle, quantity: 1 }],
+      success_url,
+      cancel_url,
+      subscription_data: {
+        metadata: {
+          tier,
+          first_time: first_time ? "true" : "false",
+          normal_price: normalPrice,
+          first_cycle_price: priceFirstCycle,
+        },
+      },
+    });
 
-      let payload = {};
-      try { payload = JSON.parse(sess.metadata?.payload || "{}"); } catch { payload = {}; }
-      if (!payload?.service_key || !Array.isArray(payload?.slots) || !payload.slots.length) {
-        return res.status(400).json({ ok: false, error: "Invalid session payload." });
-      }
+    return res.json({ ok: true, url: session.url });
+  } catch (err) {
+    console.error("[memberships/subscribe] failed:", err);
+    return res.status(500).json({ ok: false, error: "subscribe_failed" });
+  }
+});
 
-      await persistAndSync(sess.id, payload);
-      return res.json({ ok: true });
-    } catch (e) {
-      console.warn("[pay/confirm] failed:", e?.message || e);
-      return res.status(500).json({ ok: false, error: "Confirm failed." });
-    }
-  });
+/* ------------------------ Webhook Utilities ------------------------- */
+/** Flip the subscription to the normal price for the next cycle if first_time=true. */
+async function ensureNormalPriceForNextCycle(subscription) {
+  try {
+    const sub = typeof subscription === "string"
+      ? await stripe.subscriptions.retrieve(subscription)
+      : subscription;
+    if (!sub) return;
+
+    const item = sub.items?.data?.[0];
+    if (!item) return;
+
+    const first_time = sub.metadata?.first_time === "true";
+    const normal_price = sub.metadata?.normal_price || "";
+    if (!first_time || !normal_price) return;
+    if (item.price?.id === normal_price) return;
+
+    await stripe.subscriptions.update(sub.id, {
+      items: [{ id: item.id, price: normal_price }],
+      proration_behavior: "none",
+      metadata: { ...sub.metadata, first_time: "false" },
+    });
+
+    console.log(`[webhook] scheduled switch to normal price for next cycle on ${sub.id}`);
+  } catch (e) {
+    console.warn("[webhook] ensureNormalPriceForNextCycle failed:", e?.message);
+  }
 }
+
+/* ------------------------ Webhook Entry Point ----------------------- */
+/**
+ * Exported handler used by server.js
+ * Awards credits on successful invoices (initial + renewals),
+ * and applies the normal price for future cycles after intro.
+ */
+export async function handleMembershipWebhook(event) {
+  switch (event.type) {
+    case "checkout.session.completed": {
+      const session = event.data.object;
+      if (session?.mode !== "subscription") return;
+      const subId =
+        typeof session.subscription === "string"
+          ? session.subscription
+          : session.subscription?.id;
+      if (subId) await ensureNormalPriceForNextCycle(subId);
+      return;
+    }
+
+    case "invoice.payment_succeeded":
+    case "invoice.paid": {
+      const invoice = event.data.object;
+      const subscriptionId = invoice?.subscription;
+      if (!subscriptionId) return;
+
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      const customerId = sub.customer;
+      const item = sub.items?.data?.[0];
+      const priceId = item?.price?.id;
+      const currentPeriodEndSec = sub.current_period_end; // unix seconds
+      if (!customerId || !priceId) return;
+
+      const tier = mapTierFromPrice(priceId);
+      if (!tier) {
+        console.log("[webhook] invoice.*: unmapped price", priceId);
+        return;
+      }
+
+      // Find user by stripe_customer_id, or fallback by email
+      let userId = null;
+      {
+        const r = await pool.query(
+          "SELECT id FROM public.users WHERE stripe_customer_id=$1 LIMIT 1",
+          [customerId]
+        );
+        if (r.rowCount) userId = r.rows[0].id;
+      }
+      if (!userId) {
+        const sc = await stripe.customers.retrieve(customerId);
+        const email = sc?.email;
+        if (email) {
+          const r2 = await pool.query(
+            "SELECT id FROM public.users WHERE lower(email)=lower($1) LIMIT 1",
+            [email]
+          );
+          if (r2.rowCount) {
+            userId = r2.rows[0].id;
+            await pool.query(
+              "UPDATE public.users SET stripe_customer_id=$1 WHERE id=$2",
+              [customerId, userId]
+            );
+          }
+        }
+      }
+      if (!userId) {
+        console.warn("[webhook] no user matched for customer:", customerId);
+        return;
+      }
+
+      // Award credits for this billing period
+      await awardCreditsForTier(userId, tier, currentPeriodEndSec);
+
+      // Optional: upsert subscription snapshot
+      try {
+        await pool.query(
+          `INSERT INTO public.subscriptions (user_id, tier, status, current_period_start, current_period_end, updated_at)
+           VALUES ($1, $2, $3, to_timestamp($4), to_timestamp($5), now())
+           ON CONFLICT (user_id, tier) DO UPDATE
+             SET status=EXCLUDED.status,
+                 current_period_start=EXCLUDED.current_period_start,
+                 current_period_end=EXCLUDED.current_period_end,
+                 updated_at=now()`,
+          [userId, tier, sub.status || "active", sub.current_period_start, sub.current_period_end]
+        );
+      } catch (e) {
+        console.warn("[webhook] subscriptions upsert skipped:", e?.message);
+      }
+
+      console.log(`[webhook] credits awarded — user=${userId}, tier=${tier}, period_end=${currentPeriodEndSec}`);
+      return;
+    }
+
+    default:
+      // Other events ignored
+      return;
+  }
+}
+
+export default router;
