@@ -39,17 +39,6 @@ window.addEventListener("load", reportHeight);
 window.addEventListener("resize", () => setTimeout(reportHeight, 60));
 setInterval(reportHeight, 900);
 
-/* ======== SAFE NAV helpers ======== */
-// Use inside the iframe: internal pages navigate *in iframe*, external (Stripe) opens a new tab
-function isSameOrigin(url) {
-  try { return new URL(url, window.location.origin).origin === window.location.origin; }
-  catch { return false; }
-}
-function openNewTab() {
-  // Open immediately to avoid popup blockers; caller can set location later.
-  return window.open("", "_blank", "noopener,noreferrer");
-}
-
 /* Buttons */
 const Button = ({ children, className, ...props }) => <button className={cx("gm btn", className)} {...props}>{children}</button>;
 const PrimaryButton = (props) => <Button className="primary" {...props} />;
@@ -130,7 +119,7 @@ function Services({ state, setState }) {
   const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
   const usingCredits = hasFullCredit || hasExteriorCredit;
 
-  // If the user has credits, go straight to calendar
+  // If the user has credits, force them to booking calendar immediately (no services page)
   React.useEffect(() => {
     if (usingCredits) {
       const inferred = hasFullCredit ? "full" : "exterior";
@@ -141,12 +130,7 @@ function Services({ state, setState }) {
 
   async function subscribeNow(tierKey){
     const token = state.token;
-    if (!token) { window.location.href = "/login.html"; return; }
-
-    // Open tab up-front to avoid popup blockers
-    const win = openNewTab();
-    if (!win) { alert("Please allow popups to complete checkout."); return; }
-
+    if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
     const tier = tierKey === "standard_membership" ? "standard" : "premium";
     const payload = {
       tier,
@@ -160,17 +144,15 @@ function Services({ state, setState }) {
       },
       origin: window.location.origin,
     };
-    if (!payload.customer.email) { win.close(); alert("Your account is missing an email address."); return; }
+    if (!payload.customer.email) { alert("Your account is missing an email address."); return; }
     const r = await fetch(`${API}/memberships/subscribe`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(payload),
     });
-    let d;
-    try { d = await r.json(); } catch { d = null; }
-    if (!d?.ok || !d?.url) { win.close(); alert(d?.error || "Unable to start subscription."); return; }
-    // Navigate the new tab to Stripe (external)
-    win.location.href = d.url;
+    const d = await r.json().catch(()=> ({}));
+    if (!d?.ok || !d?.url) { alert(d?.error || "Unable to start subscription."); return; }
+    try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
   }
 
   const aCfg = cfg.addons || {};
@@ -441,17 +423,18 @@ function Confirm({ state, setState }) {
 
   async function pay(){
     try {
+      console.log("[Confirm.pay] start", { usingCredit, service_key: state.service_key, slot: state.selectedSlot, customer: state.customer });
       if (busy) return;
       setBusy(true);
 
-      // Base validations
+      // Base validations (apply to both flows)
       if (!state.service_key) { alert("Please choose a service."); setBusy(false); return; }
       if (!state.customer?.email) { alert("Please enter your email on your account."); setBusy(false); return; }
       if (!state.selectedSlot?.start_iso || !state.selectedSlot?.end_iso) { alert("Please pick a time slot."); setBusy(false); return; }
 
       if (usingCredit) {
         const token = state.token;
-        if (!token) { window.location.href = "/login.html"; setBusy(false); return; }
+        if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } setBusy(false); return; }
         const payload = {
           service_key: state.service_key,
           slot: state.selectedSlot,
@@ -476,7 +459,7 @@ function Confirm({ state, setState }) {
 
         if (!d?.ok) { alert(d?.error || "Credit booking failed"); setBusy(false); return; }
         if (d.booked) {
-          setState(s=> ({ ...s, step: "thankyou" }));
+          setState(s=> ({ ...s, step: "thankyou" })); // universal thank you
           setTimeout(reportHeight, 60);
           setBusy(false);
           return;
@@ -486,10 +469,7 @@ function Confirm({ state, setState }) {
         return;
       }
 
-      // One-off payment flow — open tab up-front to bypass popup blockers
-      const win = openNewTab();
-      if (!win) { alert("Please allow popups for checkout, or use a different browser."); setBusy(false); return; }
-
+      // One-off payment flow
       const payload = {
         customer: state.customer,
         has_tap: true,
@@ -506,20 +486,17 @@ function Confirm({ state, setState }) {
       try { d = await r.json(); }
       catch (e) {
         const text = await r.text().catch(() => "");
-        win.close();
         alert(`Payment failed to initialise (${r.status}). ${text?.slice(0,180) || ""}`);
         setBusy(false);
         return;
       }
 
       if (!d?.ok || !d?.url) {
-        win.close();
         alert(d?.error || "Payment failed to initialise");
         setBusy(false);
         return;
       }
-      // Go to Stripe in the new tab
-      win.location.href = d.url;
+      try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
     } catch (err) {
       console.error("[Confirm.pay] error", err);
       alert("Something went wrong. Please try again.");
@@ -669,12 +646,12 @@ function App(){
       }
 
       if (!afterLogin && !fromSub && !thankyouFlag) {
-        window.location.href = "/login.html";
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
         return;
       }
 
       if (!token) {
-        window.location.href = "/login.html";
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
         return;
       }
 
@@ -696,7 +673,7 @@ function App(){
         setState(s => ({ ...s, token, user, customer, credits, subscriptions: subs, step: "services" }));
       } catch {
         localStorage.removeItem('GM_TOKEN');
-        window.location.href = "/login.html";
+        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
       }
     })();
   }, []); // eslint-disable-line
