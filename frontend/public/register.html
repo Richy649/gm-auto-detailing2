@@ -79,14 +79,22 @@
       align-items:center;
       justify-content:space-between;
       gap:12px;
-      flex-wrap:wrap;
+      flex-wrap:nowrap;
     }
-    .inline-check label {
-      margin:0;
+    .inline-check .question {
+      font-size:16px; /* Slightly larger */
       font-weight:700;
-      font-size:16px; /* Bigger question text */
       flex:1;
+      display:flex;
+      align-items:center;
+      gap:8px;
     }
+    .inline-check .tap-hint {
+      font-size:14px;
+      color:var(--muted);
+      font-style:italic;
+    }
+
     .inline-check input[type="checkbox"] {
       appearance:none;
       width:46px;
@@ -119,16 +127,6 @@
     /* Yes/No dynamic text */
     #has_tap:checked + span.toggle-label::after { content:"Yes"; color:var(--green); font-weight:600; margin-left:6px; }
     #has_tap:not(:checked) + span.toggle-label::after { content:"No"; color:#b00; font-weight:600; margin-left:6px; }
-
-    /* Front/Back helper */
-    .tap-hint {
-      width:100%;
-      font-size:14px;
-      color:var(--muted);
-      margin-top:4px;
-      text-align:right;
-      font-style:italic;
-    }
 
     /* Button */
     .gm.btn.primary.register-submit {
@@ -174,10 +172,12 @@
 
         <!-- Outhouse tap -->
         <div class="row inline-check">
-          <label for="has_tap">Do you have an outhouse tap?</label>
+          <div class="question">
+            <label for="has_tap">Do you have an outhouse tap?</label>
+            <span class="tap-hint">(Front / Back)</span>
+          </div>
           <input id="has_tap" name="has_tap" type="checkbox" class="gm input" checked />
           <span class="toggle-label"></span>
-          <div class="tap-hint">Front / Back</div>
         </div>
 
         <div class="row">
