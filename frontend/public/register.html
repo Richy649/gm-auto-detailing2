@@ -6,7 +6,6 @@
   <title>Create account — GM Auto Detailing</title>
   <link rel="stylesheet" href="/calendar.css" />
   <style>
-    /* ===== Tokens (soft, consistent look) ===== */
     :root {
       --bg:#faf8f5;
       --card:#ffffff;
@@ -16,7 +15,6 @@
       --accent:#222;
       --green:#23a35a;
 
-      --radius-s:12px;
       --radius-m:16px;
       --shadow-1:0 2px 10px rgba(0,0,0,.06);
       --shadow-2:0 6px 22px rgba(0,0,0,.08);
@@ -30,8 +28,6 @@
       --ring:rgba(34,34,34,0.30);
     }
 
-    * { box-sizing: border-box; }
-
     body.gm {
       margin:0;
       font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
@@ -43,7 +39,6 @@
     }
 
     .auth-wrap { max-width:520px; margin:32px auto; }
-
     .gm.logo { display:block; width:150px; margin:0 auto 14px; object-fit:contain; }
 
     .panel {
@@ -78,14 +73,20 @@
       box-shadow:0 0 0 var(--ring-w) var(--ring);
     }
 
-    /* Outhouse tap: styled toggle (Yes/No) */
+    /* Outhouse tap toggle */
     .inline-check {
       display:flex;
       align-items:center;
       justify-content:space-between;
       gap:12px;
+      flex-wrap:wrap;
     }
-    .inline-check label { margin:0; font-weight:600; flex:1; }
+    .inline-check label {
+      margin:0;
+      font-weight:700;
+      font-size:16px; /* Bigger question text */
+      flex:1;
+    }
     .inline-check input[type="checkbox"] {
       appearance:none;
       width:46px;
@@ -114,15 +115,20 @@
     .inline-check input[type="checkbox"]:checked::after {
       transform:translateX(20px);
     }
-    .inline-check::after {
-      content:attr(data-label);
-      margin-left:8px;
-      font-size:var(--fs-sm);
+
+    /* Yes/No dynamic text */
+    #has_tap:checked + span.toggle-label::after { content:"Yes"; color:var(--green); font-weight:600; margin-left:6px; }
+    #has_tap:not(:checked) + span.toggle-label::after { content:"No"; color:#b00; font-weight:600; margin-left:6px; }
+
+    /* Front/Back helper */
+    .tap-hint {
+      width:100%;
+      font-size:14px;
       color:var(--muted);
+      margin-top:4px;
+      text-align:right;
+      font-style:italic;
     }
-    /* Dynamic Yes/No text */
-    #has_tap:checked + span::after { content:"Yes"; color:var(--green); font-weight:600; }
-    #has_tap:not(:checked) + span::after { content:"No"; color:#b00; font-weight:600; }
 
     /* Button */
     .gm.btn.primary.register-submit {
@@ -140,7 +146,6 @@
     .gm.btn.primary.register-submit:hover { box-shadow:var(--shadow-2); transform:translateY(-1px); }
     .gm.btn.primary.register-submit:focus-visible { outline:none; box-shadow:0 0 0 var(--ring-w) var(--ring), var(--shadow-2); }
 
-    /* Message */
     #msg.alert {
       font-size:var(--fs-sm);
       color:#b00020;
@@ -150,18 +155,13 @@
       padding:10px 12px;
       text-align:center;
     }
-
-    @media (max-width:380px){
-      .panel { padding:16px; }
-      .gm.btn.primary.register-submit { font-size:17px; }
-    }
   </style>
 </head>
 <body class="gm">
   <div class="page-section wrap auth-wrap">
     <img class="gm logo" src="/logo.png" alt="GM Auto Detailing" />
 
-    <div class="panel" style="padding:18px">
+    <div class="panel">
       <div class="h2 center" style="margin-bottom:10px">Create your account</div>
 
       <form class="gm form" id="regForm">
@@ -176,7 +176,8 @@
         <div class="row inline-check">
           <label for="has_tap">Do you have an outhouse tap?</label>
           <input id="has_tap" name="has_tap" type="checkbox" class="gm input" checked />
-          <span></span>
+          <span class="toggle-label"></span>
+          <div class="tap-hint">Front / Back</div>
         </div>
 
         <div class="row">
