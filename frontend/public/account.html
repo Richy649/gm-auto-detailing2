@@ -1,197 +1,148 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Your Account • GM Auto Detailing</title>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>
-      :root { --bg:#ffffff; --card:#fff; --border:#e3e0d7; --text:#111; --muted:#666; --accent:#222; }
-      * { box-sizing: border-box; }
-      body { font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); margin:0; padding:20px; color:var(--text); }
-      .container { max-width:960px; margin:0 auto; }
-      .card { background:#fff; border:1px solid var(--border); border-radius:18px; padding:18px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
-      .center { text-align:center; }
-      .logo { width:200px; height:auto; display:block; margin: 8px auto 10px; }
-      .btn { padding:14px 20px; border-radius:999px; border:2px solid #ddd; background:#fff; font-weight:800; font-size:18px; letter-spacing:.2px; cursor:pointer; color:#111; }
-      .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
-      .actions-row { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
-      .equal { min-width:220px; }
-      .stack { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
-      .row { display:flex; flex-direction:column; gap:6px; position:relative; }
-      label { font-size:14px; font-weight:700; color:#333; }
-      input { padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px; width:100%; }
-      .muted { color:var(--muted); font-size:14px; }
-      h2 { margin:8px 0 12px; font-weight:800; text-align:center; }
-      .credits { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
-      .pill { padding:10px 16px; border:2px solid #ddd; border-radius:999px; font-weight:800; background:#fff; }
-      .small-note { font-size:13px; color:#444; text-align:center; margin-top:6px; }
-      @media (max-width:800px){ .stack{ grid-template-columns:1fr; } }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Your account — GM Auto Detailing</title>
+  <link rel="stylesheet" href="/calendar.css" />
+  <style>
+    .acct-wrap { max-width: 820px; margin: 24px auto 40px; }
+    .gm.logo { display:block; width:170px; margin: 0 auto 10px; }
+    .sub-manage { position:relative; font-size:13px; margin: 6px 0 12px; }
+    .sub-manage a { color:#111; text-decoration:none; border:1px solid #ccc; border-radius:999px; padding:6px 10px; }
+    .panel-joined { padding: 18px; }
+    .section-title { font-weight:700; margin:18px 0 8px; font-size:18px; }
+    .row-line { display:flex; justify-content:space-between; padding:8px 0; border-top:1px solid #eee; }
+    .row-line:first-of-type { border-top:none; }
+    .muted { color:#555; }
+    .cap { text-transform:capitalize; }
+    .book-item { padding:8px 0; border-top:1px dashed #ddd; }
+    .book-item:first-of-type { border-top:none; }
+    .empty { color:#666; padding:8px 0; }
+  </style>
+</head>
+<body class="gm">
+  <div class="page-section wrap acct-wrap">
+    <img class="gm logo" src="/logo.png" alt="GM Auto Detailing" />
 
-      <div class="center" style="margin-bottom:12px;">
-        <button id="portal" class="btn equal">Manage subscription</button>
-      </div>
-
-      <div class="card" style="margin-bottom:12px;">
-        <h2>Your credits</h2>
-        <div id="credits" class="credits"></div>
-      </div>
-
-      <div class="card" style="margin-bottom:12px;">
-        <h2>Upcoming booking</h2>
-        <div id="upcoming" class="center muted">Loading…</div>
-      </div>
-
-      <div class="card">
-        <h2>Your details</h2>
-        <div class="stack">
-          <div class="row"><label>Name</label><input id="name"/></div>
-          <div class="row"><label>Phone</label><input id="phone" autocomplete="tel"/></div>
-          <div class="row"><label>Email</label><input id="email" type="email" disabled/></div>
-          <div class="row"><label>Street</label><input id="street" autocomplete="address-line1"/></div>
-          <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code"/></div>
-          <div class="row">
-            <label>Password</label>
-            <div style="display:flex; gap:8px;">
-              <input id="password" type="password" placeholder="Set a new password (optional)" style="flex:1;"/>
-              <button id="togglepw" class="btn" style="min-width:110px;">View</button>
-            </div>
-          </div>
-        </div>
-        <p class="muted" id="subs" style="margin-top:10px; text-align:center;"></p>
-        <div class="actions-row" style="margin-top:12px;">
-          <button id="save" class="btn primary equal">Save changes</button>
-          <button id="signout" class="btn equal">Sign out</button>
-        </div>
-        <div id="msg" class="small-note"></div>
-      </div>
+    <!-- Smaller "Manage subscription" under the logo, top-left -->
+    <div class="sub-manage">
+      <a id="manageSubLink" href="#" style="display:none">Manage subscription</a>
     </div>
 
-    <script>
-      function reportHeight(){
-        const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
-        try { window.parent.postMessage({ type:"GM_HEIGHT", height:h }, "*"); } catch {}
+    <!-- One big joined panel -->
+    <div class="panel panel-joined" id="panel">
+      <div class="h2" style="margin-bottom:6px">Your account</div>
+
+      <!-- Profile -->
+      <div class="section-title">Profile</div>
+      <div class="row-line"><div>Name</div><div id="name" class="muted"></div></div>
+      <div class="row-line"><div>Email</div><div id="email" class="muted"></div></div>
+      <div class="row-line"><div>Phone</div><div id="phone" class="muted"></div></div>
+      <div class="row-line"><div>Address</div><div id="addr" class="muted"></div></div>
+
+      <!-- Credits -->
+      <div class="section-title">Credits</div>
+      <div class="row-line"><div>Exterior</div><div id="c_ext" class="muted"></div></div>
+      <div class="row-line"><div>Full</div><div id="c_full" class="muted"></div></div>
+
+      <!-- Active membership (moved to just below Credits) -->
+      <div class="section-title">Active membership</div>
+      <div id="membershipArea" class="muted">None</div>
+
+      <!-- Upcoming bookings -->
+      <div class="section-title" style="margin-top:18px">Upcoming bookings</div>
+      <div id="bookings"></div>
+
+      <!-- Actions -->
+      <div style="display:flex; gap:10px; margin-top:18px">
+        <a class="gm btn" href="/index.html">Book now</a>
+        <button class="gm btn" id="logout">Log out</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API_ROOT = "https://gm-auto-detailing2.onrender.com";
+    const API = `${API_ROOT}/api`;
+
+    const token = localStorage.getItem("GM_TOKEN") || "";
+    if (!token) window.location.href = "/login.html";
+
+    const $ = (s) => document.querySelector(s);
+
+    function setText(id, v) { const el = $(id); if (el) el.textContent = v || ""; }
+
+    async function loadMe() {
+      const r = await fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) { localStorage.removeItem("GM_TOKEN"); window.location.href="/login.html"; return; }
+      const d = await r.json();
+      if (!d?.ok) { localStorage.removeItem("GM_TOKEN"); window.location.href="/login.html"; return; }
+
+      const u = d.user || {};
+      setText("#name", u.name || "");
+      setText("#email", u.email || "");
+      setText("#phone", u.phone || "");
+      setText("#addr", [u.street, u.postcode].filter(Boolean).join(", "));
+
+      const credits = d.credits || { exterior:0, full:0 };
+      setText("#c_ext", String(credits.exterior || 0));
+      setText("#c_full", String(credits.full || 0));
+
+      // Membership
+      const subs = d.subscriptions || [];
+      const live = subs.find(s => ["active","trialing","past_due"].includes(s.status));
+      const memEl = $("#membershipArea");
+      if (live) {
+        const label = live.tier ? (live.tier[0].toUpperCase() + live.tier.slice(1)) : "Membership";
+        const next = live.current_period_end ? new Date(live.current_period_end*1000).toLocaleDateString("en-GB") : "";
+        memEl.textContent = `${label} — renews ${next}`;
+      } else {
+        memEl.textContent = "None";
       }
-      window.addEventListener("load", reportHeight);
-      window.addEventListener("resize", () => setTimeout(reportHeight, 60));
-      setInterval(reportHeight, 900);
 
-      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
-        ? 'https://gm-auto-detailing2.onrender.com' : '';
-      const token = localStorage.getItem('GM_TOKEN') || "";
-      if (!token) location.href = "/login.html";
-
-      function el(id){ return document.getElementById(id); }
-
-      function fmtSvc(key){
-        switch (key) {
-          case "exterior": return "Exterior Detail";
-          case "full": return "Full Detail";
-          case "standard_membership": return "Standard Membership";
-          case "premium_membership":  return "Premium Membership";
-          default: return key || "Service";
-        }
-      }
-
-      function renderUpcoming(row){
-        const box = el("upcoming");
-        if (!row) { box.textContent = "No upcoming booking."; return; }
-        const start = new Date(row.start_time);
-        const when = start.toLocaleString('en-GB', { timeZone: 'Europe/London', weekday:'long', day:'numeric', month:'long', hour:'2-digit', minute:'2-digit', hour12:false });
-        box.textContent = `${when} — ${fmtSvc(row.service_key)}`;
-      }
-
-      async function loadUpcoming(){
-        try {
-          const r = await fetch(`${API}/api/my/bookings/upcoming`, { headers: { Authorization: `Bearer ${token}` } });
-          const d = await r.json().catch(()=> ({}));
-          if (d?.ok) renderUpcoming(d.booking || null);
-          else renderUpcoming(null);
-        } catch { renderUpcoming(null); }
-      }
-
-      async function load(){
-        const r = await fetch(`${API}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!r.ok) { localStorage.removeItem('GM_TOKEN'); location.href="/login.html"; return; }
-        const d = await r.json();
-
-        const credits = d.credits || { exterior:0, full:0 };
-        const c = el("credits");
-        c.innerHTML = "";
-        const p1 = document.createElement("div"); p1.className="pill"; p1.textContent = `Exterior Detail credits: ${credits.exterior||0}`;
-        const p2 = document.createElement("div"); p2.className="pill"; p2.textContent = `Full Detail credits: ${credits.full||0}`;
-        c.appendChild(p1); c.appendChild(p2);
-
-        el("name").value = d.user?.name || "";
-        el("phone").value = d.user?.phone || "";
-        el("email").value = d.user?.email || "";
-        el("street").value = d.user?.street || "";
-        el("postcode").value = d.user?.postcode || "";
-
-        const subsText = (d.subscriptions||[]).map(s=>{
-          if (!s?.tier) return null;
-          const label = s.tier === "premium" ? "Premium membership" : "Standard membership";
-          const until = s.current_period_end ? new Date(s.current_period_end*1000).toLocaleString('en-GB',{ day:'numeric', month:'short', year:'numeric' }) : "";
-          return `${label} — renews around ${until}`;
-        }).filter(Boolean).join(" • ");
-        el("subs").textContent = subsText || "No active membership.";
-
-        el("portal").onclick = async () => {
-          const rr = await fetch(`${API}/api/memberships/portal`, { method:"GET", headers: { Authorization:`Bearer ${token}` }});
-          const pd = await rr.json().catch(()=> ({}));
-          if (pd?.ok && pd?.url) {
-            try { window.top.location.href = pd.url; } catch { location.href = pd.url; }
-          } else {
-            el("msg").textContent = "We couldn’t open your subscription portal. If you’ve just subscribed, please wait a moment and try again.";
-          }
+      // Manage subscription link
+      const manageLink = $("#manageSubLink");
+      if (live) {
+        manageLink.style.display = "inline-block";
+        manageLink.onclick = async (e) => {
+          e.preventDefault();
+          const r = await fetch(`${API}/memberships/portal`, { method:"POST", headers:{ Authorization:`Bearer ${token}` } });
+          const j = await r.json().catch(()=>({}));
+          if (j?.url) window.location.href = j.url;
         };
-
-        el("signout").onclick = () => {
-          localStorage.removeItem('GM_TOKEN');
-          location.href = '/login.html';
-        };
-
-        reportHeight();
       }
 
-      el("togglepw").onclick = (e) => {
-        e.preventDefault();
-        const inp = el("password");
-        const showing = inp.type === "text";
-        inp.type = showing ? "password" : "text";
-        el("togglepw").textContent = showing ? "View" : "Hide";
-      };
-
-      el("save").onclick = async () => {
-        const payload = {
-          name: el("name").value.trim(),
-          phone: el("phone").value.trim(),
-          street: el("street").value.trim(),
-          postcode: el("postcode").value.trim()
-        };
-        const newpw = el("password").value;
-        if (newpw) payload.new_password = newpw;
-
-        const r = await fetch(`${API}/api/auth/me`, {
-          method:"PUT",
-          headers:{ "Content-Type":"application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify(payload)
-        });
-        const d = await r.json().catch(()=> ({}));
-        if (d?.ok) {
-          localStorage.removeItem('GM_TOKEN');
-          location.href = '/login.html';
+      // Upcoming bookings
+      try {
+        const br = await fetch(`${API}/my/bookings`, { headers:{ Authorization:`Bearer ${token}` } });
+        const bj = await br.json().catch(()=>({}));
+        const list = Array.isArray(bj?.bookings) ? bj.bookings : [];
+        const cont = $("#bookings");
+        cont.innerHTML = "";
+        if (!list.length) {
+          const d = document.createElement("div");
+          d.className = "empty";
+          d.textContent = "No upcoming bookings";
+          cont.appendChild(d);
         } else {
-          el("msg").textContent = "We couldn’t save your changes. Please check your details and try again.";
+          for (const b of list) {
+            const row = document.createElement("div");
+            row.className = "book-item";
+            const when = b.start_iso ? new Date(b.start_iso).toLocaleString("en-GB",{ hour12:false, hour:"2-digit", minute:"2-digit", weekday:"short", day:"numeric", month:"short", year:"numeric" }) : "";
+            row.textContent = `${(b.service_key || "").replace("_"," ")} — ${when}`;
+            cont.appendChild(row);
+          }
         }
-      };
+      } catch {}
+    }
 
-      load().then(loadUpcoming).catch(()=> { alert("Failed to load account."); });
-    </script>
-  </body>
+    $("#logout").addEventListener("click", () => {
+      localStorage.removeItem("GM_TOKEN");
+      window.location.href = "/login.html";
+    });
+
+    loadMe();
+  </script>
+</body>
 </html>
