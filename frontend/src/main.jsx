@@ -531,18 +531,21 @@ function ThankYou({ kind, onBook, onAccount }) {
         <div className="gm h2 center thankyou-title">Thank you for your booking!</div>
 
         <p className="thankyou-copy">
-          If you’ve just subscribed to the membership, first of all, welcome! I hope you love it.
+          If you’ve just subscribed to the membership — first of all, welcome! I hope you love it.
           You’ve been awarded <strong>2 credits</strong>; press <em>Book now</em> if you’d like to pick a slot,
           <span className="note-inline"> or not — they will stay in your account for 30 days.</span>
         </p>
 
         <p className="thankyou-copy">
-          If you’ve just used a credit or paid for a one-off slot, you are all booked in, and I look forward to seeing you.
+          If you’ve just used a credit or paid for a one-off slot, you are all booked in and I look forward to seeing you.
         </p>
 
         <div className="thankyou-actions">
-         <button className="btn-large alt" onClick={onBook}>Book now</button>
-<button className="btn-large primary" onClick={onAccount}>View account</button>
+          {/* Book now = white button with black text */}
+          <button className="btn-large alt" onClick={onBook}>Book now</button>
+
+          {/* View account = black button with white text */}
+          <button className="btn-large primary" onClick={onAccount}>
             <span style={{ marginRight:6 }}>View account</span><HeadIcon />
           </button>
         </div>
@@ -550,6 +553,7 @@ function ThankYou({ kind, onBook, onAccount }) {
     </div>
   );
 }
+
 
 /* ================== APP ================== */
 function App(){
