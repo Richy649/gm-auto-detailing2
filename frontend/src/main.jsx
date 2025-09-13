@@ -541,12 +541,19 @@ function ThankYou({ kind, onBook, onAccount }) {
         </p>
 
         <div className="thankyou-actions">
-          {/* Book now = white with black */}
-          <button className="btn-large alt" onClick={onBook}>Book now</button>
+          {/* Book now — white pill, black text */}
+          <button className="btn-large" onClick={onBook}>Book now</button>
 
-          {/* View account = also white with black */}
-          <button className="btn-large alt" onClick={onAccount}>
-            <span style={{ marginRight:6 }}>View account</span><HeadIcon />
+          {/* View account — larger text-only with simple profile icon */}
+          <button className="btn-text" onClick={onAccount}>
+            <svg xmlns="http://www.w3.org/2000/svg"
+                 width="22" height="22" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                 aria-hidden="true" focusable="false">
+              <circle cx="12" cy="7" r="4"></circle>
+              <path d="M5.5 21c1.5-3.5 5-6 6.5-6s5 2.5 6.5 6"></path>
+            </svg>
+            View account
           </button>
         </div>
       </div>
