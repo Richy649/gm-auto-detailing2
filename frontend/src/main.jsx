@@ -523,22 +523,25 @@ function Confirm({ state, setState }) {
 
 /* ================== THANK YOU ================== */
 function ThankYou({ kind, onBook, onAccount }) {
-  const isSub  = kind === "sub";
-  const title  = isSub ? "Thank you for subscribing!" : "Thank you so much for booking with me!";
-  const body   = isSub
-    ? "You now have two credits on your account. I can’t wait to get your vehicle looking its best. Pick a time that suits you."
-    : "Your booking is confirmed. I’m looking forward to seeing you and taking great care of your car. You’ll receive an email with the details.";
-
   return (
-    <div className="gm page-section gm-booking wrap">
-      <div className="gm panel wider" style={{ textAlign:"center" }}>
+    <div className="gm page-section gm-booking wrap thankyou">
+      <div className="gm panel wider thankyou-card">
         <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
-        <div className="gm h2 center" style={{ fontSize:22, marginTop:10 }}>{title}</div>
-        <div style={{ maxWidth: 600, margin: "8px auto 0" }}>{body}</div>
 
-        <div style={{ marginTop: 16, display:"inline-flex", gap:10 }}>
-          {isSub && <PrimaryButton onClick={onBook}>Book now</PrimaryButton>}
-          <Button onClick={onAccount}><span style={{ marginRight:6 }}>View account</span><HeadIcon /></Button>
+        <div className="gm h2 center thankyou-title">Thank you for your booking!</div>
+
+        <p className="thankyou-copy">
+          If you’ve just subscribed to the membership — first of all, welcome! I hope you love it.
+          You’ve been awarded <strong>2 credits</strong>; press <em>Book now</em> if you’d like to pick a slot.
+          If you’ve just used a credit or paid for a one-off slot, I’m really looking forward to seeing you.
+        </p>
+
+        <div className="thankyou-actions">
+          {/* Keep both buttons available as before */}
+          <PrimaryButton onClick={onBook}>Book now</PrimaryButton>
+          <Button onClick={onAccount}>
+            <span style={{ marginRight:6 }}>View account</span><HeadIcon />
+          </Button>
         </div>
       </div>
     </div>
