@@ -92,9 +92,9 @@ function Services({ state, setState }) {
   // top right "View account"
   const TopRight = () => (
     <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
-     <Button className="account-btn" onClick={()=> window.location.href="/account.html"}>
-  <span style={{ fontWeight:800 }}>View account</span><span className="account-icon" aria-hidden="true"></span>
-</Button>
+      <Button onClick={()=> window.location.href="/account.html"}>
+        <span style={{ marginRight:6 }}>View account</span><HeadIcon />
+      </Button>
     </div>
   );
 
