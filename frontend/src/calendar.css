@@ -161,11 +161,11 @@ html, body {
 .thankyou-actions {
   margin-top: 20px;
   display: flex;
-  flex-direction: column;   /* full-width stacked by default (mobile-friendly) */
+  flex-direction: column;   /* full-width stacked by default */
   gap: 12px;
 }
 
-/* Buttons here should look like Login/Register buttons (identical style) */
+/* Login/Register-style pill button (white with black text) */
 .thankyou-actions .btn-large {
   padding: 16px 18px;
   border-radius: 999px;
@@ -176,32 +176,39 @@ html, body {
   font-size: 18px;
   letter-spacing: .2px;
   line-height: 1;
-}
-.thankyou-actions .btn-large.primary {
-  background: #222;
-  color: #fff;
-  border-color: #222;
-}
-.thankyou-actions .btn-large.alt {
   background: #fff;
-  color: #222;
-  border-color: #ddd;
-}
-.thankyou-actions .btn-large:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  color: #111;
 }
 
-/* On wider screens, place buttons side-by-side neatly */
+/* Text-only large button (no border), used for View account */
+.thankyou-actions .btn-text {
+  background: none;
+  border: none;
+  color: #111;
+  font-weight: 700;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 14px 18px;      /* keep tap target large */
+}
+
+.thankyou-actions .btn-text:hover { color: #444; }
+.thankyou-actions .btn-large:disabled,
+.thankyou-actions .btn-text:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Side-by-side on wider screens */
 @media (min-width: 561px) {
   .thankyou-actions {
     flex-direction: row;
     justify-content: center;
   }
-  .thankyou-actions .btn-large { width: auto; min-width: 220px; }
+  .thankyou-actions .btn-large,
+  .thankyou-actions .btn-text { width: auto; min-width: 220px; justify-content: center; }
 }
 
 /* Motion safety */
 @media (prefers-reduced-motion: reduce) {
-  .thankyou-card, .thankyou-actions .btn-large { transition: none !important; }
+  .thankyou-card, .thankyou-actions .btn-large, .thankyou-actions .btn-text { transition: none !important; }
 }
