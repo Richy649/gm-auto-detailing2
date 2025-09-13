@@ -1,94 +1,100 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Create account • GM Auto Detailing</title>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>
-      :root { --bg:#ffffff; --card:#fff; --border:#e3e0d7; --text:#111; }
-      * { box-sizing: border-box; }
-      body { font-family: 'Montserrat', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); margin:0; padding:20px; color:var(--text); }
-      .card { max-width:640px; margin:20px auto; background:#fff; border:1px solid var(--border); border-radius:16px; padding:24px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
-      .logo { display:block; width:180px; margin:8px auto 12px; }
-      h2 { text-align:center; margin:0 0 16px; font-weight:800; }
-      .grid { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
-      .row { display:flex; flex-direction:column; gap:6px; }
-      label { font-size:14px; font-weight:700; }
-      input, select { padding:14px 16px; border:1px solid #ddd; border-radius:14px; font-size:18px; }
-      button { padding:16px 18px; border-radius:999px; border:0; background:#222; color:#fff; font-weight:800; cursor:pointer; width:100%; font-size:18px; letter-spacing:.2px; }
-      @media (max-width:720px){ .grid{ grid-template-columns:1fr; } }
-      .err { margin-top:10px; text-align:center; color:#b00020; font-weight:700; }
-      .muted { color:#666; font-size:14px; text-align:center; }
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <img class="logo" src="/logo.png" alt="GM Auto Detailing" />
-      <h2>Create account</h2>
-      <div class="row"><label>Email</label><input id="email" type="email" autocomplete="email" /></div>
-      <div class="row"><label>Password</label><input id="password" type="password" autocomplete="new-password" /></div>
-      <div class="grid">
-        <div class="row"><label>Name</label><input id="name" autocomplete="name" /></div>
-        <div class="row"><label>Phone</label><input id="phone" autocomplete="tel" /></div>
-      </div>
-      <div class="grid">
-        <div class="row"><label>Street</label><input id="street" autocomplete="address-line1" /></div>
-        <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code" /></div>
-      </div>
-      <div class="row">
-        <label>Outhouse tap?</label>
-        <select id="hasTap">
-          <option value="">Select…</option>
-          <option value="yes">Yes</option>
-          <option value="no">No</option>
-        </select>
-      </div>
-      <button id="go">Create account</button>
-      <div id="err" class="err" style="display:none;"></div>
-      <p class="muted" style="margin-top:10px;">Already have an account? <a href="/login.html">Login</a></p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Create account — GM Auto Detailing</title>
+  <link rel="stylesheet" href="/calendar.css" />
+  <style>
+    /* Page-specific polish */
+    .auth-wrap { max-width: 520px; margin: 32px auto; }
+    .gm.logo { display:block; width:150px; margin: 0 auto 14px; }
+    .gm.form .row { margin-bottom: 10px; }
+    .gm.form label { display:block; margin: 0 0 4px; font-weight:600; }
+    .gm.form input[type="text"],
+    .gm.form input[type="email"],
+    .gm.form input[type="password"] {
+      width:100%; border:1px solid #ccc; border-radius:10px; padding:10px 12px; font-size:16px;
+    }
+    .gm.form .help { font-size:12px; color:#555; margin-top:4px; }
+    .tap-group { display:flex; gap:12px; align-items:center; }
+    .tap-pill { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border:1px solid #ccc; border-radius:999px; cursor:pointer; }
+    .tap-pill input { transform: scale(1.1); }
+    .action-row { display:flex; justify-content:flex-end; }
+    .gm.btn.primary { width:100%; font-weight:700; }
+  </style>
+</head>
+<body class="gm">
+  <div class="page-section wrap auth-wrap">
+    <img class="gm logo" src="/logo.png" alt="GM Auto Detailing" />
+    <div class="panel" style="padding:18px 18px 16px">
+      <div class="h2 center" style="margin-bottom:10px">Create your account</div>
+      <form class="gm form" id="regForm">
+        <div class="row"><label for="name">Full name</label><input id="name" name="name" type="text" autocomplete="name" required /></div>
+        <div class="row"><label for="phone">Phone</label><input id="phone" name="phone" type="text" autocomplete="tel" required /></div>
+        <div class="row"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required /></div>
+        <div class="row"><label for="street">Street address</label><input id="street" name="street" type="text" autocomplete="address-line1" required /></div>
+        <div class="row"><label for="postcode">Postcode</label><input id="postcode" name="postcode" type="text" autocomplete="postal-code" required /></div>
+        <div class="row"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" required /></div>
+
+        <!-- Outhouse tap (same font + “tick yes or no”) -->
+        <div class="row">
+          <label style="margin-bottom:6px">Do you have an outhouse tap?</label>
+          <div class="tap-group" role="radiogroup" aria-label="Outhouse tap">
+            <label class="tap-pill"><input type="radio" name="has_tap" value="yes" checked /> Yes</label>
+            <label class="tap-pill"><input type="radio" name="has_tap" value="no" /> No</label>
+          </div>
+          <div class="help">We need an outdoor tap for water access during your appointment.</div>
+        </div>
+
+        <div class="row action-row">
+          <!-- Copy the look/feel of the login button -->
+          <button class="gm btn primary" type="submit">Create account</button>
+        </div>
+      </form>
+      <div id="msg" class="alert" style="display:none;margin-top:10px"></div>
     </div>
-    <script>
-      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
-        ? 'https://gm-auto-detailing2.onrender.com' : '';
-      const $ = (id)=> document.getElementById(id);
+  </div>
 
-      $("go").onclick = async () => {
-        const payload = {
-          email: $("email").value.trim(),
-          password: $("password").value,
-          name: $("name").value.trim(),
-          phone: $("phone").value.trim(),
-          street: $("street").value.trim(),
-          postcode: $("postcode").value.trim(),
-        };
-        const tap = $("hasTap").value;
-        const err = $("err");
-        err.style.display = "none";
+  <script>
+    const API_ROOT = "https://gm-auto-detailing2.onrender.com";
+    const API = `${API_ROOT}/api`;
 
-        if (!payload.email || !payload.password || !payload.name || !payload.phone || !payload.street || !payload.postcode || !tap) {
-          err.textContent = "Please fill out all boxes.";
-          err.style.display = "block";
-          return;
-        }
-        if (tap !== "yes") {
-          err.textContent = "We can only serve addresses with an outdoor tap. Please check again.";
-          err.style.display = "block";
-          return;
-        }
-        const r = await fetch(`${API}/api/auth/register`, {
-          method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-        const data = await r.json().catch(()=> ({}));
-        if (data.ok && data.token) {
-          localStorage.setItem('GM_TOKEN', data.token);
-          location.href = '/?afterLogin=1';
-        } else {
-          err.textContent = "We couldn’t create your account. Please check your details and try again.";
-          err.style.display = "block";
-        }
+    const $ = (s) => document.querySelector(s);
+    const msg = $("#msg");
+    function showError(t) { msg.textContent = t; msg.style.display = "block"; }
+    function clearMsg() { msg.style.display = "none"; }
+
+    document.getElementById("regForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearMsg();
+
+      const hasTap = document.querySelector("input[name='has_tap']:checked")?.value === "yes";
+      const payload = {
+        name: $("#name").value.trim(),
+        phone: $("#phone").value.trim(),
+        email: $("#email").value.trim(),
+        street: $("#street").value.trim(),
+        postcode: $("#postcode").value.trim(),
+        password: $("#password").value,
+        has_tap: hasTap
       };
-    </script>
-  </body>
+
+      try {
+        const r = await fetch(`${API}/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const d = await r.json();
+        if (!d?.ok || !d?.token) { showError(d?.error || "Registration failed."); return; }
+        localStorage.setItem("GM_TOKEN", d.token);
+        // After creating account, go straight into the app flow
+        window.location.href = "/index.html?afterLogin=1";
+      } catch (err) {
+        showError("Network error. Please try again.");
+      }
+    });
+  </script>
+</body>
 </html>
