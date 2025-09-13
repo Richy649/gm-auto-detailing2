@@ -6,14 +6,19 @@
     <title>Your Account • GM Auto Detailing</title>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet"> 
     <style>
-      /* ===== Tokens (non-invasive) ===== */
+      /* ===== Design tokens (softened look) ===== */
       :root {
-        --bg:#ffffff;
+        --bg:#faf8f5;               /* subtle warm off-white */
         --card:#ffffff;
-        --border:#e3e0d7;
-        --text:#111111;
-        --muted:#666666;
+        --border:#e6e1d8;
+        --text:#1c1c1c;             /* slightly softer than #111 */
+        --muted:#6e6e6e;
         --accent:#222222;
+
+        --green:#23a35a;
+        --green-ink:#0b6b37;
+        --green-border:#cfe9db;
+        --green-tint:#f2f7f4;
 
         --radius-s:12px;
         --radius-m:16px;
@@ -21,7 +26,7 @@
         --shadow-1:0 2px 10px rgba(0,0,0,.06);
         --shadow-2:0 6px 22px rgba(0,0,0,.08);
         --ring-w:2px;
-        --ring:rgba(34,34,34,0.3);
+        --ring:rgba(35,163,90,0.35);
 
         --fs-sm:14px;
         --fs-md:clamp(14px,1.6vw,16px);
@@ -48,24 +53,43 @@
 
       /* ===== Layout ===== */
       .container { max-width:960px; margin:0 auto; }
-      .center { text-align:center; } /* keep default behavior */
+      .center { text-align:center; }
 
-      /* Make ONLY the first center block (Manage subscription) align left */
+      /* Keep Manage subscription smaller + left */
       .container > .center:first-of-type { text-align:left; }
 
       .logo { width:200px; height:auto; display:block; margin:8px auto 10px; object-fit:contain; }
 
-      .card {
-        background:#fff;
+      /* --- Unified card stack (no markup changes) --- */
+      .card { 
+        background:var(--card);
         border:1px solid var(--border);
-        border-radius:var(--radius-l);
         padding:18px;
         box-shadow:var(--shadow-1);
         transition:box-shadow .16s,border-color .16s;
+        margin:0 !important;                  /* ignore inline margins to unify */
+        border-radius:0;                      /* flat by default; we’ll round the stack ends */
       }
       .card:hover { box-shadow:var(--shadow-2); }
 
-      h2 { margin:8px 0 12px; font-weight:800; text-align:center; font-size:var(--fs-lg); letter-spacing:.2px; }
+      /* First/last card get rounded corners to simulate a single box */
+      .container .card:first-of-type { border-top-left-radius:var(--radius-l); border-top-right-radius:var(--radius-l); }
+      .container .card:last-of-type  { border-bottom-left-radius:var(--radius-l); border-bottom-right-radius:var(--radius-l); }
+
+      /* Seamless borders between adjacent cards */
+      .card + .card { border-top:0; }
+
+      /* Section headers inside the unified box */
+      h2 { 
+        margin:4px 0 12px; 
+        font-weight:700;                      /* lighter than 800 per your feedback */
+        text-align:center; 
+        font-size:var(--fs-lg); 
+        letter-spacing:.1px; 
+        color:#222; 
+        padding-bottom:8px;
+        border-bottom:1px solid var(--border);
+      }
 
       /* ===== Controls ===== */
       .btn {
@@ -73,11 +97,11 @@
         border-radius:999px;
         border:2px solid #ddd;
         background:#fff;
-        font-weight:800;
+        font-weight:700;                      /* lighter than 800 */
         font-size:16px;
-        letter-spacing:.2px;
+        letter-spacing:.1px;
         cursor:pointer;
-        color:#111;
+        color:#222;
         min-height:var(--hit);
         line-height:1;
         transition:transform .14s, box-shadow .14s, filter .16s, border-color .16s;
@@ -88,7 +112,13 @@
       .btn:focus { outline:none; }
       .btn:focus-visible { box-shadow:0 0 0 var(--ring-w) var(--ring), var(--shadow-2); }
 
-      .btn.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+      .btn.primary { 
+        background:linear-gradient(180deg,#2a2a2a,#1f1f1f); 
+        color:#fff; 
+        border-color:#1f1f1f; 
+      }
+      .btn.primary:hover { filter:brightness(1.03); }
+
       .actions-row { display:flex; justify-content:center; gap:12px; flex-wrap:wrap; }
       .equal { min-width:220px; }
 
@@ -104,11 +134,11 @@
       .stack { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
       .row { display:flex; flex-direction:column; gap:6px; position:relative; }
 
-      label { font-size:var(--fs-sm); font-weight:700; color:#333; }
+      label { font-size:var(--fs-sm); font-weight:600; color:#333; }
 
       input {
         padding:12px 14px;
-        border:1px solid #ddd;
+        border:1px solid #d8d8d8;
         border-radius:12px;
         font-size:16px;
         width:100%;
@@ -120,30 +150,49 @@
         -webkit-appearance:none;
       }
       input::placeholder { color:#9a9a9a; }
-      input:focus-visible { border-color:var(--accent); box-shadow:0 0 0 var(--ring-w) var(--ring); }
+      input:focus-visible { border-color:var(--green); box-shadow:0 0 0 var(--ring-w) var(--ring); }
 
-      /* Toggle password button next to input */
+      /* Toggle password next to input */
       #togglepw.btn { min-width:110px; font-size:14px; padding:10px 12px; }
 
       .muted { color:var(--muted); font-size:var(--fs-sm); }
       .small-note { font-size:13px; color:#444; text-align:center; margin-top:6px; }
 
-      /* ===== Credits ===== */
-      .credits { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
-      .pill {
-        padding:10px 16px;
-        border:2px solid #ddd;
-        border-radius:999px;
-        font-weight:800;
-        background:#fff;
-        transition:border-color .16s, box-shadow .16s, transform .14s;
+      /* ===== Credits (restyled) ===== */
+      .credits { 
+        display:grid; 
+        grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); 
+        gap:12px; 
+        justify-items:stretch; 
       }
-      .pill:hover { box-shadow:var(--shadow-2); transform:translateY(-1px); }
+      .pill {
+        padding:12px 14px;
+        border:1px solid var(--green-border);
+        border-radius:14px;
+        background:linear-gradient(180deg,var(--green-tint),#ffffff);
+        color:var(--green-ink);
+        font-weight:700;
+        display:flex; 
+        align-items:center; 
+        justify-content:center;
+        box-shadow:0 1px 0 rgba(0,0,0,0.02), 0 2px 8px rgba(35,163,90,0.06);
+        transition:transform .14s, box-shadow .16s, border-color .16s, background .16s;
+      }
+      .pill:hover { 
+        transform:translateY(-1px);
+        box-shadow:0 4px 18px rgba(35,163,90,0.10);
+        border-color:#bfe1cf;
+      }
+
+      /* ===== Upcoming text ===== */
+      #upcoming.center.muted { color:#5c5c5c; }
 
       /* ===== Responsive ===== */
-      @media (max-width:800px){ .stack{ grid-template-columns:1fr; } .equal{ min-width:unset; width:100%; } }
+      @media (max-width:800px){
+        .stack{ grid-template-columns:1fr; }
+        .equal{ min-width:unset; width:100%; }
+      }
       @media (max-width:380px){
-        .card { border-radius:16px; }
         .btn { font-size:15px; }
         input { font-size:15px; }
       }
