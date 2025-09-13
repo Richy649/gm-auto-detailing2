@@ -6,9 +6,12 @@ import { createCalendarEvents } from "./gcal.js";
 
 /**
  * One-off payments (Exterior / Full):
- *  - For first-time clients, show 50% off on Stripe Checkout via a coupon (duration=once)
- *    that applies ONLY to the Exterior/Full products. Add-ons are not discounted.
- *  - Fallback: if coupon/price IDs are missing or ineligible, we halve the service price server-side.
+ *  - First-time is determined by PRIOR BOOKINGS (not merely user existence).
+ *    If a resolved user has ZERO bookings, they get the intro discount.
+ *  - For first-time clients, we prefer a Stripe coupon/promo (duration=once) that
+ *    applies ONLY to the Exterior/Full products so add-ons remain full price.
+ *  - If the discount cannot apply (env missing, ineligible, etc.), we fall back to
+ *    server-side half price so the customer still sees the correct total.
  *
  * ENV expected:
  *   STRIPE_SECRET_KEY               = sk_test_... / sk_live_...
@@ -18,10 +21,10 @@ import { createCalendarEvents } from "./gcal.js";
  *   ONEOFF_EXTERIOR_PRICE           = price_... (normal price for Exterior one-off)
  *   ONEOFF_FULL_PRICE               = price_... (normal price for Full one-off)
  *
- *   # You may supply EITHER a coupon id OR a promotion code id; the code will detect which is which.
+ *   # You may supply EITHER a coupon id OR a promotion code id:
  *   ONEOFF_INTRO_COUPON             = <coupon id or promo code id>
  *     - Coupon id examples:   "7rShjNWE" or "coupon_1QAZ...".
- *     - Promo code id:        "promo_ABC123..."
+ *     - Promotion code id:    "promo_ABC123..."
  *
  *   (Optional) Saved add-on prices:
  *     ADDON_WAX_PRICE               = price_...
@@ -40,52 +43,58 @@ const ENV = {
       "https://book.gmautodetailing.uk").trim(),
 
   ONEOFF_EXTERIOR_PRICE: (process.env.ONEOFF_EXTERIOR_PRICE || "").trim(),
-  ONEOFF_FULL_PRICE: (process.env.ONEOFF_FULL_PRICE || "").trim(),
+  ONEOFF_FULL_PRICE:     (process.env.ONEOFF_FULL_PRICE || "").trim(),
 
-  ONEOFF_INTRO_COUPON: (process.env.ONEOFF_INTRO_COUPON || "").trim(), // coupon id OR promo code id
+  ONEOFF_INTRO_COUPON:   (process.env.ONEOFF_INTRO_COUPON || "").trim(), // coupon id OR promotion code id
 
-  ADDON_WAX_PRICE: (process.env.ADDON_WAX_PRICE || "").trim(),
-  ADDON_POLISH_PRICE: (process.env.ADDON_POLISH_PRICE || "").trim(),
+  ADDON_WAX_PRICE:       (process.env.ADDON_WAX_PRICE || "").trim(),
+  ADDON_POLISH_PRICE:    (process.env.ADDON_POLISH_PRICE || "").trim(),
 };
 
 function strictFrontendOrigin() {
-  try {
-    return new URL(ENV.FRONTEND_PUBLIC_URL).origin;
-  } catch {
-    return "https://book.gmautodetailing.uk";
-  }
+  try { return new URL(ENV.FRONTEND_PUBLIC_URL).origin; } catch { return "https://book.gmautodetailing.uk"; }
 }
-function sanitize(s) {
-  return (s ?? "").toString().replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim();
-}
-function normEmail(s) {
-  return sanitize(s).toLowerCase();
-}
-function normStreet(s) {
-  return sanitize(s).toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
-function money(pence) {
-  return `£${(Number(pence) / 100).toFixed(0)}`;
-}
+function sanitize(s) { return (s ?? "").toString().replace(/[\u0000-\u001F\u007F\uFFFF]/g, "").trim(); }
+function normEmail(s) { return sanitize(s).toLowerCase(); }
+function normStreet(s) { return sanitize(s).toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+function money(pence) { return `£${(Number(pence) / 100).toFixed(0)}`; }
 
-/* --------------------- FIRST-TIME CHECK (server-side) ---------------------- */
-async function isFirstTimeCustomer({ email, phone, street }) {
+/* --------------------- USER + BOOKING RESOLUTION --------------------- */
+/**
+ * Resolve a user_id by email OR phone OR normalized street.
+ */
+async function resolveUserIdByIdentifiers({ email, phone, street }) {
   const emailNorm = normEmail(email);
   const phoneNorm = sanitize(phone);
   const streetNorm = normStreet(street);
 
-  if (!emailNorm && !phoneNorm && !streetNorm) return false;
-
   const r = await pool.query(
     `
-    SELECT 1
+    SELECT id
       FROM public.users
      WHERE ($1 <> '' AND lower(email) = $1)
         OR ($2 <> '' AND phone = $2)
         OR ($3 <> '' AND lower(regexp_replace(COALESCE(street,''),'[^a-z0-9]+','', 'g')) = $3)
+     ORDER BY id ASC
      LIMIT 1
     `,
     [emailNorm, phoneNorm, streetNorm]
+  );
+  return r.rowCount ? r.rows[0].id : null;
+}
+
+/**
+ * Booking-based first-time check:
+ *  - If we can resolve a user_id and they have ZERO rows in public.bookings -> first-time.
+ *  - If no user_id found -> first-time (brand new).
+ *  - Else -> not first-time.
+ */
+async function isFirstTimeOneOff({ email, phone, street }) {
+  const userId = await resolveUserIdByIdentifiers({ email, phone, street });
+  if (!userId) return true;
+  const r = await pool.query(
+    `SELECT 1 FROM public.bookings WHERE user_id = $1 LIMIT 1`,
+    [userId]
   );
   return r.rowCount === 0;
 }
@@ -117,14 +126,12 @@ async function persistAndSync(sessionId, payload) {
       `Outhouse tap: ${payload.has_tap ? "Yes" : "No"}`,
       (payload.addons?.length ? `Add-ons: ${payload.addons.join(", ")}` : null),
       `Stripe session: ${sessionId}`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].filter(Boolean).join("\n");
 
     itemsForCalendar.push({
       start_iso: sl.start_iso,
       end_iso: sl.end_iso,
-      summary: `GM Auto Detailing — ${svcNameMap[payload.service_key] || payload.service_key}`,
+      summary: `GM Auto Detailing — ${svcNameMap[payload.service_key] || (payload.service_key || "Service")}`,
       description: desc,
       location: `${payload.customer?.street || ""}, ${payload.customer?.postcode || ""}`.trim(),
     });
@@ -135,14 +142,13 @@ async function persistAndSync(sessionId, payload) {
 /* ----------------------- Coupon / Promo diagnostics ------------------------ */
 /**
  * Determine whether ONEOFF_INTRO_COUPON env contains a coupon id or a promotion code id.
- * Returns: { type: "coupon"|"promotion_code"|"unknown", id, coupon?, promotionCode? }
- * Also validates that the coupon is active and logs applies_to metadata.
+ * Validate applicability to the service product. Returns { type, id, applies, reason, couponId? }.
  */
 async function inspectDiscountForOneOff(servicePriceId) {
   const id = ENV.ONEOFF_INTRO_COUPON;
   if (!id) return { type: "unknown", id: "", applies: false, reason: "no_env" };
 
-  // Get the product of the service price to validate applies_to.products
+  // Gather product id for applicability check
   let servicePrice, serviceProductId;
   try {
     servicePrice = await stripe.prices.retrieve(servicePriceId);
@@ -151,21 +157,17 @@ async function inspectDiscountForOneOff(servicePriceId) {
     return { type: "unknown", id, applies: false, reason: `price_lookup_failed: ${e?.message}` };
   }
 
-  // Heuristic: promo codes always start with "promo_"
   const looksLikePromo = id.startsWith("promo_");
 
   if (looksLikePromo) {
     try {
       const promotionCode = await stripe.promotionCodes.retrieve(id);
       const couponId = promotionCode?.coupon?.id || promotionCode?.coupon || promotionCode?.coupon_id;
-      if (!couponId) {
-        return { type: "promotion_code", id, applies: false, reason: "promo_has_no_coupon" };
-      }
+      if (!couponId) return { type: "promotion_code", id, applies: false, reason: "promo_has_no_coupon" };
       const coupon = await stripe.coupons.retrieve(couponId);
       const { percent_off, amount_off, currency, valid, duration, applies_to } = coupon || {};
       const appliesAll = !applies_to || !Array.isArray(applies_to?.products) || applies_to.products.length === 0;
-      const appliesProduct =
-        appliesAll || (Array.isArray(applies_to?.products) && applies_to.products.includes(serviceProductId));
+      const appliesProduct = appliesAll || (Array.isArray(applies_to?.products) && applies_to.products.includes(serviceProductId));
 
       const amountDesc =
         typeof percent_off === "number"
@@ -189,13 +191,11 @@ async function inspectDiscountForOneOff(servicePriceId) {
       return { type: "promotion_code", id, applies: false, reason: `promo_lookup_failed: ${e?.message}` };
     }
   } else {
-    // Treat as a coupon id
     try {
       const coupon = await stripe.coupons.retrieve(id);
       const { percent_off, amount_off, currency, valid, duration, applies_to } = coupon || {};
       const appliesAll = !applies_to || !Array.isArray(applies_to?.products) || applies_to.products.length === 0;
-      const appliesProduct =
-        appliesAll || (Array.isArray(applies_to?.products) && applies_to.products.includes(serviceProductId));
+      const appliesProduct = appliesAll || (Array.isArray(applies_to?.products) && applies_to.products.includes(serviceProductId));
 
       const amountDesc =
         typeof percent_off === "number"
@@ -236,31 +236,24 @@ export function mountPayments(app) {
         return res.status(400).json({ ok: false, error: "Invalid service." });
       }
 
-      const successBase = (() => {
-        try {
-          return new URL(origin).origin;
-        } catch {
-          return strictFrontendOrigin();
-        }
-      })();
+      const successBase = (() => { try { return new URL(origin).origin; } catch { return strictFrontendOrigin(); } })();
 
-      const firstTime = await isFirstTimeCustomer({
+      // BOOKING-BASED first-time check
+      const firstTime = await isFirstTimeOneOff({
         email: customer?.email,
         phone: customer?.phone,
         street: customer?.street,
       });
 
-      // Determine saved price for the service
+      // Service price ids
       const servicePriceId =
-        service_key === "exterior" ? ENV.ONEOFF_EXTERIOR_PRICE
-        : service_key === "full"   ? ENV.ONEOFF_FULL_PRICE
-        : "";
+        service_key === "exterior" ? ENV.ONEOFF_EXTERIOR_PRICE :
+        service_key === "full"     ? ENV.ONEOFF_FULL_PRICE     : "";
 
-      // Decide discount path (coupon/promo vs fallback)
+      // Choose discount strategy (Stripe discount vs fallback)
       let discountStrategy = { useStripeDiscount: false, field: null, value: null, debug: "" };
 
       if (firstTime && servicePriceId && ENV.ONEOFF_INTRO_COUPON) {
-        // Inspect the env id to decide coupon vs promotion_code
         const isPromo = ENV.ONEOFF_INTRO_COUPON.startsWith("promo_");
         discountStrategy = {
           useStripeDiscount: true,
@@ -269,7 +262,7 @@ export function mountPayments(app) {
           debug: isPromo ? "promotion_code" : "coupon",
         };
 
-        // Deep check and log applicability; if it won’t apply, we’ll fall back
+        // Check applicability; fallback if not applicable
         const probe = await inspectDiscountForOneOff(servicePriceId);
         if (!probe.applies) {
           console.warn(`[oneoff] discount '${ENV.ONEOFF_INTRO_COUPON}' will not apply: ${probe.reason}. Falling back to server-side half price.`);
@@ -281,13 +274,9 @@ export function mountPayments(app) {
       const line_items = [];
 
       if (servicePriceId && !discountStrategy.useStripeDiscount) {
-        // We have a saved price but the coupon is unavailable/ineligible; halve via dynamic price
-        // Retrieve to read normal amount for messaging
+        // Saved price exists but discount cannot apply -> dynamic half-price fallback
         let normalAmount = 0;
-        try {
-          const p = await stripe.prices.retrieve(servicePriceId);
-          normalAmount = p?.unit_amount ?? 0;
-        } catch {}
+        try { const p = await stripe.prices.retrieve(servicePriceId); normalAmount = p?.unit_amount ?? 0; } catch {}
         const amount = firstTime ? Math.floor(normalAmount / 2) : normalAmount;
         line_items.push({
           price_data: {
@@ -298,11 +287,11 @@ export function mountPayments(app) {
           quantity: 1,
         });
       } else if (servicePriceId) {
-        // Normal path: saved price so Stripe discount applies
+        // Normal path: saved price so Stripe discount (coupon/promo) can apply
         line_items.push({ price: servicePriceId, quantity: 1 });
       } else {
-        // No saved price provided at all — pure fallback
-        const fallbackNormal = service_key === "exterior" ? 4000 : 6000; // adjust if desired
+        // No saved price configured at all — pure fallback
+        const fallbackNormal = service_key === "exterior" ? 4000 : 6000; // adjust to your normal prices if desired
         const amount = firstTime ? Math.floor(fallbackNormal / 2) : fallbackNormal;
         line_items.push({
           price_data: {
@@ -314,14 +303,12 @@ export function mountPayments(app) {
         });
       }
 
-      // Add-ons
+      // Add-ons (prefer saved prices if present)
       for (const k of addons) {
         if (!ADDON_KEYS.has(k)) continue;
-        if (k === "wax" && ENV.ADDON_WAX_PRICE) {
-          line_items.push({ price: ENV.ADDON_WAX_PRICE, quantity: 1 });
-        } else if (k === "polish" && ENV.ADDON_POLISH_PRICE) {
-          line_items.push({ price: ENV.ADDON_POLISH_PRICE, quantity: 1 });
-        } else {
+        if (k === "wax" && ENV.ADDON_WAX_PRICE)       line_items.push({ price: ENV.ADDON_WAX_PRICE,   quantity: 1 });
+        else if (k === "polish" && ENV.ADDON_POLISH_PRICE) line_items.push({ price: ENV.ADDON_POLISH_PRICE, quantity: 1 });
+        else {
           const unit = k === "wax" ? 1000 : 2250; // £10 / £22.50
           line_items.push({
             price_data: { currency: "gbp", product_data: { name: k === "wax" ? "Full Body Wax" : "Hand Polish" }, unit_amount: unit },
@@ -353,7 +340,7 @@ export function mountPayments(app) {
           : "Intro 50% off this booking applied.";
       }
 
-      // Build session
+      // Build Checkout Session
       const sessionParams = {
         mode: "payment",
         line_items,
@@ -380,7 +367,7 @@ export function mountPayments(app) {
     }
   });
 
-  // Webhook + confirm (unchanged)
+  // Webhook for one-off (persistence + GCal)
   app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), async (req, res) => {
     let event;
     try {
@@ -409,6 +396,7 @@ export function mountPayments(app) {
     res.json({ received: true });
   });
 
+  // Confirm endpoint (idempotent persistence in case the FE calls after redirect)
   app.post("/api/pay/confirm", express.json(), async (req, res) => {
     try {
       const { session_id } = req.body || {};
