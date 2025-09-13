@@ -541,11 +541,11 @@ function ThankYou({ kind, onBook, onAccount }) {
         </p>
 
         <div className="thankyou-actions">
-          {/* Book now = white button with black text */}
+          {/* Book now = white with black */}
           <button className="btn-large alt" onClick={onBook}>Book now</button>
 
-          {/* View account = black button with white text */}
-          <button className="btn-large primary" onClick={onAccount}>
+          {/* View account = also white with black */}
+          <button className="btn-large alt" onClick={onAccount}>
             <span style={{ marginRight:6 }}>View account</span><HeadIcon />
           </button>
         </div>
@@ -553,7 +553,6 @@ function ThankYou({ kind, onBook, onAccount }) {
     </div>
   );
 }
-
 
 /* ================== APP ================== */
 function App(){
