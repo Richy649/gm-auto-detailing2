@@ -541,9 +541,10 @@ function ThankYou({ kind, onBook, onAccount }) {
         </p>
 
         <div className="thankyou-actions">
-          <button className="btn-large primary" onClick={onBook}>Book now</button>
-          <button className="btn-large alt" onClick={onAccount}>
-            <span style={{ marginRight:6 }}>View account</span><HeadIcon />
+         <button className="btn-large alt" onClick={onBook}>Book now</button>
+<button className="btn-large primary" onClick={onAccount}>View account</button>
+
+           <span style={{ marginRight:6 }}>View account</span><HeadIcon />
           </button>
         </div>
       </div>
