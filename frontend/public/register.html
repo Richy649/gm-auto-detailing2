@@ -28,6 +28,9 @@
       --ring:rgba(34,34,34,0.30);
     }
 
+    /* ✅ Prevent width overflow of inputs/buttons */
+    * { box-sizing: border-box; }
+
     body.gm {
       margin:0;
       font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
@@ -66,6 +69,7 @@
       font-size:16px;
       min-height:var(--hit);
       transition:border-color .16s, box-shadow .16s;
+      box-sizing:border-box; /* safety */
     }
     .gm.form input:focus-visible {
       outline:none;
@@ -73,7 +77,7 @@
       box-shadow:0 0 0 var(--ring-w) var(--ring);
     }
 
-    /* Outhouse tap toggle */
+    /* Outhouse tap toggle row */
     .inline-check {
       display:flex;
       align-items:center;
@@ -82,17 +86,19 @@
       flex-wrap:nowrap;
     }
     .inline-check .question {
-      font-size:16px; /* Slightly larger */
+      font-size:16px; /* Slightly larger per request */
       font-weight:700;
       flex:1;
       display:flex;
       align-items:center;
       gap:8px;
+      min-width:0;
     }
     .inline-check .tap-hint {
       font-size:14px;
       color:var(--muted);
       font-style:italic;
+      white-space:nowrap; /* keep on one line */
     }
 
     .inline-check input[type="checkbox"] {
@@ -105,6 +111,7 @@
       position:relative;
       cursor:pointer;
       transition:background .2s, border-color .2s;
+      flex:0 0 auto;
     }
     .inline-check input[type="checkbox"]::after {
       content:"";
@@ -125,10 +132,11 @@
     }
 
     /* Yes/No dynamic text */
+    .toggle-label { flex:0 0 auto; }
     #has_tap:checked + span.toggle-label::after { content:"Yes"; color:var(--green); font-weight:600; margin-left:6px; }
     #has_tap:not(:checked) + span.toggle-label::after { content:"No"; color:#b00; font-weight:600; margin-left:6px; }
 
-    /* Button */
+    /* Submit button */
     .gm.btn.primary.register-submit {
       width:100%;
       font-weight:700;
@@ -140,6 +148,7 @@
       border:0;
       cursor:pointer;
       transition:transform .14s, box-shadow .14s, filter .16s;
+      box-sizing:border-box; /* safety */
     }
     .gm.btn.primary.register-submit:hover { box-shadow:var(--shadow-2); transform:translateY(-1px); }
     .gm.btn.primary.register-submit:focus-visible { outline:none; box-shadow:0 0 0 var(--ring-w) var(--ring), var(--shadow-2); }
@@ -152,6 +161,12 @@
       border-radius:12px;
       padding:10px 12px;
       text-align:center;
+    }
+
+    /* Keep things tidy on very small screens */
+    @media (max-width:380px){
+      .panel { padding:16px; }
+      .gm.btn.primary.register-submit { font-size:17px; }
     }
   </style>
 </head>
