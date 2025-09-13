@@ -8,7 +8,7 @@ import auth from "./auth.js";                        // /api/auth
 import credits from "./credits.js";                  // /api/credits
 import my from "./my.js";                            // /api/my
 import memberships, { handleMembershipWebhook } from "./memberships.js"; // /api/memberships + webhook
-import { mountPayments } from "./payments.js";       // mounts /api/pay/* and /api/webhooks/stripe
+import { mountPaymentsWebhook, mountPaymentsRoutes } from "./payments.js"; // one-off webhook & routes
 
 /* ============================ ENV & CORS ============================ */
 const PORT = Number(process.env.PORT || 10000);
@@ -51,22 +51,21 @@ const corsOptions = {
 const app = express();
 
 /**
- * Stripe membership webhook MUST receive the raw body BEFORE any JSON parser.
- * This route verifies Stripe signatures for membership lifecycle events.
+ * STRIPE WEBHOOKS MUST SEE RAW BODY (NO express.json BEFORE THESE).
+ * Mount both webhooks first.
  */
 app.post("/api/webhooks/memberships", express.raw({ type: "application/json" }), handleMembershipWebhook);
+mountPaymentsWebhook(app); // mounts: POST /api/webhooks/stripe with express.raw
 
-// Global CORS for normal routes
+// Now mount global CORS and the normal JSON parser.
 app.use(cors(corsOptions));
-
-// JSON parser for all other API routes
 app.use(express.json());
 
-// Simple health probe
+// Health probe
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 /* ============================ ROUTES ============================ */
-// Authentication (register, login, me, update)
+// Auth (register, login, me, update)
 app.use("/api/auth", auth);
 
 // Credits flow (book with credit, etc.)
@@ -81,8 +80,8 @@ app.use("/api/memberships", memberships);
 // Public routes bundle: /api/config, /api/availability, /api/first-time
 app.use("/api", baseRoutes);
 
-// One-off payments (checkout, confirm) + their Stripe webhook (mounted with express.raw inside)
-mountPayments(app);
+// One-off payments (checkout, confirm) — normal JSON routes
+mountPaymentsRoutes(app);
 
 // Fallback for unknown API routes
 app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
