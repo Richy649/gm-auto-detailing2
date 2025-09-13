@@ -1,81 +1,104 @@
 // backend/src/server.js
 import express from "express";
 import cors from "cors";
-import bodyParser from "body-parser";
-import Stripe from "stripe";
+import morgan from "morgan";
+import { pool } from "./db.js";
 
+// Routers / modules
 import auth from "./auth.js";
-import routes from "./routes.js";
-import memberships, { handleMembershipWebhook } from "./memberships.js";
+import availability from "./availability.js";
+import my from "./my.js";
 import credits from "./credits.js";
+import memberships, { handleMembershipWebhook } from "./memberships.js";
 import { mountPayments } from "./payments.js";
 
-const app = express();
+/* ============================ ENV & CORS ============================ */
+const PORT = Number(process.env.PORT || 10000);
 
-/* ------------------------------ CORS FIRST ------------------------------ */
-/** Apply CORS before any routes so preflights for /api/pay/* succeed */
-const allowOrigin = (process.env.ALLOW_ORIGIN || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+// Build allowed origins from env (comma-separated)
+function parseList(v) {
+  return (v || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+const allowFrom = new Set([
+  ...parseList(process.env.ALLOW_ORIGIN),
+  ...parseList(process.env.FRONTEND_ORIGIN),
+  process.env.FRONTEND_PUBLIC_URL,
+  process.env.PUBLIC_APP_ORIGIN,
+  "https://book.gmautodetailing.uk",
+  "https://gm-auto-detailing2.vercel.app",
+].filter(Boolean).map(s => {
+  try { return new URL(s).origin; } catch { return s; }
+}));
 
-const corsConfig = {
-  origin: allowOrigin.length ? allowOrigin : true,
+const corsOptions = {
+  origin: (origin, cb) => {
+    // Allow same-origin or no-origin (curl, mobile webviews)
+    if (!origin) return cb(null, true);
+    try {
+      const o = new URL(origin).origin;
+      if (allowFrom.has(o)) return cb(null, true);
+    } catch {}
+    return cb(null, false);
+  },
   credentials: true,
 };
-app.use(cors(corsConfig));
-// (Optional but helpful for some hosts)
-app.options("*", cors(corsConfig));
 
-/* -------------------------- Stripe Webhooks -------------------------- */
-/** Memberships webhook (raw) — must be mounted before json parser */
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: "2024-06-20" });
-app.post(
-  "/webhooks/memberships",
-  bodyParser.raw({ type: "application/json" }),
-  async (req, res) => {
-    const sig = req.headers["stripe-signature"];
-    let event;
-    try {
-      event = stripe.webhooks.constructEvent(
-        req.body,
-        sig,
-        process.env.STRIPE_WEBHOOK_SECRET_MEMBERSHIPS
-      );
-    } catch (err) {
-      console.error("[webhooks/memberships] signature verification failed:", err?.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
+/* ============================ APP SETUP ============================ */
+const app = express();
 
-    try {
-      console.log(`[webhooks/memberships] received: ${event.type}`);
-      await handleMembershipWebhook(event);
-      return res.json({ received: true });
-    } catch (err) {
-      console.error("[webhooks/memberships] handler failed:", err);
-      return res.status(500).send("Webhook handling failed");
-    }
-  }
-);
+// Access logs (concise)
+app.use(morgan("tiny"));
 
-/** One-off payments webhook + routes (raw inside) — mount before json parser */
-mountPayments(app);
+// IMPORTANT: register Stripe webhooks with RAW BODY BEFORE any json middleware.
+// - /api/webhooks/stripe is mounted inside mountPayments(app) (uses express.raw)
+// - /api/webhooks/memberships mounted here
+app.post("/api/webhooks/memberships", express.raw({ type: "application/json" }), handleMembershipWebhook);
 
-/* ------------------------------ JSON AFTER ----------------------------- */
-/** JSON body parser MUST come after raw webhooks to avoid consuming the body */
-app.use(bodyParser.json());
+// Now global CORS
+app.use(cors(corsOptions));
 
-/* --------------------------------- API -------------------------------- */
+// For all other JSON APIs
+app.use(express.json());
+
+// Health
+app.get("/healthz", (_req, res) => res.json({ ok: true }));
+
+/* ============================ ROUTES ============================ */
+// Auth (register/login/me, etc.)
 app.use("/api/auth", auth);
-app.use("/api", routes);
-app.use("/api/memberships", memberships);
+
+// Availability calendar (GET /availability?service_key=...&month=YYYY-MM)
+app.use("/api", availability);
+
+// “My account” endpoints (e.g., GET /my/bookings)
+app.use("/api/my", my);
+
+// Credits flow (e.g., POST /credits/book-with-credit)
 app.use("/api/credits", credits);
 
-/* ------------------------------ Healthcheck --------------------------- */
-app.get("/health", (_req, res) => res.json({ ok: true }));
+// Memberships (subscribe, portal, etc.)
+app.use("/api/memberships", memberships);
 
-/* -------------------------------- Start ------------------------------- */
-const port = Number(process.env.PORT || 3000);
-app.listen(port, () => {
-  console.log(`[server] listening on ${port}`);
-});
+// One-off payments + one-off Stripe webhook + confirm endpoint
+// (mountPayments also mounts: POST /api/pay/create-checkout-session, POST /api/pay/confirm,
+// and POST /api/webhooks/stripe with express.raw)
+mountPayments(app);
+
+/* ============================ START ============================ */
+async function start() {
+  try {
+    await pool.query("SELECT 1");
+    console.log("[db] schema ensured");
+  } catch (e) {
+    console.error("[db] connection failed:", e?.message || e);
+  }
+
+  app.listen(PORT, () => {
+    console.log(`[server] listening on ${PORT}`);
+  });
+}
+
+start();
