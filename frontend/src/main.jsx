@@ -526,22 +526,25 @@ function ThankYou({ kind, onBook, onAccount }) {
   return (
     <div className="gm page-section gm-booking wrap thankyou">
       <div className="gm panel wider thankyou-card">
-        <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
+        <img className="gm logo-big big" src="/logo.png" alt="GM Auto Detailing" />
 
         <div className="gm h2 center thankyou-title">Thank you for your booking!</div>
 
         <p className="thankyou-copy">
           If you’ve just subscribed to the membership — first of all, welcome! I hope you love it.
-          You’ve been awarded <strong>2 credits</strong>; press <em>Book now</em> if you’d like to pick a slot.
-          If you’ve just used a credit or paid for a one-off slot, I’m really looking forward to seeing you.
+          You’ve been awarded <strong>2 credits</strong>; press <em>Book now</em> if you’d like to pick a slot,
+          <span className="note-inline"> or not — they will stay in your account for 30 days.</span>
+        </p>
+
+        <p className="thankyou-copy">
+          If you’ve just used a credit or paid for a one-off slot, you are all booked in and I look forward to seeing you.
         </p>
 
         <div className="thankyou-actions">
-          {/* Keep both buttons available as before */}
-          <PrimaryButton onClick={onBook}>Book now</PrimaryButton>
-          <Button onClick={onAccount}>
+          <button className="btn-large primary" onClick={onBook}>Book now</button>
+          <button className="btn-large alt" onClick={onAccount}>
             <span style={{ marginRight:6 }}>View account</span><HeadIcon />
-          </Button>
+          </button>
         </div>
       </div>
     </div>
