@@ -28,7 +28,6 @@
       --ring:rgba(34,34,34,0.30);
     }
 
-    /* ✅ Prevent width overflow of inputs/buttons */
     * { box-sizing: border-box; }
 
     body.gm {
@@ -69,7 +68,6 @@
       font-size:16px;
       min-height:var(--hit);
       transition:border-color .16s, box-shadow .16s;
-      box-sizing:border-box; /* safety */
     }
     .gm.form input:focus-visible {
       outline:none;
@@ -86,7 +84,7 @@
       flex-wrap:nowrap;
     }
     .inline-check .question {
-      font-size:16px; /* Slightly larger per request */
+      font-size:16px;
       font-weight:700;
       flex:1;
       display:flex;
@@ -98,7 +96,7 @@
       font-size:14px;
       color:var(--muted);
       font-style:italic;
-      white-space:nowrap; /* keep on one line */
+      white-space:nowrap;
     }
 
     .inline-check input[type="checkbox"] {
@@ -136,7 +134,7 @@
     #has_tap:checked + span.toggle-label::after { content:"Yes"; color:var(--green); font-weight:600; margin-left:6px; }
     #has_tap:not(:checked) + span.toggle-label::after { content:"No"; color:#b00; font-weight:600; margin-left:6px; }
 
-    /* Submit button */
+    /* Submit button (match login style) */
     .gm.btn.primary.register-submit {
       width:100%;
       font-weight:700;
@@ -148,10 +146,10 @@
       border:0;
       cursor:pointer;
       transition:transform .14s, box-shadow .14s, filter .16s;
-      box-sizing:border-box; /* safety */
     }
     .gm.btn.primary.register-submit:hover { box-shadow:var(--shadow-2); transform:translateY(-1px); }
     .gm.btn.primary.register-submit:focus-visible { outline:none; box-shadow:0 0 0 var(--ring-w) var(--ring), var(--shadow-2); }
+    .gm.btn.primary.register-submit:disabled { opacity:.6; cursor:not-allowed; filter:saturate(.7); }
 
     #msg.alert {
       font-size:var(--fs-sm);
@@ -163,7 +161,6 @@
       text-align:center;
     }
 
-    /* Keep things tidy on very small screens */
     @media (max-width:380px){
       .panel { padding:16px; }
       .gm.btn.primary.register-submit { font-size:17px; }
@@ -177,7 +174,7 @@
     <div class="panel">
       <div class="h2 center" style="margin-bottom:10px">Create your account</div>
 
-      <form class="gm form" id="regForm">
+      <form class="gm form" id="regForm" novalidate>
         <div class="row"><label for="name">Full name</label><input id="name" name="name" type="text" autocomplete="name" required class="gm input" /></div>
         <div class="row"><label for="phone">Phone</label><input id="phone" name="phone" type="text" autocomplete="tel" required class="gm input" /></div>
         <div class="row"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required class="gm input" /></div>
@@ -185,18 +182,18 @@
         <div class="row"><label for="postcode">Postcode</label><input id="postcode" name="postcode" type="text" autocomplete="postal-code" required class="gm input" /></div>
         <div class="row"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="new-password" required class="gm input" /></div>
 
-        <!-- Outhouse tap -->
+        <!-- Outhouse tap (REQUIRED) -->
         <div class="row inline-check">
           <div class="question">
             <label for="has_tap">Do you have an outhouse tap?</label>
             <span class="tap-hint">(Front / Back)</span>
           </div>
-          <input id="has_tap" name="has_tap" type="checkbox" class="gm input" checked />
+          <input id="has_tap" name="has_tap" type="checkbox" class="gm input" required />
           <span class="toggle-label"></span>
         </div>
 
         <div class="row">
-          <button class="gm btn primary register-submit" type="submit">Create account</button>
+          <button id="submitBtn" class="gm btn primary register-submit" type="submit" disabled>Create account</button>
         </div>
       </form>
 
@@ -210,11 +207,33 @@
 
     const $ = (s) => document.querySelector(s);
     const msg = $("#msg");
+    const tap = $("#has_tap");
+    const submitBtn = $("#submitBtn");
+
     function showError(t) { msg.textContent = t; msg.style.display = "block"; }
     function clearMsg() { msg.style.display = "none"; }
 
+    // Enable/disable submit based on the required checkbox
+    function syncSubmitState() {
+      submitBtn.disabled = !tap.checked;
+    }
+    tap.addEventListener("change", syncSubmitState);
+    // Initialize state on load
+    syncSubmitState();
+
     document.getElementById("regForm").addEventListener("submit", async (e) => {
-      e.preventDefault(); clearMsg();
+      clearMsg();
+
+      // HTML5 will block automatically because the checkbox has `required`,
+      // but we also guard here and provide a friendly message.
+      if (!tap.checked) {
+        e.preventDefault();
+        showError("Please confirm you have an accessible outhouse tap before creating an account.");
+        tap.focus();
+        return;
+      }
+
+      e.preventDefault();
 
       const payload = {
         name: $("#name").value.trim(),
@@ -223,7 +242,7 @@
         street: $("#street").value.trim(),
         postcode: $("#postcode").value.trim(),
         password: $("#password").value,
-        has_tap: $("#has_tap").checked
+        has_tap: tap.checked
       };
 
       try {
@@ -233,7 +252,10 @@
           body: JSON.stringify(payload),
         });
         const d = await r.json();
-        if (!d?.ok || !d?.token) { showError(d?.error || "Registration failed."); return; }
+        if (!d?.ok || !d?.token) {
+          showError(d?.error || "Registration failed.");
+          return;
+        }
         localStorage.setItem("GM_TOKEN", d.token);
         window.location.href = "/index.html?afterLogin=1";
       } catch {
