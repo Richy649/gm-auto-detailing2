@@ -2,6 +2,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap');
 
 :root {
+  /* Core palette */
   --gm-bg: #ffffff;
   --gm-card: #ffffff;
   --gm-border: #e3e0d7;
@@ -22,6 +23,7 @@ html, body {
   color: var(--gm-text);
 }
 
+/* Layout shells */
 .gm.wrap { padding: 14px; }
 .gm.panel { background: var(--gm-card); border: 1px solid var(--gm-border); border-radius: 12px; padding: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); overflow: hidden; }
 .gm.panel.wider { max-width: 980px; margin: 0 auto; }
@@ -32,7 +34,7 @@ html, body {
 
 .gm.logo-big { width: 160px; height: auto; object-fit: contain; }
 
-/* Services */
+/* ===== Services ===== */
 .gm.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; }
 .gm.card { border: 1px solid var(--gm-border); background: #fff; border-radius: 12px; padding: 12px; cursor: pointer; transition: box-shadow .15s, border-color .15s, background .15s; }
 .gm.card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
@@ -42,7 +44,7 @@ html, body {
 .gm.price-now { font-weight: 600; font-size: 18px; }
 .gm.price-strike { color: #b00; text-decoration: line-through; opacity: 0.8; }
 
-/* Add-ons */
+/* ===== Add-ons ===== */
 .gm.addon-benefits.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .gm.benefit { border: 1px dashed var(--gm-border); border-radius: 12px; padding: 12px; background: #fff; transition: box-shadow .15s, border-color .15s, background .15s; }
 .gm.benefit:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
@@ -50,34 +52,34 @@ html, body {
 .benefit-title { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px; }
 .benefit-copy { font-size: 14px; color: var(--gm-muted); margin-bottom: 8px; }
 
-/* Actions */
+/* ===== Actions ===== */
 .gm.actions { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
 .gm.actions.end { grid-template-columns: 1fr auto; }
 .gm.actions.space { grid-template-columns: auto 1fr auto; }
 .bottom-stick { margin-top: 14px; }
 
-/* Buttons */
+/* ===== Buttons (global) ===== */
 .gm.btn { border: 1px solid var(--gm-border); background: #fff; border-radius: 10px; padding: 10px 16px; cursor: pointer; font-weight: 700; }
 .gm.btn.nav { padding: 8px 12px; }
 .gm.btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .gm.btn.primary { background: var(--gm-accent); color: #fff; border-color: var(--gm-accent); }
 
-/* Confirm */
+/* ===== Confirm ===== */
 .gm.twocol { display: grid; grid-template-columns: 1fr 320px; gap: 12px; }
 .gm.total { font-size: 22px; font-weight: 700; }
 
-/* Calendar header */
+/* ===== Calendar header ===== */
 .gm.monthbar-grid { display: grid; grid-template-columns: auto 1fr auto; align-items: center; margin-bottom: 8px; }
 .gm.monthtitle { text-align: center; font-weight: 600; font-size: 18px; }
 
-/* Counters */
+/* ===== Counters ===== */
 .gm.counter { padding: 6px 12px; border-radius: 999px; font-weight: 700; background:#fafafa; border:1px solid var(--gm-border); }
 
-/* Weekday row */
+/* ===== Weekday row ===== */
 .gm.dowgrid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; margin-bottom: 6px; }
 .gm.dow { text-align: center; font-weight: 600; font-size: 12px; color: var(--gm-muted); }
 
-/* Calendar grid */
+/* ===== Calendar grid ===== */
 .gm.monthgrid { display: grid; grid-template-columns: repeat(7,1fr); gap: 6px; }
 .gm.dayblank { height: 44px; }
 .gm.daycell {
@@ -91,7 +93,7 @@ html, body {
 .gm.daycell.selected-green { background: #e9f8f0; border-color: var(--gm-green); color: #0b6b37; box-shadow: inset 0 0 0 2px var(--gm-green); }
 .gm.daycell.selected-orange { background: #fff6e8; border-color: var(--gm-orange); color: #7a4a00; box-shadow: inset 0 0 0 2px var(--gm-orange); }
 
-/* Times */
+/* ===== Times ===== */
 .gm.timegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr)); gap: 10px; margin-top: 8px; }
 .gm.timebox-wrap { position: relative; }
 .gm.timebox {
@@ -102,68 +104,104 @@ html, body {
 .gm.timebox-on { background: #e9f8f0; border-color: var(--gm-green); color: #0b6b37; box-shadow: inset 0 0 0 2px var(--gm-green); }
 .gm.timebox-off { background: #efefef; color: #9a9a9a; border-color: #d0d0d0; cursor: not-allowed; }
 
-/* Alerts */
+/* ===== Alerts ===== */
 .gm.alert { background: #fff7e6; border: 1px solid #ffe1b0; color: #7a4a00; padding: 10px 12px; border-radius: 10px; margin: 8px 0; }
 
-/* Responsive */
+/* ===== Responsive ===== */
 @media (max-width: 740px) {
   .gm.panel.wider { margin: 0 6px; }
   .gm.twocol { grid-template-columns: 1fr; }
   .gm.addon-benefits.two-col { grid-template-columns: 1fr; }
 }
 
-/* ===== Thank You screen (scoped) ===== */
+/* ------------------------------------------------------------------ */
+/*                     THANK YOU SCREEN (SCOPED)                      */
+/* ------------------------------------------------------------------ */
+
 .gm.page-section.gm-booking.wrap.thankyou {
-  background: #faf8f5;
+  background: #faf8f5;    /* beige page background like auth pages */
   padding: 20px;
 }
 
 .gm.panel.wider.thankyou-card {
-  background: #fff;
+  background: #fff; 
   border: 1px solid var(--gm-border, #e3e0d7);
   border-radius: 16px;
   box-shadow: 0 2px 10px rgba(0,0,0,.06);
   text-align: center;
-  padding: 24px;
-  max-width: 980px;
+  padding: 28px 24px;
+  max-width: 640px;       /* a bit narrower for reading comfort */
   margin: 0 auto;
+}
+
+.gm.logo-big.big {        /* bigger logo just on Thank You */
+  width: 200px;
+  height: auto;
+  object-fit: contain;
+  display: block;
+  margin: 0 auto 10px;
 }
 
 .thankyou-title {
   font-weight: 700;
-  font-size: clamp(20px, 2.6vw, 24px);
-  margin: 8px 0 6px;
+  font-size: clamp(22px, 2.8vw, 26px);
+  margin: 8px 0 14px;
   color: #222;
 }
 
 .thankyou-copy {
-  max-width: 640px;
-  margin: 8px auto 0;
+  max-width: 580px;
+  margin: 10px auto;
   color: var(--gm-muted, #686868);
   line-height: 1.55;
-  font-size: clamp(14px, 1.6vw, 16px);
+  font-size: clamp(15px, 1.6vw, 16px);
 }
+.thankyou-copy .note-inline { font-style: italic; color: #444; }
 
 .thankyou-actions {
-  margin-top: 16px;
-  display: inline-flex;
-  gap: 10px;
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;   /* full-width stacked by default (mobile-friendly) */
+  gap: 12px;
 }
 
-.thankyou-actions .gm.btn {
-  min-height: 44px;
+/* Buttons here should look like Login/Register buttons (identical style) */
+.thankyou-actions .btn-large {
+  padding: 16px 18px;
   border-radius: 999px;
+  border: 2px solid #ddd;
+  font-weight: 800;
+  cursor: pointer;
+  width: 100%;
+  font-size: 18px;
+  letter-spacing: .2px;
+  line-height: 1;
+}
+.thankyou-actions .btn-large.primary {
+  background: #222;
+  color: #fff;
+  border-color: #222;
+}
+.thankyou-actions .btn-large.alt {
+  background: #fff;
+  color: #222;
+  border-color: #ddd;
+}
+.thankyou-actions .btn-large:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
-@media (max-width: 560px) {
+/* On wider screens, place buttons side-by-side neatly */
+@media (min-width: 561px) {
   .thankyou-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    flex-direction: row;
+    justify-content: center;
   }
-  .thankyou-actions .gm.btn { width: 100%; }
+  .thankyou-actions .btn-large { width: auto; min-width: 220px; }
 }
 
+/* Motion safety */
 @media (prefers-reduced-motion: reduce) {
-  .thankyou-card, .thankyou-actions .gm.btn { transition: none !important; }
+  .thankyou-card, .thankyou-actions .btn-large { transition: none !important; }
 }
