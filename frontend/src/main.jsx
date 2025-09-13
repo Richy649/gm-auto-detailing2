@@ -1,3 +1,4 @@
+// frontend/src/main.jsx
 import React from "react";
 import { createRoot } from "react-dom/client";
 import "./calendar.css";
@@ -92,7 +93,7 @@ function Services({ state, setState }) {
   // top right "View account"
   const TopRight = () => (
     <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
-      <Button onClick={()=> window.location.href="/account.html"}>
+      <Button onClick={()=> { window.location.href="/account.html"; }}>
         <span style={{ marginRight:6 }}>View account</span><HeadIcon />
       </Button>
     </div>
@@ -119,7 +120,7 @@ function Services({ state, setState }) {
   const hasExteriorCredit = (state.credits?.exterior || 0) > 0;
   const usingCredits = hasFullCredit || hasExteriorCredit;
 
-  // If the user has credits, force them to booking calendar immediately (no services page)
+  // If the user has credits, go straight to calendar with inferred service
   React.useEffect(() => {
     if (usingCredits) {
       const inferred = hasFullCredit ? "full" : "exterior";
@@ -130,11 +131,10 @@ function Services({ state, setState }) {
 
   async function subscribeNow(tierKey){
     const token = state.token;
-    if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } return; }
+    if (!token) { window.location.href = "/login.html"; return; } // keep in-iframe
     const tier = tierKey === "standard_membership" ? "standard" : "premium";
     const payload = {
       tier,
-      first_time: !!firstTime,
       customer: {
         name: state.customer?.name || "",
         phone: state.customer?.phone || "",
@@ -152,7 +152,7 @@ function Services({ state, setState }) {
     });
     const d = await r.json().catch(()=> ({}));
     if (!d?.ok || !d?.url) { alert(d?.error || "Unable to start subscription."); return; }
-    try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
+    try { window.top.location.href = d.url; } catch { window.location.href = d.url; } // Stripe requires top
   }
 
   const aCfg = cfg.addons || {};
@@ -174,7 +174,7 @@ function Services({ state, setState }) {
     setTimeout(reportHeight, 60);
   }
 
-  // Hide Standard/Premium tiles if the user already has an active sub (credits will renew)
+  // Hide Standard/Premium tiles if already active
   const hideStandard = state.subscriptions?.some?.(x => x.tier === "standard" && x.status === "active");
   const hidePremium  = state.subscriptions?.some?.(x => x.tier === "premium"  && x.status === "active");
 
@@ -204,7 +204,6 @@ function Services({ state, setState }) {
           )}
         </div>
 
-        {/* Show add-ons ONLY for Exterior/Full. Hide for memberships. */}
         {(svc==="exterior" || svc==="full") && !usingCredits && (
           <>
             <div className="gm h2 center" style={{ marginTop: 8 }}>Add-ons (optional)</div>
@@ -248,6 +247,14 @@ function Calendar({ state, setState }) {
   const [loading, setLoading] = React.useState(false);
   const [loadErr, setLoadErr] = React.useState(null);
 
+  const TopRight = () => (
+    <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
+      <Button onClick={()=> { window.location.href="/account.html"; }}>
+        <span style={{ marginRight:6 }}>View account</span><HeadIcon />
+      </Button>
+    </div>
+  );
+
   const dayKeys = React.useMemo(() => {
     const [y, m] = monthKey.split("-").map(Number);
     const first = new Date(Date.UTC(y, m - 1, 1, 12));
@@ -288,15 +295,6 @@ function Calendar({ state, setState }) {
     if (!state.selectedSlot) return false;
     return keyFromISO(state.selectedSlot.start_iso) === k;
   }
-
-  // Top-right "View account"
-  const TopRight = () => (
-    <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
-      <Button onClick={()=> window.location.href="/account.html"}>
-        <span style={{ marginRight:6 }}>View account</span><HeadIcon />
-      </Button>
-    </div>
-  );
 
   return (
     <div className="gm page-section gm-booking wrap">
@@ -407,8 +405,6 @@ function Times({ state, setState }) {
 
 /* ================== CONFIRM ================== */
 function Confirm({ state, setState }) {
-  const [busy, setBusy] = React.useState(false);
-
   const cfg = state.config || { services:{}, addons:{} };
   const base = (typeof cfg.services?.[state.service_key]?.price === "number") ? cfg.services[state.service_key].price : 0;
   const addonsTotal = (state.addons || []).reduce((s,k)=> s + (typeof cfg.addons?.[k]?.price === "number" ? cfg.addons[k].price : 0), 0);
@@ -422,86 +418,48 @@ function Confirm({ state, setState }) {
     ((state.credits?.full||0)     > 0 && state.service_key === "full");
 
   async function pay(){
-    try {
-      console.log("[Confirm.pay] start", { usingCredit, service_key: state.service_key, slot: state.selectedSlot, customer: state.customer });
-      if (busy) return;
-      setBusy(true);
+    if (!state.customer || !state.service_key) return;
 
-      // Base validations (apply to both flows)
-      if (!state.service_key) { alert("Please choose a service."); setBusy(false); return; }
-      if (!state.customer?.email) { alert("Please enter your email on your account."); setBusy(false); return; }
-      if (!state.selectedSlot?.start_iso || !state.selectedSlot?.end_iso) { alert("Please pick a time slot."); setBusy(false); return; }
-
-      if (usingCredit) {
-        const token = state.token;
-        if (!token) { try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; } setBusy(false); return; }
-        const payload = {
-          service_key: state.service_key,
-          slot: state.selectedSlot,
-          addons: [],
-          customer: state.customer,
-          origin: window.location.origin
-        };
-        const r = await fetch(`${API}/credits/book-with-credit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify(payload)
-        });
-
-        let d;
-        try { d = await r.json(); }
-        catch (e) {
-          const text = await r.text().catch(() => "");
-          alert(`Credit booking failed (${r.status}). ${text?.slice(0,180) || ""}`);
-          setBusy(false);
-          return;
-        }
-
-        if (!d?.ok) { alert(d?.error || "Credit booking failed"); setBusy(false); return; }
-        if (d.booked) {
-          setState(s=> ({ ...s, step: "thankyou" })); // universal thank you
-          setTimeout(reportHeight, 60);
-          setBusy(false);
-          return;
-        }
-        alert("Unexpected response.");
-        setBusy(false);
-        return;
-      }
-
-      // One-off payment flow
+    if (usingCredit) {
+      const token = state.token;
+      if (!token) { window.location.href = "/login.html"; return; } // keep in-iframe
       const payload = {
-        customer: state.customer,
-        has_tap: true,
         service_key: state.service_key,
-        addons: state.addons || [],
-        origin: window.location.origin,
-        slot: state.selectedSlot
+        slot: state.selectedSlot,
+        addons: [],
+        customer: state.customer,
+        origin: window.location.origin
       };
-      const r = await fetch(`${API}/pay/create-checkout-session`, {
-        method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
+      const r = await fetch(`${API}/credits/book-with-credit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload)
       });
-
-      let d;
-      try { d = await r.json(); }
-      catch (e) {
-        const text = await r.text().catch(() => "");
-        alert(`Payment failed to initialise (${r.status}). ${text?.slice(0,180) || ""}`);
-        setBusy(false);
+      const d = await r.json().catch(()=> ({}));
+      if (!d?.ok) { alert(d?.error || "Credit booking failed"); return; }
+      if (d.url) { try { window.top.location.href = d.url; } catch { window.location.href = d.url; } return; } // rare external redirects
+      if (d.booked) {
+        setState(s=> ({ ...s, step: "thankyou", thankyouKind: "credit" }));
+        setTimeout(reportHeight, 60);
         return;
       }
-
-      if (!d?.ok || !d?.url) {
-        alert(d?.error || "Payment failed to initialise");
-        setBusy(false);
-        return;
-      }
-      try { window.top.location.href = d.url; } catch { window.location.href = d.url; }
-    } catch (err) {
-      console.error("[Confirm.pay] error", err);
-      alert("Something went wrong. Please try again.");
-      setBusy(false);
+      alert("Unexpected response."); return;
     }
+
+    const payload = {
+      customer: state.customer,
+      has_tap: true,
+      service_key: state.service_key,
+      addons: state.addons || [],
+      origin: window.location.origin,
+      slot: state.selectedSlot
+    };
+    const r = await fetch(`${API}/pay/create-checkout-session`, {
+      method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload)
+    });
+    const d = await r.json().catch(()=> ({}));
+    if (!d?.ok || !d?.url) { alert(d?.error || "Payment failed to initialize."); return; }
+    try { window.top.location.href = d.url; } catch { window.location.href = d.url; } // Stripe requires top
   }
 
   const slotLine = state.selectedSlot
@@ -553,10 +511,8 @@ function Confirm({ state, setState }) {
               <div className="gm total">{fmtGBP(preDiscountTotal)}</div>
             )}
             <div className="gm actions end" style={{ marginTop: 10 }}>
-              <Button onClick={()=> setState(s=> ({ ...s, step: "times" }))} disabled={busy}>Back</Button>
-              <PrimaryButton onClick={pay} disabled={busy} style={{ pointerEvents: busy ? "none" : "auto" }}>
-                {usingCredit ? "Confirm" : (busy ? "Please wait…" : "Confirm & Pay")}
-              </PrimaryButton>
+              <Button onClick={()=> setState(s=> ({ ...s, step: "times" }))}>Back</Button>
+              <PrimaryButton onClick={pay}>{usingCredit ? "Confirm" : "Confirm & Pay"}</PrimaryButton>
             </div>
           </div>
         </div>
@@ -565,22 +521,24 @@ function Confirm({ state, setState }) {
   );
 }
 
-/* ================== THANK YOU (UNIVERSAL) ================== */
-function ThankYou({ onBook, onAccount }) {
+/* ================== THANK YOU ================== */
+function ThankYou({ kind, onBook, onAccount }) {
+  const isSub  = kind === "sub";
+  const title  = isSub ? "Thank you for subscribing!" : "Thank you so much for booking with me!";
+  const body   = isSub
+    ? "You now have two credits on your account. I can’t wait to get your vehicle looking its best. Pick a time that suits you."
+    : "Your booking is confirmed. I’m looking forward to seeing you and taking great care of your car. You’ll receive an email with the details.";
+
   return (
     <div className="gm page-section gm-booking wrap">
-      <div className="gm panel wider" style={{ textAlign:"center", padding:"20px" }}>
-        <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" style={{ maxWidth:120, margin:"0 auto 16px" }} />
-        <div className="gm h2 center" style={{ fontSize:26, fontWeight:700 }}>
-          Thank you so much for booking with us!
-        </div>
-        <p style={{ marginTop: 12, maxWidth: 640, marginLeft:"auto", marginRight:"auto", lineHeight:1.6 }}>
-          I look forward to seeing you soon. If you booked with a one-off payment then just kick back and relax —
-          you’re all booked in. If you just subscribed then click <strong>Book now</strong> to use your credits.
-        </p>
-        <div style={{ marginTop: 20, display:"inline-flex", gap:12 }}>
-          <PrimaryButton onClick={onBook}>Book Now</PrimaryButton>
-          <Button onClick={onAccount}><span style={{ marginRight:6 }}>View Account</span><HeadIcon /></Button>
+      <div className="gm panel wider" style={{ textAlign:"center" }}>
+        <img className="gm logo-big" src="/logo.png" alt="GM Auto Detailing" />
+        <div className="gm h2 center" style={{ fontSize:22, marginTop:10 }}>{title}</div>
+        <div style={{ maxWidth: 600, margin: "8px auto 0" }}>{body}</div>
+
+        <div style={{ marginTop: 16, display:"inline-flex", gap:10 }}>
+          {isSub && <PrimaryButton onClick={onBook}>Book now</PrimaryButton>}
+          <Button onClick={onAccount}><span style={{ marginRight:6 }}>View account</span><HeadIcon /></Button>
         </div>
       </div>
     </div>
@@ -594,6 +552,7 @@ function App(){
   const fromSub = urlParams.get("sub") === "1";
   const paid = urlParams.get("paid") === "1";
   const thankyouFlag = urlParams.get("thankyou") === "1";
+  const flow = urlParams.get("flow"); // "oneoff" | "sub" | "credit"
   const sessionId = urlParams.get("session_id");
 
   const [state, setState] = React.useState({
@@ -605,6 +564,7 @@ function App(){
     customer:{}, has_tap:true, service_key:"", addons:[],
     selectedDayKey:null, selectedSlot:null,
     availability:null, monthKey: toDateKey(new Date()).slice(0,7), config:null, first_time:false,
+    thankyouKind: flow || null,
   });
 
   // Load config early
@@ -627,8 +587,8 @@ function App(){
       postcode: user.postcode || "",
     };
     const credits = d.credits || { exterior:0, full:0 };
-    const subs = d.subscriptions || [];
-    return { user, customer, credits, subs };
+    const subscriptions = d.subscriptions || [];
+    return { user, customer, credits, subscriptions };
   }, []);
 
   // Handle success redirects and initial routing
@@ -636,30 +596,29 @@ function App(){
     (async () => {
       const token = localStorage.getItem('GM_TOKEN') || "";
 
-      // If a payment success redirect occurred, confirm then show universal Thank You
+      // Payment success redirects (Stripe / credit booking)
       if (paid) {
         if (sessionId) {
           await fetch(`${API}/pay/confirm`, { method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify({ session_id: sessionId }) }).catch(()=>{});
         }
-        setState(s => ({ ...s, step: "thankyou" }));
+        setState(s => ({ ...s, step: "thankyou", thankyouKind: flow || (sessionId ? "oneoff" : "credit") }));
         return;
       }
 
       if (!afterLogin && !fromSub && !thankyouFlag) {
-        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        window.location.href = "/login.html"; // keep in-iframe
         return;
       }
 
       if (!token) {
-        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        window.location.href = "/login.html"; // keep in-iframe
         return;
       }
 
       try {
-        const { user, customer, credits, subs } = await loadProfile(token);
-        // If coming back from subscription success (?thankyou=1&sub=1), show universal Thank You
-        if (thankyouFlag && fromSub) {
-          setState(s => ({ ...s, token, user, customer, credits, subscriptions: subs, step: "thankyou" }));
+        const { user, customer, credits, subscriptions } = await loadProfile(token);
+        if (fromSub && thankyouFlag && flow === "sub") {
+          setState(s => ({ ...s, token, user, customer, credits, subscriptions, step: "thankyou", thankyouKind: "sub" }));
           return;
         }
         // If user has credits, take them straight to calendar
@@ -667,22 +626,22 @@ function App(){
         const hasExt  = (credits.exterior||0) > 0;
         if (hasFull || hasExt) {
           const inferred = hasFull ? "full" : "exterior";
-          setState(s => ({ ...s, token, user, customer, credits, subscriptions: subs, service_key: inferred, addons: [], step: "calendar" }));
+          setState(s => ({ ...s, token, user, customer, credits, subscriptions, service_key: inferred, addons: [], step: "calendar" }));
           return;
         }
-        setState(s => ({ ...s, token, user, customer, credits, subscriptions: subs, step: "services" }));
+        setState(s => ({ ...s, token, user, customer, credits, subscriptions, step: "services" }));
       } catch {
         localStorage.removeItem('GM_TOKEN');
-        try { window.top.location.href = "/login.html"; } catch { window.location.href = "/login.html"; }
+        window.location.href = "/login.html"; // keep in-iframe
       }
     })();
   }, []); // eslint-disable-line
 
-  // Universal thank you handlers
+  // Thank you handlers
   const goAccount = React.useCallback(() => { window.location.href = "/account.html"; }, []);
-  const goBookFromThankYou = React.useCallback(() => {
+  const goBookFromSub = React.useCallback(() => {
     const inferred = (state.credits.full||0) > 0 ? "full" : "exterior";
-    setState(s => ({ ...s, service_key: inferred || "exterior", addons: [], step: "calendar" }));
+    setState(s => ({ ...s, service_key: inferred, addons: [], step: "calendar" }));
     window.history.replaceState(null, "", "/"); // clear query
   }, [state.credits]);
 
@@ -691,7 +650,7 @@ function App(){
   if (state.step === "calendar")  return <Calendar state={state} setState={setState} />;
   if (state.step === "times")     return <Times    state={state} setState={setState} />;
   if (state.step === "confirm")   return <Confirm  state={state} setState={setState} />;
-  if (state.step === "thankyou")  return <ThankYou onBook={goBookFromThankYou} onAccount={goAccount} />;
+  if (state.step === "thankyou")  return <ThankYou kind={state.thankyouKind || "oneoff"} onBook={goBookFromSub} onAccount={goAccount} />;
 
   return null;
 }
