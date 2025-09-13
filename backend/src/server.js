@@ -1,14 +1,14 @@
 // backend/src/server.js
 import express from "express";
 import cors from "cors";
-import { pool } from "./db.js";
+import { initDB } from "./db.js";
 
-import auth from "./auth.js";
-import availability from "./availability.js";
-import my from "./my.js";
-import credits from "./credits.js";
-import memberships, { handleMembershipWebhook } from "./memberships.js";
-import { mountPayments } from "./payments.js";
+import baseRoutes from "./routes.js"; // public: /config, /availability, /first-time
+import authRoutes from "./auth.js";
+import creditsRoutes from "./credits.js";
+import myRoutes from "./my.js";
+import { membershipRoutes, adminMembershipRoutes, membershipsWebhookHandler } from "./memberships.js";
+import { mountPayments } from "./payments.js"; // mounts /api/pay/* and /api/webhooks/stripe
 
 /* ============================ ENV & CORS ============================ */
 const PORT = Number(process.env.PORT || 10000);
@@ -29,15 +29,15 @@ const allowedOrigins = new Set(
     "https://book.gmautodetailing.uk",
     "https://gm-auto-detailing2.vercel.app",
   ]
-  .filter(Boolean)
-  .map(s => {
-    try { return new URL(s).origin; } catch { return s; }
-  })
+    .filter(Boolean)
+    .map(s => {
+      try { return new URL(s).origin; } catch { return s; }
+    })
 );
 
 const corsOptions = {
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // same-origin, curl, server-side, etc.
+    if (!origin) return cb(null, true); // same-origin, curl, SSR, etc.
     try {
       const o = new URL(origin).origin;
       if (allowedOrigins.has(o)) return cb(null, true);
@@ -50,60 +50,49 @@ const corsOptions = {
 /* ============================ APP SETUP ============================ */
 const app = express();
 
-/**
- * IMPORTANT: Stripe webhooks must see the raw body.
- * Mount membership webhook BEFORE any express.json() middleware.
- */
-app.post(
-  "/api/webhooks/memberships",
-  express.raw({ type: "application/json" }),
-  handleMembershipWebhook
-);
+// Stripe membership webhook MUST see the raw body before any JSON parser
+app.post("/api/webhooks/memberships", express.raw({ type: "application/json" }), membershipsWebhookHandler);
 
-// Global CORS
+// Global CORS for normal routes
 app.use(cors(corsOptions));
 
 // JSON parser for normal API routes
 app.use(express.json());
 
-// Health check
+// Health probe
 app.get("/healthz", (_req, res) => res.json({ ok: true }));
 
 /* ============================ ROUTES ============================ */
-// Auth (register/login/me)
-app.use("/api/auth", auth);
+// Auth (register/login/me/update)
+app.use("/api/auth", authRoutes);
 
-// Availability (GET /api/availability?service_key=...&month=YYYY-MM)
-app.use("/api", availability);
+// Membership flows (subscribe, portal, etc.) — note: these are normal JSON routes
+app.use("/api/memberships", membershipRoutes());
 
-// Account endpoints (e.g., GET /api/my/bookings)
-app.use("/api/my", my);
+// Admin endpoints (token-guarded)
+app.use("/api/admin", adminMembershipRoutes());
 
-// Credits flow (e.g., POST /api/credits/book-with-credit)
-app.use("/api/credits", credits);
+// Credits flow (book with credit, etc.)
+app.use("/api/credits", creditsRoutes);
 
-// Memberships (subscribe, portal, etc.)
-app.use("/api/memberships", memberships);
+// “My account” endpoints (e.g., bookings list)
+app.use("/api/my", myRoutes);
 
-// One-off payments + their Stripe webhook + confirm endpoint
-// mountPayments() internally mounts:
-//   POST /api/pay/create-checkout-session
-//   POST /api/pay/confirm
-//   POST /api/webhooks/stripe  (with express.raw)
+// Public API bundle (config, availability, first-time)
+app.use("/api", baseRoutes);
+
+// One-off payments + their Stripe webhook + confirm endpoint.
+// `mountPayments` also mounts its own /api/webhooks/stripe using express.raw.
 mountPayments(app);
 
+// 404 for unknown API routes
+app.use("/api", (_req, res) => res.status(404).json({ error: "not_found" }));
+
 /* ============================ START ============================ */
-async function start() {
-  try {
-    await pool.query("SELECT 1");
-    console.log("[db] schema ensured");
-  } catch (e) {
-    console.error("[db] connection failed:", e?.message || e);
-  }
-
-  app.listen(PORT, () => {
-    console.log(`[server] listening on ${PORT}`);
+initDB()
+  .catch(e => console.error("[server] init failed", e))
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`[server] listening on ${PORT}`);
+    });
   });
-}
-
-start();
