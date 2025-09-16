@@ -34,7 +34,7 @@ html, body {
 
 .gm.logo-big { width: 160px; height: auto; object-fit: contain; }
 
-/* ===== Services ===== */
+/* ===== Services (legacy) ===== */
 .gm.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; }
 .gm.card { border: 1px solid var(--gm-border); background: #fff; border-radius: 12px; padding: 12px; cursor: pointer; transition: box-shadow .15s, border-color .15s, background .15s; }
 .gm.card:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
@@ -44,7 +44,7 @@ html, body {
 .gm.price-now { font-weight: 600; font-size: 18px; }
 .gm.price-strike { color: #b00; text-decoration: line-through; opacity: 0.8; }
 
-/* ===== Add-ons ===== */
+/* ===== Add-ons (legacy) ===== */
 .gm.addon-benefits.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .gm.benefit { border: 1px dashed var(--gm-border); border-radius: 12px; padding: 12px; background: #fff; transition: box-shadow .15s, border-color .15s, background .15s; }
 .gm.benefit:hover { box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
@@ -115,9 +115,89 @@ html, body {
 }
 
 /* ------------------------------------------------------------------ */
-/*                     THANK YOU SCREEN (SCOPED)                      */
+/*                  SERVICES & ADD-ONS (new bubbly look)              */
 /* ------------------------------------------------------------------ */
+.svc-card {
+  border: 1px solid var(--gm-border);
+  border-radius: 18px;
+  background: #fff;
+  padding: 24px 16px;
+  text-align: center;
+  font-family: 'Montserrat', sans-serif;
+  font-weight: 700;
+  cursor: pointer;
+  transition: box-shadow .16s, transform .12s, border-color .16s, background .16s;
+  box-shadow: 0 2px 8px rgba(0,0,0,.04);
+}
+.svc-card:hover {
+  box-shadow: 0 6px 20px rgba(0,0,0,.08);
+  transform: translateY(-2px);
+}
+.svc-card.selected {
+  border-color: var(--gm-green);
+  box-shadow: 0 0 0 3px var(--gm-green) inset;
+  background: #f4fbf7;
+}
+.svc-title {
+  font-size: 18px;
+  margin-bottom: 10px;
+  color: #111;
+}
+.svc-price-row {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  align-items: baseline;
+}
+.svc-price-now {
+  font-size: 20px;
+  font-weight: 800;
+  color: #111;
+}
+.svc-price-strike {
+  font-size: 16px;
+  text-decoration: line-through;
+  color: #b00020;
+  opacity: 0.8;
+}
 
+/* Addon cards */
+.svc-addon {
+  border: 1px solid var(--gm-border);
+  border-radius: 16px;
+  background: #fff;
+  padding: 18px;
+  cursor: pointer;
+  transition: box-shadow .16s, transform .12s, border-color .16s, background .16s;
+  box-shadow: 0 2px 8px rgba(0,0,0,.04);
+}
+.svc-addon:hover {
+  box-shadow: 0 6px 20px rgba(0,0,0,.08);
+  transform: translateY(-1px);
+}
+.svc-addon.on {
+  border-color: var(--gm-green);
+  background: #f4fbf7;
+  box-shadow: 0 0 0 3px var(--gm-green) inset;
+}
+.svc-addon-title {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: #111;
+}
+.svc-addon-price {
+  font-weight: 700;
+}
+.svc-addon-desc {
+  font-size: 14px;
+  color: var(--gm-muted);
+}
+
+/* ------------------------------------------------------------------ */
+/*                     THANK YOU SCREEN (scoped)                      */
+/* ------------------------------------------------------------------ */
 .gm.page-section.gm-booking.wrap.thankyou {
   background: #faf8f5;    /* beige page background like auth pages */
   padding: 20px;
@@ -180,7 +260,7 @@ html, body {
   color: #111;
 }
 
-/* Text-only large button (no border), used for View account */
+/* Text-only large button (no border), used when desired */
 .thankyou-actions .btn-text {
   background: none;
   border: none;
