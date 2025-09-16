@@ -417,3 +417,28 @@ html, body {
     color: #111 !important;
   }
 }
+
+/* ===== View Account button styling ===== */
+.view-account-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 999px;
+  border: 2px solid #ddd;
+  background: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  color: #111 !important; /* always black */
+  cursor: pointer;
+  transition: background 0.15s, transform 0.15s;
+}
+.view-account-btn:hover {
+  background: #f9f9f9;
+  transform: translateY(-1px);
+}
+.view-account-btn svg {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
