@@ -24,12 +24,21 @@
         --fs-lg:clamp(20px,2.6vw,28px);
       }
       *{ box-sizing:border-box; }
+      html, body { color-scheme: light; }
       body{
         margin:0; padding:20px;
         font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
         color:var(--text); background:var(--bg);
+        -webkit-text-size-adjust:100%;
       }
       .container{ max-width:980px; margin:0 auto; }
+
+      /* Reset odd mobile defaults so text never turns blue */
+      a, a:visited, button, .tile, .btn-text, .btn-text:visited {
+        color:#111; text-decoration:none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      button { -webkit-appearance:none; appearance:none; }
 
       /* CARD */
       .card{
@@ -53,7 +62,6 @@
         display:flex; align-items:center; justify-content:center;
         overflow:hidden; user-select:none;
       }
-      .avatar img{ width:100%; height:100%; object-fit:cover; display:block; }
       .avatar .initials{
         font-weight:800; font-size:40px; color:#333;
       }
@@ -68,11 +76,11 @@
         margin-top:6px; color:#444; font-size:var(--fs-sm);
       }
 
-      /* CREDITS ROW */
-      .credits-row{
+      /* CREDITS ROW — always side-by-side with a divider */
+      .credits-grid{
         margin:18px 0 8px;
-        display:grid; grid-template-columns: 1fr 1fr;
-        gap:0; align-items:center;
+        display:grid; grid-template-columns: 1fr 1px 1fr; /* divider in the middle always */
+        align-items:center;
       }
       .credit-box{
         text-align:center; padding:16px 10px;
@@ -93,7 +101,8 @@
       .section-title{
         margin:16px 0 10px; font-weight:800; font-size:20px;
       }
-      /* ACTION TILES */
+
+      /* ACTION TILES — black text on all devices */
       .tiles{ display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
       .tile{
         border:1px solid var(--border);
@@ -101,15 +110,16 @@
         padding:14px; display:flex; align-items:center; gap:10px;
         cursor:pointer; box-shadow:0 1px 4px rgba(0,0,0,.04);
         transition:box-shadow .16s, transform .12s;
+        color:#111;
       }
+      .tile .label{ font-weight:800; color:#111; }
       .tile:hover{ box-shadow:var(--shadow-2); transform:translateY(-1px); }
       .tile:active{ transform:translateY(0); }
-      .tile .ico{ width:22px; height:22px; }
-      .tile .label{ font-weight:800; }
+      .tile .ico{ width:22px; height:22px; color:#111; }
 
-      /* FOOTER ACTIONS */
+      /* FOOTER ACTIONS — back left, sign out right */
       .footer-actions{
-        margin-top:12px; display:flex; gap:12px; align-items:center;
+        margin-top:12px; display:flex; gap:12px; align-items:center; justify-content:space-between;
       }
       .btn-text{
         background:none; border:none; color:#111; font-weight:700; font-size:16px;
@@ -121,10 +131,7 @@
       @media (max-width:760px){
         .profile-row{ grid-template-columns: 1fr; text-align:center; }
         .avatar{ margin:0 auto; }
-        .credits-row{ grid-template-columns:1fr 1px 1fr; }
-        .credit-divider{ height:36px; }
         .tiles{ grid-template-columns:1fr; }
-        .footer-actions{ justify-content:center; }
       }
     </style>
   </head>
@@ -133,10 +140,9 @@
       <!-- SINGLE WHITE CARD -->
       <div class="card">
 
-        <!-- Header: Avatar + Name/Address -->
+        <!-- Header: Avatar (initials only) + Name/Address -->
         <div class="profile-row">
           <div class="avatar" id="avatar">
-            <!-- JS will replace with <img> or initials -->
             <div class="initials" id="initials">GM</div>
           </div>
 
@@ -147,8 +153,8 @@
           </div>
         </div>
 
-        <!-- Credits row -->
-        <div class="credits-row" aria-label="Membership credits">
+        <!-- Credits row (always side-by-side) -->
+        <div class="credits-grid" aria-label="Membership credits">
           <div class="credit-box">
             <div class="credit-label">Exterior credits</div>
             <div class="credit-value" id="extCredits">0</div>
@@ -190,8 +196,9 @@
           </button>
         </div>
 
-        <!-- Footer actions (optional) -->
+        <!-- Footer actions: Back (left), Sign out (right) -->
         <div class="footer-actions">
+          <button id="back" class="btn-text">Back</button>
           <button id="signout" class="btn-text">Sign out</button>
         </div>
       </div>
@@ -207,22 +214,21 @@
       window.addEventListener("resize", () => setTimeout(reportHeight, 60));
       setInterval(reportHeight, 900);
 
-      /* ===== API roots (same heuristic as your other pages) ===== */
+      /* ===== API root & auth ===== */
       const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
         ? 'https://gm-auto-detailing2.onrender.com' : '';
-
       const token = localStorage.getItem('GM_TOKEN') || "";
       if (!token) location.href = "/login.html";
 
       const $ = (id)=> document.getElementById(id);
 
-      /* Avatar helpers: initials fallback */
+      /* Avatar initials only (no images ever) */
       function initialsFrom(nameOrEmail){
         if (!nameOrEmail) return "GM";
         const s = nameOrEmail.trim();
         if (s.includes(" ")) {
-          const [a,b] = s.split(" ");
-          return (a[0] + (b?.[0] || "")).toUpperCase();
+          const parts = s.split(" ").filter(Boolean);
+          return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
         }
         if (s.includes("@")) return s[0].toUpperCase();
         return (s[0] + (s[1]||"")).toUpperCase();
@@ -243,15 +249,14 @@
           $("addr").textContent = addr || "Address not set";
           $("mini").textContent = mini || "";
 
-          /* avatar: if you later add user.photo, set <img src="..."> */
-          const avatarBox = $("avatar");
-          avatarBox.innerHTML = "";
+          // initials only
+          $("avatar").innerHTML = "";
           const init = document.createElement("div");
           init.className = "initials";
           init.textContent = initialsFrom(user.name || user.email || "GM");
-          avatarBox.appendChild(init);
+          $("avatar").appendChild(init);
 
-          /* credits */
+          // credits
           const ext = (d.credits?.exterior || 0);
           const full = (d.credits?.full || 0);
           $("extCredits").textContent = ext;
@@ -267,9 +272,9 @@
         }
       }
 
-      /* tile actions */
-      $("goBookings").onclick = () => { location.href = "/bookings.html"; }; // simple separate page (you can add later)
-      $("goDetails").onclick  = () => { location.href = "/details.html"; };  // simple separate page (reuse your existing form)
+      // Tiles
+      $("goBookings").onclick = () => { location.href = "/bookings.html"; };
+      $("goDetails").onclick  = () => { location.href = "/details.html";  };
       $("goPortal").onclick   = async () => {
         try {
           const rr = await fetch(`${API}/api/memberships/portal`, { headers: { Authorization:`Bearer ${token}` } });
@@ -284,6 +289,15 @@
         }
       };
 
+      // Footer: Back (previous page), Sign out
+      $("back").onclick = () => {
+        if (document.referrer && document.referrer !== location.href) {
+          history.back();
+        } else {
+          // fall back to home if no referrer
+          location.href = "/?afterLogin=1";
+        }
+      };
       $("signout").onclick = () => {
         localStorage.removeItem('GM_TOKEN');
         location.href = "/login.html";
