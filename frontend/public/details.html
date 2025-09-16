@@ -11,13 +11,27 @@
         --radius:20px; --shadow:0 2px 10px rgba(0,0,0,.06);
       }
       *{ box-sizing:border-box; }
-      body{ margin:0; padding:20px; font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); }
+      html, body { color-scheme: light; }
+      body{
+        margin:0; padding:20px;
+        font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+        background:var(--bg); color:var(--text); -webkit-text-size-adjust:100%;
+      }
+      /* make buttons/text black on mobile */
+      a, a:visited, button, .btn { color:#111; text-decoration:none; -webkit-tap-highlight-color:transparent; }
+      button { -webkit-appearance:none; appearance:none; }
+
       .container{ max-width:980px; margin:0 auto; }
       .card{ background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px; }
       .header{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
       .title{ font-weight:800; font-size:22px; }
-      .btn{ background:#fff; border:2px solid #ddd; border-radius:999px; padding:12px 16px; font-weight:800; cursor:pointer; }
-      .btn.primary{ background:#222; color:#fff; border-color:#222; }
+
+      .btn{
+        background:#fff; border:2px solid #ddd; border-radius:999px; padding:12px 16px;
+        font-weight:800; cursor:pointer; color:#111; font-size:16px;
+      }
+      .btn:hover{ background:#f9f9f9; }
+
       .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
       .row{ display:flex; flex-direction:column; gap:6px; }
       label{ font-size:14px; font-weight:700; color:#333; }
@@ -27,6 +41,7 @@
       .toast{ margin-top:10px; padding:10px 12px; border-radius:12px; text-align:center; display:none; }
       .toast.ok{ background:#eef8f2; border:1px solid #cfe9db; color:#0b6b37; display:block; }
       .toast.err{ background:#fdecee; border:1px solid #f6c7ce; color:#b00020; display:block; }
+
       @media (max-width:760px){ .grid{ grid-template-columns:1fr; } }
     </style>
   </head>
@@ -53,7 +68,7 @@
         </div>
 
         <div class="actions">
-          <button class="btn primary" id="save">Save changes</button>
+          <button class="btn" id="save">Save changes</button>
         </div>
 
         <div id="msg" class="toast"></div>
@@ -62,7 +77,6 @@
     </div>
 
     <script>
-      // keep parent height synced
       function reportHeight(){
         const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
         try { window.parent.postMessage({ type:"GM_HEIGHT", height:h }, "*"); } catch {}
@@ -119,8 +133,6 @@
           const d = await r.json().catch(()=> ({}));
           if (d?.ok) {
             msg.className = "toast ok"; msg.textContent = "Saved successfully.";
-            // (Optional) force re-login like your previous flow:
-            // localStorage.removeItem('GM_TOKEN'); location.href="/login.html";
           } else {
             msg.className = "toast err"; msg.textContent = d?.error || "We couldn’t save your changes.";
           }
