@@ -99,9 +99,14 @@ function Services({ state, setState }) {
   // top right "View account"
   const TopRight = () => (
     <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
-      <Button onClick={()=> { window.location.href="/account.html"; }}>
-        <span style={{ marginRight:6 }}>View account</span><HeadIcon />
-      </Button>
+     <button
+  className="view-account-btn"
+  onClick={() => { window.location.href = "/account.html"; }}
+>
+  <span>View account</span>
+  <HeadIcon />
+</button>
+
     </div>
   );
 
@@ -255,9 +260,14 @@ function Calendar({ state, setState }) {
 
   const TopRight = () => (
     <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:8 }}>
-      <Button onClick={()=> { window.location.href="/account.html"; }}>
-        <span style={{ marginRight:6 }}>View account</span><HeadIcon />
-      </Button>
+      <button
+  className="view-account-btn"
+  onClick={() => { window.location.href = "/account.html"; }}
+>
+  <span>View account</span>
+  <HeadIcon />
+</button>
+
     </div>
   );
 
