@@ -292,3 +292,128 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   .thankyou-card, .thankyou-actions .btn-large, .thankyou-actions .btn-text { transition: none !important; }
 }
+
+/* ===== Calendar header redesign ===== */
+.gm.monthheader {
+  margin-bottom: 16px;
+  text-align: center;
+}
+.gm.monthtitle {
+  font-weight: 700;
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+.gm.monthnav-row {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+.gm.btn.big-nav {
+  padding: 14px 20px;
+  border-radius: 999px;
+  border: 2px solid #ddd;
+  background: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  color: #111;
+  min-width: 120px;
+}
+.gm.btn.big-nav:disabled {
+  opacity: 0.5;
+}
+
+/* ===== Day cells bigger & bubbly ===== */
+.gm.monthgrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+.gm.daycell {
+  width: 100%;
+  height: 64px; /* bigger */
+  font-size: 18px; /* bigger numbers */
+  font-weight: 700;
+  border-radius: 16px; /* bubblier */
+  border: 1px solid var(--gm-border);
+  background: #fff;
+  color: #111;
+  transition: all 0.15s ease;
+}
+.gm.daycell:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+}
+
+/* Active/selected states */
+.gm.daycell.has { border-color: #c7bea8; }
+.gm.daycell.off {
+  background: #eee;
+  color: #9a9a9a;
+  opacity: 0.7;
+}
+.gm.daycell.selected-green {
+  background: #f4fbf7;
+  border-color: var(--gm-green);
+  color: #0b6b37;
+  box-shadow: 0 0 0 3px var(--gm-green) inset;
+}
+.gm.daycell.selected-orange {
+  background: #fff6e8;
+  border-color: var(--gm-orange);
+  color: #7a4a00;
+  box-shadow: 0 0 0 3px var(--gm-orange) inset;
+}
+
+/* ===== Time boxes bigger ===== */
+.gm.timegrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.gm.timebox {
+  width: 100%;
+  height: 70px; /* bigger */
+  font-size: 18px;
+  font-weight: 700;
+  border-radius: 16px;
+  border: 1px solid var(--gm-border);
+  background: #fff;
+  color: #111;
+}
+.gm.timebox-on {
+  background: #f4fbf7;
+  border-color: var(--gm-green);
+  color: #0b6b37;
+  box-shadow: 0 0 0 3px var(--gm-green) inset;
+}
+.gm.timebox-off {
+  background: #efefef;
+  color: #9a9a9a;
+  border-color: #d0d0d0;
+  cursor: not-allowed;
+}
+
+/* ===== Back button styled like account page ===== */
+.gm.actions.space button {
+  padding: 14px 20px;
+  border-radius: 999px;
+  border: 2px solid #ddd;
+  background: #fff;
+  font-weight: 800;
+  font-size: 18px;
+  color: #111;
+  min-width: 120px;
+}
+.gm.actions.space button:hover {
+  background: #f9f9f9;
+}
+
+/* ===== Fix mobile button text color ===== */
+@media (max-width: 740px) {
+  .gm.btn,
+  .gm.btn.big-nav,
+  .gm.actions.space button {
+    color: #111 !important;
+  }
+}
