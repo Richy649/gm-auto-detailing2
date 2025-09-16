@@ -1,0 +1,138 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Your details • GM Auto Detailing</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --bg:#faf8f5; --card:#fff; --border:#e6e1d8; --text:#1c1c1c; --muted:#6e6e6e; --accent:#222; --green:#23a35a;
+        --radius:20px; --shadow:0 2px 10px rgba(0,0,0,.06);
+      }
+      *{ box-sizing:border-box; }
+      body{ margin:0; padding:20px; font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); }
+      .container{ max-width:980px; margin:0 auto; }
+      .card{ background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px; }
+      .header{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+      .title{ font-weight:800; font-size:22px; }
+      .btn{ background:#fff; border:2px solid #ddd; border-radius:999px; padding:12px 16px; font-weight:800; cursor:pointer; }
+      .btn.primary{ background:#222; color:#fff; border-color:#222; }
+      .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+      .row{ display:flex; flex-direction:column; gap:6px; }
+      label{ font-size:14px; font-weight:700; color:#333; }
+      input{ padding:14px 16px; border:1px solid #ddd; border-radius:14px; font-size:16px; }
+      .muted{ color:var(--muted); font-size:14px; }
+      .actions{ margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; }
+      .toast{ margin-top:10px; padding:10px 12px; border-radius:12px; text-align:center; display:none; }
+      .toast.ok{ background:#eef8f2; border:1px solid #cfe9db; color:#0b6b37; display:block; }
+      .toast.err{ background:#fdecee; border:1px solid #f6c7ce; color:#b00020; display:block; }
+      @media (max-width:760px){ .grid{ grid-template-columns:1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="header">
+          <div class="title">Your details</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn" id="back">Back to account</button>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="row"><label>Name</label><input id="name" autocomplete="name"></div>
+          <div class="row"><label>Phone</label><input id="phone" autocomplete="tel"></div>
+          <div class="row"><label>Email</label><input id="email" type="email" disabled></div>
+          <div class="row"><label>Street</label><input id="street" autocomplete="address-line1"></div>
+          <div class="row"><label>Postcode</label><input id="postcode" autocomplete="postal-code"></div>
+          <div class="row">
+            <label>New password (optional)</label>
+            <input id="password" type="password" autocomplete="new-password" placeholder="Set a new password (optional)">
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn primary" id="save">Save changes</button>
+        </div>
+
+        <div id="msg" class="toast"></div>
+        <p class="muted" style="margin-top:8px;">Tip: after saving, you may be asked to log in again for security.</p>
+      </div>
+    </div>
+
+    <script>
+      // keep parent height synced
+      function reportHeight(){
+        const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
+        try { window.parent.postMessage({ type:"GM_HEIGHT", height:h }, "*"); } catch {}
+      }
+      window.addEventListener("load", reportHeight);
+      window.addEventListener("resize", () => setTimeout(reportHeight, 60));
+      setInterval(reportHeight, 900);
+
+      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
+        ? 'https://gm-auto-detailing2.onrender.com' : '';
+      const token = localStorage.getItem('GM_TOKEN') || "";
+      if (!token) location.href = "/login.html";
+
+      const $ = (id)=> document.getElementById(id);
+      $("back").onclick = ()=> location.href="/account.html";
+
+      async function loadMe(){
+        try{
+          const r = await fetch(`${API}/api/auth/me`, { headers:{ Authorization:`Bearer ${token}` } });
+          if (!r.ok) throw new Error();
+          const d = await r.json();
+          const u = d.user || {};
+          $("name").value = u.name || "";
+          $("phone").value = u.phone || "";
+          $("email").value = u.email || "";
+          $("street").value = u.street || "";
+          $("postcode").value = u.postcode || "";
+        } catch {
+          localStorage.removeItem('GM_TOKEN'); location.href="/login.html";
+        } finally {
+          setTimeout(reportHeight, 60);
+        }
+      }
+
+      $("save").onclick = async ()=>{
+        const payload = {
+          name: $("name").value.trim(),
+          phone: $("phone").value.trim(),
+          street: $("street").value.trim(),
+          postcode: $("postcode").value.trim()
+        };
+        const newpw = $("password").value;
+        if (newpw) payload.new_password = newpw;
+
+        const msg = $("msg");
+        msg.className = "toast"; msg.style.display="none";
+
+        try {
+          const r = await fetch(`${API}/api/auth/me`, {
+            method:"PUT",
+            headers:{ "Content-Type":"application/json", Authorization:`Bearer ${token}` },
+            body: JSON.stringify(payload)
+          });
+          const d = await r.json().catch(()=> ({}));
+          if (d?.ok) {
+            msg.className = "toast ok"; msg.textContent = "Saved successfully.";
+            // (Optional) force re-login like your previous flow:
+            // localStorage.removeItem('GM_TOKEN'); location.href="/login.html";
+          } else {
+            msg.className = "toast err"; msg.textContent = d?.error || "We couldn’t save your changes.";
+          }
+        } catch {
+          msg.className = "toast err"; msg.textContent = "Network error. Please try again.";
+        } finally {
+          msg.style.display="block";
+          setTimeout(reportHeight, 60);
+        }
+      };
+
+      loadMe();
+    </script>
+  </body>
+</html>
