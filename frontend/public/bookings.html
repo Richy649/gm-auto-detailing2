@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Your bookings • GM Auto Detailing</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --bg:#faf8f5; --card:#fff; --border:#e6e1d8; --text:#1c1c1c; --muted:#6e6e6e; --accent:#222; --green:#23a35a;
+        --radius:20px; --shadow:0 2px 10px rgba(0,0,0,.06);
+      }
+      *{ box-sizing:border-box; }
+      body{ margin:0; padding:20px; font-family:'Montserrat',system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); }
+      .container{ max-width:980px; margin:0 auto; }
+      .card{ background:var(--card); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px; }
+      .header{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+      .title{ font-weight:800; font-size:22px; }
+      .btn{ background:#fff; border:2px solid #ddd; border-radius:999px; padding:12px 16px; font-weight:800; cursor:pointer; }
+      .btn.primary{ background:#222; color:#fff; border-color:#222; }
+      .list{ display:grid; gap:12px; }
+      .booking{ border:1px solid var(--border); border-radius:14px; padding:14px; display:grid; gap:6px; }
+      .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+      .label{ font-weight:700; color:var(--muted); width:120px; }
+      .value{ font-weight:700; }
+      .empty{ text-align:center; color:var(--muted); padding:18px 8px; }
+      .actions{ margin-top:12px; display:flex; gap:10px; flex-wrap:wrap; }
+      .skeleton{ position:relative; height:68px; border:1px solid var(--border); border-radius:14px; overflow:hidden; background:#eee; }
+      .skeleton::after{ content:""; position:absolute; inset:0; transform:translateX(-100%); background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent); animation:sweep 1.2s infinite; }
+      @keyframes sweep { to { transform:translateX(100%); } }
+      @media (max-width:680px){ .label{ width:110px; } }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <div class="header">
+          <div class="title">Your bookings</div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn" id="back">Back to account</button>
+            <button class="btn primary" id="book">Book another slot</button>
+          </div>
+        </div>
+
+        <div id="list" class="list">
+          <div class="skeleton"></div>
+        </div>
+
+        <div class="actions">
+          <div class="empty" id="msg" style="display:none;"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // iframe height reporting (keeps your embed tidy)
+      function reportHeight(){
+        const h = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);
+        try { window.parent.postMessage({ type:"GM_HEIGHT", height:h }, "*"); } catch {}
+      }
+      window.addEventListener("load", reportHeight);
+      window.addEventListener("resize", () => setTimeout(reportHeight, 60));
+      setInterval(reportHeight, 900);
+
+      // API base (same heuristic used elsewhere)
+      const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
+        ? 'https://gm-auto-detailing2.onrender.com' : '';
+      const token = localStorage.getItem('GM_TOKEN') || "";
+      if (!token) location.href = "/login.html";
+
+      const $ = (id)=> document.getElementById(id);
+      $("back").onclick = ()=> location.href="/account.html";
+      $("book").onclick = ()=> location.href="/?afterLogin=1";
+
+      function fmtSvc(key){
+        switch (key) {
+          case "exterior": return "Exterior Detail";
+          case "full": return "Full Detail";
+          default: return key || "Service";
+        }
+      }
+
+      function renderUpcoming(bk){
+        const list = $("list");
+        list.innerHTML = "";
+        if (!bk) {
+          $("msg").style.display="block";
+          $("msg").textContent = "No upcoming booking found.";
+          return;
+        }
+        const start = new Date(bk.start_time);
+        const when = start.toLocaleString('en-GB', { timeZone:'Europe/London', weekday:'long', day:'numeric', month:'long', hour:'2-digit', minute:'2-digit', hour12:false });
+        const card = document.createElement("div");
+        card.className = "booking";
+        card.innerHTML = `
+          <div class="row"><div class="label">When</div><div class="value">${when}</div></div>
+          <div class="row"><div class="label">Service</div><div class="value">${fmtSvc(bk.service_key)}</div></div>
+          ${bk.postcode ? `<div class="row"><div class="label">Postcode</div><div class="value">${bk.postcode}</div></div>` : ""}
+        `;
+        list.appendChild(card);
+      }
+
+      async function load(){
+        try {
+          const r = await fetch(`${API}/api/my/bookings/upcoming`, { headers:{ Authorization:`Bearer ${token}` } });
+          const d = await r.json().catch(()=> ({}));
+          renderUpcoming(d?.ok ? (d.booking || null) : null);
+        } catch {
+          $("msg").style.display="block";
+          $("msg").textContent = "We couldn’t load your bookings.";
+        } finally {
+          setTimeout(reportHeight, 60);
+        }
+      }
+      load();
+    </script>
+  </body>
+</html>
