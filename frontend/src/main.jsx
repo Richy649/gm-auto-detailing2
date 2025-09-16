@@ -307,16 +307,25 @@ function Calendar({ state, setState }) {
       <div className="gm panel wider">
         <TopRight />
 
-        <div className="gm monthbar-grid">
-          <div className="gm monthnav-left">
-            <Button className="gm btn nav" disabled={!canPrev} onClick={()=> canPrev && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}>Back</Button>
-          </div>
-          <div className="gm monthtitle">{monthLabel(monthKey)}</div>
-          <div className="gm monthnav-right">
-            <div style={{ width: 1 }} />
-            <Button className="gm btn nav" disabled={!canNext} onClick={()=> canNext && setState(s=>({ ...s, monthKey: addMonthsYYYYMM(monthKey, +1) }))}>Next</Button>
-          </div>
-        </div>
+        <div className="gm monthheader">
+  <div className="gm monthtitle">{monthLabel(monthKey)}</div>
+  <div className="gm monthnav-row">
+    <Button
+      className="gm btn big-nav"
+      disabled={!canPrev}
+      onClick={() => canPrev && setState(s => ({ ...s, monthKey: addMonthsYYYYMM(monthKey, -1) }))}
+    >
+      ← Back
+    </Button>
+    <Button
+      className="gm btn big-nav"
+      disabled={!canNext}
+      onClick={() => canNext && setState(s => ({ ...s, monthKey: addMonthsYYYYMM(monthKey, +1) }))}
+    >
+      Next →
+    </Button>
+  </div>
+</div>
 
         {loading && <div className="gm alert">Loading availability…</div>}
         {loadErr && (
