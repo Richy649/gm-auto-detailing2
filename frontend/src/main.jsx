@@ -52,33 +52,39 @@ const HeadIcon = ({ size=16 }) => (
   </svg>
 );
 
-/* Cards */
+/* Cards – updated to match account page style */
 function ServiceCard({ title, price, strike, selected, onClick }) {
   return (
-    <div className={cx("gm card", selected && "selected")} onClick={onClick} role="button">
-      <div className="gm card-title">{title}</div>
+    <div
+      className={cx("svc-card", selected && "selected")}
+      onClick={onClick}
+      role="button"
+    >
+      <div className="svc-title">{title}</div>
       {typeof strike === "number" && strike > price ? (
-        <div className="gm price-row">
-          <span className="gm price-now">{fmtGBP(price)}</span>
-          <span className="gm price-strike">{fmtGBP(strike)}</span>
+        <div className="svc-price-row">
+          <span className="svc-price-now">{fmtGBP(price)}</span>
+          <span className="svc-price-strike">{fmtGBP(strike)}</span>
         </div>
       ) : (
-        <div className="gm muted" style={{ fontWeight: 600, marginBottom: 6 }}>{fmtGBP(price)}</div>
+        <div className="svc-price-now">{fmtGBP(price)}</div>
       )}
     </div>
   );
 }
-function AddonCard({ title, price, desc, align = "left", selected, onToggle }) {
+
+function AddonCard({ title, price, desc, selected, onToggle }) {
   return (
-    <div className={cx("gm benefit", selected && "on")} style={{ textAlign: align }}>
-      <div className="benefit-title">
-        <span className="benefit-name">{title}</span>
-        <span className="benefit-price">{fmtGBP(price)}</span>
+    <div
+      className={cx("svc-addon", selected && "on")}
+      onClick={onToggle}
+      role="button"
+    >
+      <div className="svc-addon-title">
+        <span>{title}</span>
+        <span className="svc-addon-price">{fmtGBP(price)}</span>
       </div>
-      <div className="benefit-copy">{desc}</div>
-      <div className={cx("benefit-actions", align === "right" ? "right" : "left")}>
-        <Button onClick={onToggle}>{selected ? "Remove" : "Add"}</Button>
-      </div>
+      <div className="svc-addon-desc">{desc}</div>
     </div>
   );
 }
