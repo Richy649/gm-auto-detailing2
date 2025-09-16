@@ -290,14 +290,27 @@
       };
 
       // Footer: Back (previous page), Sign out
-      $("back").onclick = () => {
-        if (document.referrer && document.referrer !== location.href) {
-          history.back();
-        } else {
-          // fall back to home if no referrer
-          location.href = "/?afterLogin=1";
-        }
-      };
+     $("back").onclick = async () => {
+  // Decide destination from current credits
+  const API = (location.origin.includes('vercel.app') || location.origin.includes('book.'))
+    ? 'https://gm-auto-detailing2.onrender.com' : '';
+  const token = localStorage.getItem('GM_TOKEN') || "";
+
+  try {
+    const r = await fetch(`${API}/api/auth/me`, { headers:{ Authorization:`Bearer ${token}` } });
+    const d = await r.json().catch(()=> ({}));
+    const ext = d?.credits?.exterior || 0;
+    const full = d?.credits?.full || 0;
+
+    // Your main app already routes from /?afterLogin=1:
+    // - Credits present -> Calendar
+    // - No credits -> Services
+    location.href = "/?afterLogin=1";
+  } catch {
+    location.href = "/?afterLogin=1";
+  }
+};
+
       $("signout").onclick = () => {
         localStorage.removeItem('GM_TOKEN');
         location.href = "/login.html";
