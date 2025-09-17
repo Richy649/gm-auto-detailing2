@@ -420,3 +420,74 @@ html, body {
   width: 20px;
   height: 20px;
 }
+
+/* ===== Thank You page (beige background + centered card) ===== */
+.gm.page-section.gm-booking.wrap.thankyou {
+  background: #faf8f5;   /* same beige as your auth/account pages */
+  padding: 20px;
+}
+
+.gm.logo-top {
+  display: block;
+  width: 160px;
+  height: auto;
+  object-fit: contain;
+  margin: 6px auto 12px;   /* centered above the card */
+}
+
+.gm.panel.wider.thankyou-card {
+  background: #fff;
+  border: 1px solid var(--gm-border, #e3e0d7);
+  border-radius: 16px;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+  text-align: center;      /* center all text/content inside the card */
+  padding: 28px 24px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.thankyou-title {
+  font-weight: 800;
+  font-size: clamp(22px, 2.8vw, 26px);
+  margin: 8px 0 14px;
+  color: #222;
+}
+
+.thankyou-copy {
+  max-width: 580px;
+  margin: 10px auto 0;
+  color: var(--gm-muted, #686868);
+  line-height: 1.55;
+  font-size: clamp(15px, 1.6vw, 16px);
+}
+
+.thankyou-actions {
+  margin-top: 20px;
+  display: flex;
+  flex-direction: column;  /* stacked on mobile */
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+}
+
+/* White pill buttons with black text — same look as auth buttons */
+.thankyou-actions .btn-large.neutral {
+  padding: 16px 18px;
+  border-radius: 999px;
+  border: 2px solid #ddd;
+  background: #fff;
+  color: #111;
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: .2px;
+  line-height: 1;
+  min-width: 220px;
+  cursor: pointer;
+}
+
+.thankyou-actions .btn-large.neutral:hover { background: #f9f9f9; }
+.thankyou-actions .btn-large.neutral:disabled { opacity: .6; cursor: not-allowed; }
+
+@media (min-width: 560px) {
+  .thankyou-actions { flex-direction: row; }
+}
