@@ -394,29 +394,7 @@ html, body {
   cursor: not-allowed;
 }
 
-/* ===== Back button styled like account page ===== */
-.gm.actions.space button {
-  padding: 14px 20px;
-  border-radius: 999px;
-  border: 2px solid #ddd;
-  background: #fff;
-  font-weight: 800;
-  font-size: 18px;
-  color: #111;
-  min-width: 120px;
-}
-.gm.actions.space button:hover {
-  background: #f9f9f9;
-}
 
-/* ===== Fix mobile button text color ===== */
-@media (max-width: 740px) {
-  .gm.btn,
-  .gm.btn.big-nav,
-  .gm.actions.space button {
-    color: #111 !important;
-  }
-}
 
 /* ===== View Account button styling ===== */
 .view-account-btn {
