@@ -547,38 +547,32 @@ function Confirm({ state, setState }) {
 }
 
 /* ================== THANK YOU ================== */
-function ThankYou({ kind, onBook, onAccount }) {
+function ThankYou({ onBook, onAccount }) {
   return (
     <div className="gm page-section gm-booking wrap thankyou">
+      {/* brand logo on beige, centered above the card */}
+      <img className="gm logo-top" src="/logo.png" alt="GM Auto Detailing" />
+
       <div className="gm panel wider thankyou-card">
-        <img className="gm logo-big big" src="/logo.png" alt="GM Auto Detailing" />
+        <div className="thankyou-title">Thank you for your booking!</div>
 
-        <div className="gm h2 center thankyou-title">Thank you for your booking!</div>
-
-        <p className="thankyou-copy">
-          If you’ve just subscribed to the membership — first of all, welcome! I hope you love it.
-          You’ve been awarded <strong>2 credits</strong>; press <em>Book now</em> if you’d like to pick a slot,
-          <span className="note-inline"> or not — they will stay in your account for 30 days.</span>
-        </p>
-
-        <p className="thankyou-copy">
-          If you’ve just used a credit or paid for a one-off slot, you are all booked in and I look forward to seeing you.
-        </p>
+        <div className="thankyou-copy">
+          <p>
+            <strong>If you’ve just subscribed to the membership</strong> — welcome! You’ve just been
+            awarded <strong>2 credits</strong>. Press <em>Book now</em> to choose a slot <em>or not</em>;
+            they’ll stay in your account for <strong>30 days</strong>.
+          </p>
+          <p style={{ marginTop: 10 }}>
+            <strong>If you’ve just used a credit or paid for a one-off slot</strong>, you are all booked in — I look
+            forward to seeing you.
+          </p>
+        </div>
 
         <div className="thankyou-actions">
-          {/* Book now — white pill, black text */}
-          <button className="btn-large" onClick={onBook}>Book now</button>
-
-          {/* View account — larger text-only with simple profile icon */}
-          <button className="btn-text" onClick={onAccount}>
-            <svg xmlns="http://www.w3.org/2000/svg"
-                 width="22" height="22" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                 aria-hidden="true" focusable="false">
-              <circle cx="12" cy="7" r="4"></circle>
-              <path d="M5.5 21c1.5-3.5 5-6 6.5-6s5 2.5 6.5 6"></path>
-            </svg>
-            View account
+          {/* both buttons: white with black text, like the auth pages */}
+          <button className="btn-large neutral" onClick={onBook}>Book now</button>
+          <button className="btn-large neutral" onClick={onAccount}>
+            <span style={{ marginRight: 8 }}>View account</span><HeadIcon />
           </button>
         </div>
       </div>
